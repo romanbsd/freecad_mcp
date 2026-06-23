@@ -77,13 +77,13 @@ To configure the MCP server, you can use a JSON format to specify the server set
 
 ## Features
 
-The FreeCAD MCP exposes two tools:
+The FreeCAD MCP exposes these tools, plus an MCP resource `freecad://guide/cookbook` with working FreeCAD scripting idioms the agent can read before writing geometry code:
 
 ### 1. `execute`
 
 - **Description**: Executes Python inside the running FreeCAD instance. The namespace has `App` (FreeCAD), `Gui` (FreeCADGui) and `doc` (active document).
 - **Returning data**: assign to `result` or `print()` — both are captured and returned (`result` and `stdout`).
-- **Safety/freshness**: the action runs inside one undo transaction (revert with a single Ctrl-Z; aborted automatically on error) and the document is recomputed afterwards.
+- **Safety/freshness**: the action runs inside one undo transaction (revert with a single Ctrl-Z; aborted automatically on error) and the document is recomputed afterwards. Objects left in an error state come back as `recompute_errors`.
 - **`return_context`** (default `False`): when `True`, also returns a document summary:
   - Document properties (name, filename, object count)
   - Per-object info (name, label, type, visibility, placement, and shape type/volume/area when present) — best-effort per object; one that fails to introspect reports an `error` field instead of aborting the whole dump
@@ -92,6 +92,18 @@ The FreeCAD MCP exposes two tools:
 ### 2. `get_screenshot`
 
 - **Description**: Captures the active 3D view as a PNG and returns it as an image so the model can see the model. Params: `width`/`height` (default 1024×768), `view` (one of `iso`, `front`, `rear`, `top`, `bottom`, `left`, `right`, or `current`; default `iso`), and `fit` (zoom-to-fit before capture, default `True`).
+
+### 3. `list_objects`
+
+- **Description**: Lists every object in the active document (name, label, type) — a cheap overview.
+
+### 4. `get_object`
+
+- **Description**: Full detail for one object (by `name`): all properties, validity/state, and shape bounding box + topology counts (vertexes/edges/faces/solids) when present.
+
+### 5. `export`
+
+- **Description**: Exports objects (`names`) to a file at `path`; the format is chosen by extension — `.step`/`.stp`, `.iges`/`.igs`, `.brep`/`.brp`, or `.stl`.
 
 ### Example Usage
 

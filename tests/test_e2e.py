@@ -76,4 +76,31 @@ if __name__ == "__main__":
     assert "unknown view" in bad_view["result"].get("error", ""), bad_view
     print("OK: unknown view name rejected with a helpful error")
 
+    # 4. list_objects / get_object.
+    lst = call({"type": "list_objects"})["result"]
+    assert any(o["name"] == "MCPBox" for o in lst["objects"]), lst
+    obj = call({"type": "get_object", "params": {"name": "MCPBox"}})["result"]
+    assert obj["valid"] is True, obj
+    assert obj["properties"]["Length"], obj
+    assert obj["shape"]["faces"] == 6, obj["shape"]
+    assert abs(obj["shape"]["volume"] - 8000) < 1e-6, obj["shape"]
+    print("OK: get_object returns properties, validity, bbox, topology")
+
+    miss = call({"type": "get_object", "params": {"name": "NoSuchObj"}})["result"]
+    assert "unknown object" in miss.get("error", ""), miss
+
+    # 5. export STEP + STL.
+    import os as _os, tempfile as _tmp
+    for ext in ("step", "stl"):
+        p = _os.path.join(_tmp.gettempdir(), f"mcp_e2e.{ext}")
+        if _os.path.exists(p):
+            _os.remove(p)
+        exp = call({"type": "export", "params": {"names": ["MCPBox"], "path": p}})["result"]
+        assert exp.get("bytes", 0) > 0 and _os.path.exists(p), exp
+        print(f"OK: exported {ext.upper()} ({exp['bytes']} bytes)")
+
+    bad_exp = call({"type": "export", "params": {"names": ["MCPBox"], "path": "/tmp/x.foo"}})["result"]
+    assert "unsupported extension" in bad_exp.get("error", ""), bad_exp
+    print("OK: unsupported export extension rejected")
+
     print("\nEnd-to-end works.")

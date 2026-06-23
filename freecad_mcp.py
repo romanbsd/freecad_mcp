@@ -142,6 +142,9 @@ class FreeCADMCPServer:
             handlers = {
                 "execute": self.handle_execute,
                 "get_screenshot": self.handle_get_screenshot,
+                "export": self.handle_export,
+                "get_object": self.handle_get_object,
+                "list_objects": self.handle_list_objects,
             }
 
             handler = handlers.get(cmd_type)
@@ -195,6 +198,11 @@ class FreeCADMCPServer:
                 # (a FreeCAD object, vector, etc.) is stringified rather than
                 # killing the response.
                 response["result"] = ns["result"]
+            # Surface objects that failed to rebuild so a silent breakage is
+            # visible without a second round-trip.
+            errors = self._recompute_errors()
+            if errors:
+                response["recompute_errors"] = errors
             if return_context:
                 response["context"] = self.get_document_context()
             return response
@@ -243,6 +251,104 @@ class FreeCADMCPServer:
             data = base64.b64encode(f.read()).decode("ascii")
         return {"image_base64": data, "width": int(width), "height": int(height),
                 "view": view}
+
+    def _recompute_errors(self):
+        """Names of objects currently flagged as in error (failed rebuild)."""
+        if not App.ActiveDocument:
+            return []
+        errs = []
+        for o in App.ActiveDocument.Objects:
+            try:
+                if "Error" in o.State:
+                    errs.append(o.Name)
+            except Exception:
+                pass
+        return errs
+
+    def handle_list_objects(self):
+        """Cheap overview: name/label/type for every object."""
+        doc = App.ActiveDocument
+        if not doc:
+            return {"objects": []}
+        return {"objects": [
+            {"name": o.Name, "label": o.Label, "type": o.TypeId}
+            for o in doc.Objects
+        ]}
+
+    def handle_get_object(self, name):
+        """Full property dump for one object: all properties, validity/state,
+        and shape bbox/topology when present."""
+        doc = App.ActiveDocument
+        if not doc:
+            return {"error": "no active document"}
+        obj = doc.getObject(name)
+        if obj is None:
+            return {"error": f"unknown object: {name}"}
+
+        props = {}
+        for p in obj.PropertiesList:
+            try:
+                props[p] = getattr(obj, p)  # default=str stringifies non-JSON values
+            except Exception as e:
+                props[p] = f"<error: {e}>"
+
+        info = {
+            "name": obj.Name,
+            "label": obj.Label,
+            "type": obj.TypeId,
+            "state": list(obj.State) if hasattr(obj, "State") else None,
+            "valid": obj.isValid() if hasattr(obj, "isValid") else None,
+            "properties": props,
+        }
+        if hasattr(obj, "Shape"):
+            try:
+                s = obj.Shape
+                bb = s.BoundBox
+                info["shape"] = {
+                    "type": s.ShapeType,
+                    "bbox": {"xmin": bb.XMin, "ymin": bb.YMin, "zmin": bb.ZMin,
+                             "xmax": bb.XMax, "ymax": bb.YMax, "zmax": bb.ZMax},
+                    "volume": float(s.Volume),
+                    "area": float(s.Area),
+                    "vertexes": len(s.Vertexes),
+                    "edges": len(s.Edges),
+                    "faces": len(s.Faces),
+                    "solids": len(s.Solids),
+                }
+            except Exception as e:
+                info["shape"] = {"error": str(e)}
+        return info
+
+    def handle_export(self, names, path):
+        """Export objects to a file. Format is chosen by `path` extension:
+        step/stp, iges/igs, brep/brp (BREP/STEP/IGES via Part), or stl."""
+        doc = App.ActiveDocument
+        if not doc:
+            return {"error": "no active document"}
+        objs = [doc.getObject(n) for n in names]
+        missing = [n for n, o in zip(names, objs) if o is None]
+        if missing:
+            return {"error": f"unknown object(s): {missing}"}
+
+        ext = os.path.splitext(path)[1].lower()
+        try:
+            if ext == ".stl":
+                import Part
+                shapes = [o.Shape for o in objs if hasattr(o, "Shape")]
+                if not shapes:
+                    return {"error": "selected objects have no Shape to export"}
+                shape = shapes[0] if len(shapes) == 1 else Part.makeCompound(shapes)
+                shape.exportStl(path)
+            elif ext in (".step", ".stp", ".iges", ".igs", ".brep", ".brp"):
+                import Part
+                Part.export(objs, path)
+            else:
+                return {"error": f"unsupported extension {ext!r}; "
+                                 f"use step/iges/brep/stl"}
+        except Exception as e:
+            return {"error": str(e), "traceback": traceback.format_exc()}
+
+        return {"exported": names, "path": path, "bytes": os.path.getsize(path)}
 
     def get_document_context(self):
         """Get comprehensive information about the current document state"""

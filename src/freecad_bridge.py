@@ -87,6 +87,42 @@ async def execute(code: str, return_context: bool = False) -> str:
 
 
 @mcp.tool()
+async def list_objects() -> str:
+    """List every object in the active document (name, label, type). Cheap
+    overview — use get_object for the full properties of one object."""
+    return json.dumps(await send_to_freecad({"type": "list_objects"}), indent=2)
+
+
+@mcp.tool()
+async def get_object(name: str) -> str:
+    """Full detail for one object: all properties, validity/state, and shape
+    bounding box + topology counts (verts/edges/faces/solids) when present.
+
+    Args:
+        name: the object's Name (unique id), as shown by list_objects.
+    """
+    return json.dumps(
+        await send_to_freecad({"type": "get_object", "params": {"name": name}}),
+        indent=2,
+    )
+
+
+@mcp.tool()
+async def export(names: list[str], path: str) -> str:
+    """Export objects to a CAD file. The format is chosen by the file
+    extension: .step/.stp, .iges/.igs, .brep/.brp, or .stl.
+
+    Args:
+        names: object Names to export (from list_objects).
+        path: absolute output path; its extension picks the format.
+    """
+    return json.dumps(
+        await send_to_freecad({"type": "export", "params": {"names": names, "path": path}}),
+        indent=2,
+    )
+
+
+@mcp.tool()
 async def get_screenshot(
     width: int = 1024, height: int = 768, view: str = "iso", fit: bool = True
 ) -> Image:
