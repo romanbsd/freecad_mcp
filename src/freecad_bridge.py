@@ -123,6 +123,68 @@ async def export(names: list[str], path: str) -> str:
 
 
 @mcp.tool()
+async def list_types(filter: str = "") -> str:
+    """List creatable FreeCAD object TypeIds (what you can pass to addObject).
+
+    Args:
+        filter: case-insensitive substring, e.g. "Part::" or "Sketch".
+    """
+    return json.dumps(
+        await send_to_freecad({"type": "list_types", "params": {"filter": filter}}),
+        indent=2,
+    )
+
+
+@mcp.tool()
+async def describe_type(type_id: str) -> str:
+    """Property schema for a TypeId: each property's type, group, doc string and
+    enum options. Use this to learn what you can set before writing execute code.
+
+    Args:
+        type_id: e.g. "Part::Box", "PartDesign::Pad", "Sketcher::SketchObject".
+    """
+    return json.dumps(
+        await send_to_freecad({"type": "describe_type", "params": {"type_id": type_id}}),
+        indent=2,
+    )
+
+
+@mcp.tool()
+async def measure(a: str, b: str = "") -> str:
+    """Measure geometry. With one object: volume, area, center of mass, bbox.
+    With two: the minimum distance between them and the closest points.
+
+    Args:
+        a: object Name.
+        b: optional second object Name; omit to measure `a` alone.
+    """
+    params = {"a": a, "b": b or None}
+    return json.dumps(
+        await send_to_freecad({"type": "measure", "params": params}), indent=2
+    )
+
+
+@mcp.tool()
+async def get_selection() -> str:
+    """What the user has selected in FreeCAD: objects and sub-elements
+    (e.g. Edge1, Face2) — use these to target fillets/chamfers. GUI only."""
+    return json.dumps(await send_to_freecad({"type": "get_selection"}), indent=2)
+
+
+@mcp.tool()
+async def set_selection(names: list[str]) -> str:
+    """Replace the current selection with the given object Names. GUI only.
+
+    Args:
+        names: object Names to select.
+    """
+    return json.dumps(
+        await send_to_freecad({"type": "set_selection", "params": {"names": names}}),
+        indent=2,
+    )
+
+
+@mcp.tool()
 async def get_screenshot(
     width: int = 1024, height: int = 768, view: str = "iso", fit: bool = True
 ) -> Image:

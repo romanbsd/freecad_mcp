@@ -145,6 +145,11 @@ class FreeCADMCPServer:
                 "export": self.handle_export,
                 "get_object": self.handle_get_object,
                 "list_objects": self.handle_list_objects,
+                "list_types": self.handle_list_types,
+                "describe_type": self.handle_describe_type,
+                "measure": self.handle_measure,
+                "get_selection": self.handle_get_selection,
+                "set_selection": self.handle_set_selection,
             }
 
             handler = handlers.get(cmd_type)
@@ -349,6 +354,131 @@ class FreeCADMCPServer:
             return {"error": str(e), "traceback": traceback.format_exc()}
 
         return {"exported": names, "path": path, "bytes": os.path.getsize(path)}
+
+    def handle_list_types(self, filter=""):
+        """All creatable object TypeIds (optionally substring-filtered)."""
+        # supportedTypes() only lists types from imported modules, so pull in
+        # the common workbenches first to give a complete picture.
+        for m in ("Part", "PartDesign", "Sketcher", "Draft", "Mesh"):
+            try:
+                __import__(m)
+            except Exception:
+                pass
+        doc = App.ActiveDocument
+        temp = None
+        if doc is None:
+            temp = App.newDocument("__types__")
+            doc = temp
+        try:
+            types = sorted(doc.supportedTypes())
+        finally:
+            if temp is not None:
+                App.closeDocument(temp.Name)
+        if filter:
+            f = filter.lower()
+            types = [t for t in types if f in t.lower()]
+        return {"count": len(types), "types": types}
+
+    def handle_describe_type(self, type_id):
+        """Property schema for a type: per-property type, group, doc, enums.
+        Instantiates the type in a throwaway document, introspects, cleans up."""
+        prev = App.ActiveDocument
+        temp = App.newDocument("__describe__")
+        try:
+            try:
+                obj = temp.addObject(type_id, "probe")
+            except Exception as e:
+                return {"error": f"cannot create {type_id!r}: {e}"}
+            props = []
+            for p in obj.PropertiesList:
+                entry = {"name": p}
+                for key, getter in (
+                    ("type", obj.getTypeIdOfProperty),
+                    ("group", obj.getGroupOfProperty),
+                    ("doc", obj.getDocumentationOfProperty),
+                ):
+                    try:
+                        entry[key] = getter(p)
+                    except Exception:
+                        pass
+                try:
+                    enums = obj.getEnumerationsOfProperty(p)
+                    if enums:
+                        entry["enums"] = enums
+                except Exception:
+                    pass
+                props.append(entry)
+            return {"type": type_id, "properties": props}
+        finally:
+            App.closeDocument(temp.Name)
+            if prev is not None:
+                App.setActiveDocument(prev.Name)
+
+    def handle_measure(self, a, b=None):
+        """Measure one shape (volume/area/center/bbox) or the minimum distance
+        between two shapes (by object Name)."""
+        doc = App.ActiveDocument
+        if not doc:
+            return {"error": "no active document"}
+        oa = doc.getObject(a)
+        if oa is None or not hasattr(oa, "Shape"):
+            return {"error": f"{a!r} not found or has no shape"}
+
+        if b is None:
+            s = oa.Shape
+            bb = s.BoundBox
+            c = s.CenterOfMass
+            return {
+                "object": a,
+                "volume": float(s.Volume),
+                "area": float(s.Area),
+                "center_of_mass": [c.x, c.y, c.z],
+                "bbox": {"xmin": bb.XMin, "ymin": bb.YMin, "zmin": bb.ZMin,
+                         "xmax": bb.XMax, "ymax": bb.YMax, "zmax": bb.ZMax},
+                "bbox_size": [bb.XLength, bb.YLength, bb.ZLength],
+            }
+
+        ob = doc.getObject(b)
+        if ob is None or not hasattr(ob, "Shape"):
+            return {"error": f"{b!r} not found or has no shape"}
+        # distToShape -> (distance, [(pntA, pntB), ...], [topo info])
+        dist, pairs, _ = oa.Shape.distToShape(ob.Shape)
+        p = pairs[0] if pairs else None
+        return {
+            "from_object": a,
+            "to_object": b,
+            "distance": float(dist),
+            "from_point": [p[0].x, p[0].y, p[0].z] if p else None,
+            "to_point": [p[1].x, p[1].y, p[1].z] if p else None,
+        }
+
+    def handle_get_selection(self):
+        """What the user has selected (objects + sub-elements). GUI only."""
+        try:
+            sel = Gui.Selection.getSelectionEx()
+        except Exception as e:
+            return {"error": f"selection unavailable (GUI only): {e}"}
+        return {"selection": [
+            {"document": s.DocumentName, "object": s.ObjectName,
+             "sub_elements": list(s.SubElementNames)}
+            for s in sel
+        ]}
+
+    def handle_set_selection(self, names):
+        """Replace the current selection with the given object Names. GUI only."""
+        doc = App.ActiveDocument
+        if not doc:
+            return {"error": "no active document"}
+        try:
+            Gui.Selection.clearSelection()
+            for n in names:
+                obj = doc.getObject(n)
+                if obj is None:
+                    return {"error": f"unknown object: {n}"}
+                Gui.Selection.addSelection(obj)
+        except Exception as e:
+            return {"error": f"selection unavailable (GUI only): {e}"}
+        return self.handle_get_selection()
 
     def get_document_context(self):
         """Get comprehensive information about the current document state"""

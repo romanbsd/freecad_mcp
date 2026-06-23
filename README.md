@@ -105,6 +105,19 @@ The FreeCAD MCP exposes these tools, plus an MCP resource `freecad://guide/cookb
 
 - **Description**: Exports objects (`names`) to a file at `path`; the format is chosen by extension — `.step`/`.stp`, `.iges`/`.igs`, `.brep`/`.brp`, or `.stl`.
 
+### 6. `list_types` / `describe_type`
+
+- **`list_types(filter="")`**: creatable object TypeIds (what you can pass to `addObject`), optionally substring-filtered (e.g. `Part::`).
+- **`describe_type(type_id)`**: property schema for a type — each property's type, group, doc string and enum options. Lets the agent learn the API before writing code, version-correct from the running instance.
+
+### 7. `measure`
+
+- **Description**: With one object, returns volume/area/center-of-mass/bbox; with two, the minimum distance between them and the closest points.
+
+### 8. `get_selection` / `set_selection`
+
+- **Description**: Read or replace the current FreeCAD selection (objects and sub-elements like `Edge1`/`Face2`, for targeting fillets/chamfers). GUI-only.
+
 ### Example Usage
 
 The server speaks a length-prefixed framing protocol: each message (both

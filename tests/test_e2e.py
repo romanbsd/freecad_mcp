@@ -103,4 +103,35 @@ if __name__ == "__main__":
     assert "unsupported extension" in bad_exp.get("error", ""), bad_exp
     print("OK: unsupported export extension rejected")
 
+    # 6. introspection: list_types / describe_type.
+    types = call({"type": "list_types", "params": {"filter": "Part::"}})["result"]
+    assert types["count"] > 0 and any(t == "Part::Box" for t in types["types"]), types
+    print(f"OK: list_types returned {types['count']} Part:: types")
+
+    desc = call({"type": "describe_type", "params": {"type_id": "Part::Box"}})["result"]
+    length = next((p for p in desc["properties"] if p["name"] == "Length"), None)
+    assert length and length.get("type") == "App::PropertyLength", desc
+    print("OK: describe_type returns property schema (Length -> App::PropertyLength)")
+
+    bad_type = call({"type": "describe_type", "params": {"type_id": "Nope::Nope"}})["result"]
+    assert "cannot create" in bad_type.get("error", ""), bad_type
+
+    # 7. measure: single object and pair distance.
+    one = call({"type": "measure", "params": {"a": "MCPBox"}})["result"]
+    assert one["bbox_size"] == [20, 20, 20], one
+    call({"type": "execute", "params": {"code":
+        "b = doc.addObject('Part::Box','Far'); b.Placement.Base = App.Vector(100,0,0)"}})
+    pair = call({"type": "measure", "params": {"a": "MCPBox", "b": "Far"}})["result"]
+    assert abs(pair["distance"] - 80) < 1e-6, pair  # 100 - 20
+    print(f"OK: measure single bbox + pair distance ({pair['distance']})")
+
+    # 8. selection (GUI only — skip gracefully headless / no GUI view).
+    sel = call({"type": "set_selection", "params": {"names": ["MCPBox"]}})["result"]
+    if "error" in sel:
+        print(f"NOTE: selection skipped ({sel['error']})")
+    else:
+        objs = [s["object"] for s in sel["selection"]]
+        assert "MCPBox" in objs, sel
+        print(f"OK: set/get_selection round-trip ({objs})")
+
     print("\nEnd-to-end works.")
