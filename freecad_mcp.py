@@ -1,5 +1,10 @@
+import base64
+import contextlib
+import io
 import json
+import os
 import socket
+import tempfile
 import traceback
 
 import FreeCAD as App
@@ -135,8 +140,8 @@ class FreeCADMCPServer:
             params = command.get("params", {})
 
             handlers = {
-                "send_command": self.handle_send_command,
-                "run_script": self.handle_run_script,
+                "execute": self.handle_execute,
+                "get_screenshot": self.handle_get_screenshot,
             }
 
             handler = handlers.get(cmd_type)
@@ -160,46 +165,58 @@ class FreeCADMCPServer:
             traceback.print_exc()
             return {"status": "error", "message": str(e)}
 
-    def handle_send_command(self, command, get_context=True):
-        """Handle a send_command request with document context"""
+    def handle_execute(self, code, return_context=False, recompute=True):
+        """Execute Python in the FreeCAD context and report back.
+
+        Namespace: App, Gui, doc (the active document). The script can return
+        data two ways, both captured: assign to `result`, or print(). Runs
+        inside an undo transaction so the whole action reverts as one Ctrl-Z;
+        recomputes afterwards unless recompute=False. With return_context=True
+        the document/object/view summary is appended.
+        """
+        doc = App.ActiveDocument
+        out = io.StringIO()
+        # Group every mutation under one undo step (no-op if no document yet).
+        if doc:
+            doc.openTransaction("MCP execute")
         try:
-            # Execute the command
-            exec(command, {"App": App, "Gui": Gui})
+            ns = {"App": App, "Gui": Gui, "doc": doc}
+            with contextlib.redirect_stdout(out):
+                exec(code, ns)
 
-            # Recompute so freshly created/edited shapes are up to date before
-            # we read their geometry back (otherwise context is stale/null).
-            if App.ActiveDocument:
+            if recompute and App.ActiveDocument:
                 App.ActiveDocument.recompute()
+            if doc:
+                doc.commitTransaction()
 
-            # Get document context if requested
-            context = {}
-            if get_context:
-                context = self.get_document_context()
-
-            return {"command_result": "success", "context": context}
+            response = {"command_result": "success", "stdout": out.getvalue()}
+            if "result" in ns:
+                # _send_frame uses default=str, so a non-serializable result
+                # (a FreeCAD object, vector, etc.) is stringified rather than
+                # killing the response.
+                response["result"] = ns["result"]
+            if return_context:
+                response["context"] = self.get_document_context()
+            return response
         except Exception as e:
+            if doc:
+                doc.abortTransaction()
             return {
                 "command_result": "error",
                 "error": str(e),
+                "stdout": out.getvalue(),
                 "traceback": traceback.format_exc(),
             }
 
-    def handle_run_script(self, script):
-        """Handle a run_script request"""
-        try:
-            # Create a new local namespace for the script
-            namespace = {"App": App, "Gui": Gui, "doc": App.ActiveDocument}
-
-            # Execute the script
-            exec(script, namespace)
-
-            return {"script_result": "success"}
-        except Exception as e:
-            return {
-                "script_result": "error",
-                "error": str(e),
-                "traceback": traceback.format_exc(),
-            }
+    def handle_get_screenshot(self, width=1024, height=768):
+        """Save the active 3D view to a PNG and return it base64-encoded."""
+        if not (Gui.ActiveDocument and Gui.ActiveDocument.ActiveView):
+            return {"error": "no active 3D view to capture"}
+        path = os.path.join(tempfile.gettempdir(), "freecad_mcp_screenshot.png")
+        Gui.ActiveDocument.ActiveView.saveImage(path, int(width), int(height), "Current")
+        with open(path, "rb") as f:
+            data = base64.b64encode(f.read()).decode("ascii")
+        return {"image_base64": data, "width": int(width), "height": int(height)}
 
     def get_document_context(self):
         """Get comprehensive information about the current document state"""

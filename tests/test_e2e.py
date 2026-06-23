@@ -3,9 +3,10 @@
 Prereq: FreeCAD open, "FreeCAD MCP" workbench active, server Started (port 9876).
 Run: python3 test_e2e.py
 
-Talks the framed protocol directly (no MCP client needed): creates a box via
-send_command and prints the document context that comes back.
+Talks the framed protocol directly (no MCP client needed): exercises execute
+(stdout + result capture, undo transaction, context) and the screenshot tool.
 """
+import base64
 import json
 import socket
 
@@ -33,16 +34,39 @@ def _recv(s, n):
 
 
 if __name__ == "__main__":
-    script = (
+    # 1. execute: create a box, print a value, and return one via `result`.
+    code = (
         "doc = App.ActiveDocument or App.newDocument('mcp_e2e')\n"
         "b = doc.addObject('Part::Box', 'MCPBox')\n"
         "b.Length, b.Width, b.Height = 20, 20, 20\n"
         "doc.recompute()\n"
+        "print('volume is', b.Shape.Volume)\n"
+        "result = b.Shape.Volume\n"
     )
-    resp = call({"type": "send_command", "params": {"command": script, "get_context": True}})
+    resp = call({"type": "execute", "params": {"code": code, "return_context": True}})
     print(json.dumps(resp, indent=2))
     assert resp.get("status") == "success", resp
-    assert resp["result"]["command_result"] == "success", resp
-    names = [o["name"] for o in resp["result"]["context"]["objects"]]
-    assert "MCPBox" in names, f"box not found in context: {names}"
-    print("\nOK: created MCPBox, context returned it. End-to-end works.")
+    r = resp["result"]
+    assert r["command_result"] == "success", r
+    assert "volume is" in r["stdout"], f"stdout not captured: {r['stdout']!r}"
+    assert abs(float(r["result"]) - 8000) < 1e-6, f"result not captured: {r['result']!r}"
+    names = [o["name"] for o in r["context"]["objects"]]
+    assert "MCPBox" in names, f"box not in context: {names}"
+    print("OK: execute captured stdout + result, context has MCPBox")
+
+    # 2. error path: aborted transaction, traceback returned, no crash.
+    bad = call({"type": "execute", "params": {"code": "raise ValueError('boom')"}})
+    assert bad["result"]["command_result"] == "error", bad
+    assert "boom" in bad["result"]["error"], bad
+    print("OK: error path returns traceback without dropping the connection")
+
+    # 3. screenshot: PNG bytes come back.
+    shot = call({"type": "get_screenshot", "params": {"width": 400, "height": 300}})
+    if "image_base64" in shot.get("result", {}):
+        png = base64.b64decode(shot["result"]["image_base64"])
+        assert png[:8] == b"\x89PNG\r\n\x1a\n", "not a PNG"
+        print(f"OK: screenshot returned {len(png)} bytes of PNG")
+    else:
+        print(f"NOTE: screenshot skipped ({shot['result']})")
+
+    print("\nEnd-to-end works.")

@@ -79,18 +79,19 @@ To configure the MCP server, you can use a JSON format to specify the server set
 
 The FreeCAD MCP exposes two tools:
 
-### 1. `send_command`
+### 1. `execute`
 
-- **Description**: Executes a Python command string in the FreeCAD context, recomputes the active document, and (unless `get_context=False`) returns the current document context:
+- **Description**: Executes Python inside the running FreeCAD instance. The namespace has `App` (FreeCAD), `Gui` (FreeCADGui) and `doc` (active document).
+- **Returning data**: assign to `result` or `print()` — both are captured and returned (`result` and `stdout`).
+- **Safety/freshness**: the action runs inside one undo transaction (revert with a single Ctrl-Z; aborted automatically on error) and the document is recomputed afterwards.
+- **`return_context`** (default `False`): when `True`, also returns a document summary:
   - Document properties (name, filename, object count)
-  - Per-object info (name, label, type, visibility, placement, and shape type/volume/area when present)
-  - View/camera state (best-effort — omitted with an `error` note if the Coin/pivy bindings aren't loaded)
+  - Per-object info (name, label, type, visibility, placement, and shape type/volume/area when present) — best-effort per object; one that fails to introspect reports an `error` field instead of aborting the whole dump
+  - View/camera state (best-effort — `error` note if the Coin/pivy bindings aren't loaded)
 
-  Object enrichment is best-effort per object: one object that fails to introspect reports an `error` field instead of aborting the whole response.
+### 2. `get_screenshot`
 
-### 2. `run_script`
-
-- **Description**: Executes an arbitrary Python script in the FreeCAD context (namespace includes `App`, `Gui`, `doc`). Returns only success/error — no document context.
+- **Description**: Captures the active 3D view as a PNG (`width`/`height`, default 1024×768) and returns it as an image so the model can see the model.
 
 ### Example Usage
 
@@ -119,17 +120,21 @@ def call(command):
         length = int.from_bytes(_recv(s, 4), 'big')
         return json.loads(_recv(s, length).decode('utf-8'))
 
-# Run a command and read the document context back
+# Execute code; return a value via `result` and read the document context back
 print(call({
-    "type": "send_command",
+    "type": "execute",
     "params": {
-        "command": "box = (App.ActiveDocument or App.newDocument()).addObject('Part::Box', 'MyBox'); box.Length = 20",
-        "get_context": True,
+        "code": (
+            "doc = App.ActiveDocument or App.newDocument()\n"
+            "box = doc.addObject('Part::Box', 'MyBox'); box.Length = 20\n"
+            "result = box.Shape.Volume\n"
+        ),
+        "return_context": True,
     },
 }))
 
-# Run a script (no context returned)
-print(call({"type": "run_script", "params": {"script": "doc.recompute()"}}))
+# Capture the 3D view (image_base64 in the response)
+print(call({"type": "get_screenshot", "params": {"width": 800, "height": 600}}).keys())
 ```
 
 See `test_e2e.py` for a runnable version of this against a live FreeCAD.
