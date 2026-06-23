@@ -14,6 +14,10 @@ from PySide import QtCore, QtGui
 
 class FreeCADMCPServer:
     MAX_MESSAGE = 64 * 1024 * 1024  # 64 MiB frame guard
+    # Actionable errors so an agent that calls a tool before anything exists
+    # knows how to recover instead of just seeing "no active document".
+    NO_DOC = "no active document — create one first, e.g. App.newDocument() via the execute tool"
+    NO_VIEW = "no active 3D view — open or create a document in the FreeCAD GUI first"
 
     def __init__(self, host="localhost", port=9876):
         self.host = host
@@ -234,7 +238,7 @@ class FreeCADMCPServer:
         fit:  zoom to fit all visible geometry before capturing.
         """
         if not (Gui.ActiveDocument and Gui.ActiveDocument.ActiveView):
-            return {"error": "no active 3D view to capture"}
+            return {"error": self.NO_VIEW}
         v = Gui.ActiveDocument.ActiveView
 
         orient = {
@@ -286,7 +290,7 @@ class FreeCADMCPServer:
         and shape bbox/topology when present."""
         doc = App.ActiveDocument
         if not doc:
-            return {"error": "no active document"}
+            return {"error": self.NO_DOC}
         obj = doc.getObject(name)
         if obj is None:
             return {"error": f"unknown object: {name}"}
@@ -330,7 +334,7 @@ class FreeCADMCPServer:
         step/stp, iges/igs, brep/brp (BREP/STEP/IGES via Part), or stl."""
         doc = App.ActiveDocument
         if not doc:
-            return {"error": "no active document"}
+            return {"error": self.NO_DOC}
         objs = [doc.getObject(n) for n in names]
         missing = [n for n, o in zip(names, objs) if o is None]
         if missing:
@@ -420,7 +424,7 @@ class FreeCADMCPServer:
         between two shapes (by object Name)."""
         doc = App.ActiveDocument
         if not doc:
-            return {"error": "no active document"}
+            return {"error": self.NO_DOC}
         oa = doc.getObject(a)
         if oa is None or not hasattr(oa, "Shape"):
             return {"error": f"{a!r} not found or has no shape"}
@@ -476,7 +480,7 @@ class FreeCADMCPServer:
         """Replace the current selection with the given object Names. GUI only."""
         doc = App.ActiveDocument
         if not doc:
-            return {"error": "no active document"}
+            return {"error": self.NO_DOC}
         try:
             Gui.Selection.clearSelection()
             for n in names:
@@ -498,7 +502,7 @@ class FreeCADMCPServer:
         """
         doc = App.ActiveDocument
         if not doc:
-            return {"error": "no active document"}
+            return {"error": self.NO_DOC}
         obj = doc.getObject(name)
         if obj is None:
             return {"error": f"unknown object: {name}"}
@@ -604,6 +608,7 @@ class FreeCADMCPServer:
                     shape = obj.Shape
                     obj_info["shape"] = {
                         "type": shape.ShapeType,
+                        "solids": len(shape.Solids),
                         "volume": (
                             float(shape.Volume) if hasattr(shape, "Volume") else None
                         ),
