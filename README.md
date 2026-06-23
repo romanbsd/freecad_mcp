@@ -91,7 +91,7 @@ The FreeCAD MCP exposes two tools:
 
 ### 2. `get_screenshot`
 
-- **Description**: Captures the active 3D view as a PNG (`width`/`height`, default 1024×768) and returns it as an image so the model can see the model.
+- **Description**: Captures the active 3D view as a PNG and returns it as an image so the model can see the model. Params: `width`/`height` (default 1024×768), `view` (one of `iso`, `front`, `rear`, `top`, `bottom`, `left`, `right`, or `current`; default `iso`), and `fit` (zoom-to-fit before capture, default `True`).
 
 ### Example Usage
 

@@ -208,15 +208,41 @@ class FreeCADMCPServer:
                 "traceback": traceback.format_exc(),
             }
 
-    def handle_get_screenshot(self, width=1024, height=768):
-        """Save the active 3D view to a PNG and return it base64-encoded."""
+    # Standard view orientations a caller can request before capture.
+    STANDARD_VIEWS = (
+        "iso", "front", "rear", "top", "bottom", "left", "right",
+    )
+
+    def handle_get_screenshot(self, width=1024, height=768, view="iso", fit=True):
+        """Orient the camera, optionally fit, and return the view as a PNG.
+
+        view: one of STANDARD_VIEWS, or "current" to leave the camera as-is.
+        fit:  zoom to fit all visible geometry before capturing.
+        """
         if not (Gui.ActiveDocument and Gui.ActiveDocument.ActiveView):
             return {"error": "no active 3D view to capture"}
+        v = Gui.ActiveDocument.ActiveView
+
+        orient = {
+            "iso": v.viewIsometric, "front": v.viewFront, "rear": v.viewRear,
+            "top": v.viewTop, "bottom": v.viewBottom,
+            "left": v.viewLeft, "right": v.viewRight,
+        }
+        if view != "current":
+            setter = orient.get(view)
+            if setter is None:
+                return {"error": f"unknown view {view!r}; use one of "
+                                 f"{', '.join(self.STANDARD_VIEWS)} or 'current'"}
+            setter()
+        if fit:
+            v.fitAll()
+
         path = os.path.join(tempfile.gettempdir(), "freecad_mcp_screenshot.png")
-        Gui.ActiveDocument.ActiveView.saveImage(path, int(width), int(height), "Current")
+        v.saveImage(path, int(width), int(height), "Current")
         with open(path, "rb") as f:
             data = base64.b64encode(f.read()).decode("ascii")
-        return {"image_base64": data, "width": int(width), "height": int(height)}
+        return {"image_base64": data, "width": int(width), "height": int(height),
+                "view": view}
 
     def get_document_context(self):
         """Get comprehensive information about the current document state"""

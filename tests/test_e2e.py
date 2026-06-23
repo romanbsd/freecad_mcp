@@ -60,13 +60,20 @@ if __name__ == "__main__":
     assert "boom" in bad["result"]["error"], bad
     print("OK: error path returns traceback without dropping the connection")
 
-    # 3. screenshot: PNG bytes come back.
-    shot = call({"type": "get_screenshot", "params": {"width": 400, "height": 300}})
+    # 3. screenshot: front view, fit, PNG bytes come back.
+    shot = call({"type": "get_screenshot",
+                 "params": {"width": 400, "height": 300, "view": "front", "fit": True}})
     if "image_base64" in shot.get("result", {}):
         png = base64.b64decode(shot["result"]["image_base64"])
         assert png[:8] == b"\x89PNG\r\n\x1a\n", "not a PNG"
-        print(f"OK: screenshot returned {len(png)} bytes of PNG")
+        assert shot["result"]["view"] == "front", shot["result"]
+        print(f"OK: front-view screenshot returned {len(png)} bytes of PNG")
     else:
         print(f"NOTE: screenshot skipped ({shot['result']})")
+
+    # bad view name is rejected cleanly, not crashed.
+    bad_view = call({"type": "get_screenshot", "params": {"view": "sideways"}})
+    assert "unknown view" in bad_view["result"].get("error", ""), bad_view
+    print("OK: unknown view name rejected with a helpful error")
 
     print("\nEnd-to-end works.")

@@ -73,11 +73,20 @@ async def execute(code: str, return_context: bool = False) -> str:
 
 
 @mcp.tool()
-async def get_screenshot(width: int = 1024, height: int = 768) -> Image:
-    """Capture the active FreeCAD 3D view as a PNG so you can see the model."""
+async def get_screenshot(
+    width: int = 1024, height: int = 768, view: str = "iso", fit: bool = True
+) -> Image:
+    """Capture the active FreeCAD 3D view as a PNG so you can see the model.
+
+    Args:
+        width, height: image size in pixels.
+        view: camera orientation before capture — one of iso, front, rear,
+            top, bottom, left, right, or "current" to leave the camera as-is.
+        fit: zoom to fit all visible geometry before capturing (default True).
+    """
     result = await send_to_freecad({
         "type": "get_screenshot",
-        "params": {"width": width, "height": height},
+        "params": {"width": width, "height": height, "view": view, "fit": fit},
     })
     if "image_base64" not in result:
         raise RuntimeError(result.get("message") or result.get("error") or "screenshot failed")
