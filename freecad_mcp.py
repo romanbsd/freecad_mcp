@@ -199,8 +199,13 @@ class FreeCADMCPServer:
 
             if recompute and App.ActiveDocument:
                 App.ActiveDocument.recompute()
+            # Best-effort: the script may have closed/replaced `doc`, leaving a
+            # dangling handle whose commit would throw — the work is already done.
             if doc:
-                doc.commitTransaction()
+                try:
+                    doc.commitTransaction()
+                except Exception:
+                    pass
 
             response = {"command_result": "success", "stdout": out.getvalue()}
             if "result" in ns:
@@ -218,7 +223,10 @@ class FreeCADMCPServer:
             return response
         except Exception as e:
             if doc:
-                doc.abortTransaction()
+                try:
+                    doc.abortTransaction()
+                except Exception:
+                    pass
             return {
                 "command_result": "error",
                 "error": str(e),
