@@ -48,6 +48,19 @@ fil.Edges = [(i + 1, 2.0, 2.0) for i in range(len(box.Shape.Edges))]  # (edge#, 
 box.Visibility = False   # hide the source so only the result shows
 ```
 
+## Fillet specific edges (target by index)
+Use the `get_subelements` tool to list a shape's edges (Edge1..N with curve
+type, length, and center point), pick the ones you want, then fillet by their
+1-based index:
+```python
+fil = doc.addObject("Part::Fillet", "Fillet")
+fil.Base = box
+fil.Edges = [(3, 1.5, 1.5), (5, 1.5, 1.5)]   # only edges 3 and 5
+box.Visibility = False
+```
+The `get_selection` tool also returns sub-element names (Edge1/Face2) the user
+has clicked, so you can fillet exactly what they picked.
+
 ## PartDesign: sketch → pad (FreeCAD 1.x)
 ```python
 import Part, Sketcher

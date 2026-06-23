@@ -150,6 +150,7 @@ class FreeCADMCPServer:
                 "measure": self.handle_measure,
                 "get_selection": self.handle_get_selection,
                 "set_selection": self.handle_set_selection,
+                "get_subelements": self.handle_get_subelements,
             }
 
             handler = handlers.get(cmd_type)
@@ -479,6 +480,62 @@ class FreeCADMCPServer:
         except Exception as e:
             return {"error": f"selection unavailable (GUI only): {e}"}
         return self.handle_get_selection()
+
+    def handle_get_subelements(self, name, limit=200):
+        """Sub-geometry of an object so it can be targeted by index.
+
+        For any shape: its edges (Edge1..N, with curve type, length, center) and
+        faces (Face1..N, with area, center) — feed these names to fillet/chamfer
+        or set_selection. For a Sketcher sketch: its Geometry and Constraints.
+        Edge/face lists are capped at `limit`.
+        """
+        doc = App.ActiveDocument
+        if not doc:
+            return {"error": "no active document"}
+        obj = doc.getObject(name)
+        if obj is None:
+            return {"error": f"unknown object: {name}"}
+
+        out = {"name": name, "type": obj.TypeId}
+
+        if obj.TypeId == "Sketcher::SketchObject":
+            geom = []
+            for i, g in enumerate(obj.Geometry):
+                g_info = {"index": i, "type": g.__class__.__name__}
+                for attr in ("StartPoint", "EndPoint", "Center", "Radius"):
+                    if hasattr(g, attr):
+                        v = getattr(g, attr)
+                        g_info[attr.lower()] = [v.x, v.y, v.z] if hasattr(v, "x") else float(v)
+                geom.append(g_info)
+            out["geometry"] = geom
+            out["constraints"] = [
+                {"index": i, "type": c.Type} for i, c in enumerate(obj.Constraints)
+            ]
+
+        if hasattr(obj, "Shape"):
+            try:
+                s = obj.Shape
+                edges = []
+                for i, e in enumerate(s.Edges[:limit]):
+                    c = e.CenterOfMass
+                    try:
+                        curve = e.Curve.__class__.__name__
+                    except Exception:
+                        curve = None
+                    edges.append({"name": f"Edge{i + 1}", "curve": curve,
+                                  "length": float(e.Length),
+                                  "center": [c.x, c.y, c.z]})
+                faces = []
+                for i, f in enumerate(s.Faces[:limit]):
+                    c = f.CenterOfMass
+                    faces.append({"name": f"Face{i + 1}", "area": float(f.Area),
+                                  "center": [c.x, c.y, c.z]})
+                out["edges"] = edges
+                out["faces"] = faces
+                out["truncated"] = len(s.Edges) > limit or len(s.Faces) > limit
+            except Exception as e:
+                out["shape_error"] = str(e)
+        return out
 
     def get_document_context(self):
         """Get comprehensive information about the current document state"""

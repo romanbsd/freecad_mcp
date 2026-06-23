@@ -125,6 +125,12 @@ if __name__ == "__main__":
     assert abs(pair["distance"] - 80) < 1e-6, pair  # 100 - 20
     print(f"OK: measure single bbox + pair distance ({pair['distance']})")
 
+    # 7b. sub-elements: a box has 12 edges / 6 faces, named for targeting.
+    sub = call({"type": "get_subelements", "params": {"name": "MCPBox"}})["result"]
+    assert len(sub["edges"]) == 12 and len(sub["faces"]) == 6, sub
+    assert sub["edges"][0]["name"] == "Edge1" and sub["faces"][0]["name"] == "Face1", sub
+    print(f"OK: get_subelements lists {len(sub['edges'])} edges / {len(sub['faces'])} faces")
+
     # 8. selection (GUI only — skip gracefully headless / no GUI view).
     sel = call({"type": "set_selection", "params": {"names": ["MCPBox"]}})["result"]
     if "error" in sel:

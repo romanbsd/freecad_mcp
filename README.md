@@ -118,6 +118,10 @@ The FreeCAD MCP exposes these tools, plus an MCP resource `freecad://guide/cookb
 
 - **Description**: Read or replace the current FreeCAD selection (objects and sub-elements like `Edge1`/`Face2`, for targeting fillets/chamfers). GUI-only.
 
+### 9. `get_subelements`
+
+- **Description**: Returns a shape's edges (`Edge1..N` with curve type, length, center) and faces (`Face1..N` with area, center), or a Sketcher sketch's `Geometry` and `Constraints`. Use the edge/face names to fillet/chamfer by index or to `set_selection`.
+
 ### Example Usage
 
 The server speaks a length-prefixed framing protocol: each message (both

@@ -185,6 +185,26 @@ async def set_selection(names: list[str]) -> str:
 
 
 @mcp.tool()
+async def get_subelements(name: str, limit: int = 200) -> str:
+    """Sub-geometry of an object, so you can target it by index.
+
+    For any shape: its edges (Edge1..N with curve type, length, center point)
+    and faces (Face1..N with area, center) — pass those sub-element names to a
+    fillet/chamfer or to set_selection. For a Sketcher sketch: its Geometry
+    (lines/arcs/circles with coordinates) and Constraints.
+
+    Args:
+        name: object Name.
+        limit: max edges/faces to return (default 200).
+    """
+    return json.dumps(
+        await send_to_freecad({"type": "get_subelements",
+                               "params": {"name": name, "limit": limit}}),
+        indent=2,
+    )
+
+
+@mcp.tool()
 async def get_screenshot(
     width: int = 1024, height: int = 768, view: str = "iso", fit: bool = True
 ) -> Image:
