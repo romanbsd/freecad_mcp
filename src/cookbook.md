@@ -116,3 +116,17 @@ box.ViewObject.Visibility = True
 ```
 
 After building, call the `get_screenshot` tool (try `view="iso"`) to see the result.
+
+## Parametric components (prefer this for reusable, editable models)
+For anything with named dimensions you'll tweak, use the component tools instead
+of raw `execute` — they build a live parametric tree FreeCAD rebuilds itself:
+1. `create_component(document, name, parameters=[...])` — each parameter is
+   `kind:"input"` (has `default`, optional `min`/`max`/`enum`) or `kind:"derived"`
+   (has `expression`, read-only). Refer to params as `$name` in expressions.
+2. `define_component(component_id, features=[...])` — feature types box, cylinder,
+   cone, prism, transform, cut, union, intersection, array, group. Sizes/positions
+   are expressions with units, e.g. `"$width / 2"`, `"$wall_thickness + 2 mm"`.
+   Booleans/arrays reference other features by `id` (`{"type":"cut","base":"wall","tool":"hole"}`).
+3. `set_component_parameters(component_id, {"width":"200 mm"})` — rebuilds only
+   affected features. `validate_component` checks geometry/ranges/collisions.
+   `render_component` (with optional `section`) and `export_component` finish.

@@ -1,0 +1,737 @@
+"""Parametric component workflow for FreeCAD MCP.
+
+A thin declarative layer over FreeCAD's *native* expression + dependency engine
+(parametric-spec.md). A component is an App::Part container holding a parameter
+host (App::FeaturePython with typed dynamic properties) and groups of generated
+features whose dimensions/placement are bound to the host via FreeCAD
+expressions. FreeCAD itself does the unit math, derived-value evaluation,
+incremental rebuild, and dependency tracking — we only translate the spec's
+`$param` syntax and orchestrate.
+
+Each public op_* function takes the MCP params and returns a JSON-able dict.
+They are dispatched by FreeCADMCPServer in freecad_mcp.py.
+"""
+import json
+import os
+import re
+import tempfile
+
+import FreeCAD as App
+
+_TOKEN = re.compile(r"\$([A-Za-z_]\w*)")
+
+# spec parameter type -> FreeCAD property type
+TYPE_MAP = {
+    "length": "App::PropertyLength",
+    "angle": "App::PropertyAngle",
+    "bool": "App::PropertyBool",
+    "boolean": "App::PropertyBool",
+    "int": "App::PropertyInteger",
+    "integer": "App::PropertyInteger",
+    "float": "App::PropertyFloat",
+    "number": "App::PropertyFloat",
+    "string": "App::PropertyString",
+    "text": "App::PropertyString",
+    "enum": "App::PropertyEnumeration",
+    "enumeration": "App::PropertyEnumeration",
+}
+
+_GROUPS = ("Features", "Construction", "Validation", "Variants")
+
+
+# --------------------------------------------------------------------------- #
+# helpers
+# --------------------------------------------------------------------------- #
+def _gui():
+    try:
+        import FreeCADGui as Gui
+        return Gui
+    except Exception:
+        return None
+
+
+def _translate(expr, host_name):
+    """Spec expression -> FreeCAD expression ($param -> Host.param)."""
+    return _TOKEN.sub(lambda m: "%s.%s" % (host_name, m.group(1)), str(expr))
+
+
+def _kind(p):
+    return p.get("kind") or ("derived" if p.get("expression") else "input")
+
+
+def _prop_type(p):
+    return TYPE_MAP.get(str(p.get("type", "length")).lower(), "App::PropertyFloat")
+
+
+def _set_value(obj, name, ptype, value):
+    if ptype in ("App::PropertyLength", "App::PropertyAngle"):
+        setattr(obj, name, App.Units.Quantity(str(value)))
+    elif ptype == "App::PropertyBool":
+        setattr(obj, name, bool(value))
+    elif ptype == "App::PropertyInteger":
+        setattr(obj, name, int(value))
+    elif ptype == "App::PropertyFloat":
+        setattr(obj, name, float(value))
+    else:  # string / enumeration
+        setattr(obj, name, str(value))
+
+
+def _bind(obj, prop_path, value, host_name):
+    """Bind a feature property (or .Placement.Base.x style path). String values
+    become FreeCAD expressions (so units + $params work); numbers are set."""
+    if isinstance(value, str):
+        obj.setExpression(prop_path, _translate(value, host_name))
+    elif value is not None:
+        setattr(obj, prop_path, value)
+
+
+def _load(container):
+    return json.loads(container.mcp_meta or "{}")
+
+
+def _save(container, meta):
+    container.mcp_meta = json.dumps(meta)
+
+
+def _resolve(component_id):
+    if not str(component_id).startswith("component://"):
+        raise ValueError("component_id must look like component://<doc>/<name>")
+    docname, _, name = component_id[len("component://"):].partition("/")
+    if docname not in App.listDocuments():
+        raise ValueError("document %r is not open" % docname)
+    doc = App.getDocument(docname)
+    for o in doc.Objects:
+        if getattr(o, "mcp_component_id", None) == component_id:
+            return doc, o, _load(o)
+    raise ValueError("component %r not found in %r" % (name, docname))
+
+
+def _host(doc, meta):
+    return doc.getObject(meta["host"])
+
+
+def _group(doc, meta, which):
+    return doc.getObject(meta["groups"][which])
+
+
+def _begin(doc, label):
+    # Programmatically-created documents have undo OFF by default, which makes
+    # openTransaction/abortTransaction no-ops. Enable it so a failed rebuild
+    # actually rolls back (and the user gets undo history). Idempotent.
+    doc.UndoMode = 1
+    doc.openTransaction(label)
+
+
+def _abort(doc):
+    try:
+        doc.abortTransaction()
+    except Exception:
+        pass
+
+
+def _errors(doc):
+    """Objects left in an error/invalid state after recompute."""
+    return [o.Name for o in doc.Objects
+            if any(s in ("Error", "Invalid") for s in o.State)]
+
+
+def _feature_solids(doc, meta):
+    """Top-level generated solids (boolean inputs were removed from Features)."""
+    grp = _group(doc, meta, "Features")
+    out = []
+    for o in grp.Group:
+        if hasattr(o, "Shape") and o.Shape and not o.Shape.isNull():
+            out.append(o)
+    return out
+
+
+def _merge_bbox(objs):
+    bb = None
+    for o in objs:
+        try:
+            b = o.Shape.BoundBox
+        except Exception:
+            continue
+        bb = b if bb is None else bb.united(b)
+    if bb is None:
+        return None
+    return {"xmin": bb.XMin, "ymin": bb.YMin, "zmin": bb.ZMin,
+            "xmax": bb.XMax, "ymax": bb.YMax, "zmax": bb.ZMax,
+            "size": [bb.XLength, bb.YLength, bb.ZLength]}
+
+
+def _axis_rotation(axis):
+    a = (axis or "z").lower()
+    if a == "x":
+        return App.Rotation(App.Vector(0, 1, 0), 90)
+    if a == "y":
+        return App.Rotation(App.Vector(1, 0, 0), -90)
+    return App.Rotation()
+
+
+def _apply_material(obj, name):
+    if not name:
+        return
+    try:
+        import Materials
+        mm = Materials.MaterialManager()
+        for _u, m in mm.Materials.items():
+            if m.Name == name and "ShapeMaterial" in obj.PropertiesList:
+                obj.ShapeMaterial = m
+                return
+    except Exception:
+        pass  # material library unavailable or name not found; name kept in graph
+
+
+# --------------------------------------------------------------------------- #
+# parameter registry
+# --------------------------------------------------------------------------- #
+def _add_param(host, p):
+    name = p["name"]
+    ptype = _prop_type(p)
+    kind = _kind(p)
+    group = "Derived" if kind == "derived" else "Parameters"
+    if name not in host.PropertiesList:
+        host.addProperty(ptype, name, group, p.get("description", ""))
+    if ptype == "App::PropertyEnumeration" and p.get("enum"):
+        setattr(host, name, list(p["enum"]))
+    if kind == "derived":
+        host.setExpression(name, _translate(p["expression"], host.Name))
+        host.setEditorMode(name, 1)  # read-only in the GUI
+    elif p.get("default") is not None:
+        _set_value(host, name, ptype, p["default"])
+    return kind
+
+
+# --------------------------------------------------------------------------- #
+# feature build graph
+# --------------------------------------------------------------------------- #
+def _build_feature(doc, host, feat, id_map):
+    """Create one feature object and bind its expressions. Returns the object."""
+    ftype = feat["type"]
+    hn = host.Name
+    pos = feat.get("position") or {}
+
+    def place(obj):
+        for ax in ("x", "y", "z"):
+            if ax in pos:
+                _bind(obj, ".Placement.Base.%s" % ax, pos[ax], hn)
+
+    if ftype == "box":
+        obj = doc.addObject("Part::Box", feat["id"])
+        size = feat.get("size") or {}
+        _bind(obj, "Length", size.get("x"), hn)
+        _bind(obj, "Width", size.get("y"), hn)
+        _bind(obj, "Height", size.get("z"), hn)
+        place(obj)
+    elif ftype == "cylinder":
+        obj = doc.addObject("Part::Cylinder", feat["id"])
+        _bind(obj, "Radius", feat.get("radius"), hn)
+        _bind(obj, "Height", feat.get("height"), hn)
+        obj.Placement.Rotation = _axis_rotation(feat.get("axis"))
+        place(obj)
+    elif ftype == "cone":
+        obj = doc.addObject("Part::Cone", feat["id"])
+        _bind(obj, "Radius1", feat.get("radius1"), hn)
+        _bind(obj, "Radius2", feat.get("radius2"), hn)
+        _bind(obj, "Height", feat.get("height"), hn)
+        obj.Placement.Rotation = _axis_rotation(feat.get("axis"))
+        place(obj)
+    elif ftype == "prism":
+        obj = doc.addObject("Part::Prism", feat["id"])
+        if feat.get("sides") is not None:
+            obj.Polygon = int(feat["sides"])
+        _bind(obj, "Circumradius", feat.get("radius") or feat.get("circumradius"), hn)
+        _bind(obj, "Height", feat.get("height"), hn)
+        place(obj)
+    elif ftype == "transform":
+        obj = id_map[feat["base"]]  # mutate the referenced feature's placement
+        obj.Placement.Rotation = _axis_rotation(feat.get("axis"))
+        for ax in ("x", "y", "z"):
+            if (feat.get("translate") or {}).get(ax) is not None:
+                _bind(obj, ".Placement.Base.%s" % ax, feat["translate"][ax], hn)
+        return obj  # not a new object
+    elif ftype in ("cut", "union", "intersection"):
+        obj = _build_boolean(doc, feat, id_map)
+    elif ftype == "array":
+        obj = _build_array(doc, host, feat, id_map)
+    elif ftype == "group":
+        obj = doc.addObject("App::DocumentObjectGroup", feat["id"])
+    else:
+        raise ValueError("unknown feature type %r" % ftype)
+
+    if feat.get("label"):
+        obj.Label = feat["label"]
+    _apply_material(obj, feat.get("material"))
+    return obj
+
+
+def _build_boolean(doc, feat, id_map):
+    ftype = feat["type"]
+    if ftype == "cut":
+        obj = doc.addObject("Part::Cut", feat["id"])
+        obj.Base = id_map[feat["base"]]
+        obj.Tool = id_map[feat["tool"]]
+        consumed = [feat["base"], feat["tool"]]
+    else:
+        cls = "Part::MultiFuse" if ftype == "union" else "Part::MultiCommon"
+        obj = doc.addObject(cls, feat["id"])
+        shapes = feat.get("shapes") or [feat.get("base"), feat.get("tool")]
+        obj.Shapes = [id_map[s] for s in shapes]
+        consumed = list(shapes)
+    feat["_consumed"] = consumed
+    return obj
+
+
+def _build_array(doc, host, feat, id_map):
+    import Draft
+    base = id_map[feat["base"]]
+    arr = Draft.make_array(base, App.Vector(1, 0, 0), App.Vector(0, 1, 0), 1, 1)
+    arr.Label = feat.get("id", arr.Label)
+    hn = host.Name
+    _bind(arr, "NumberX", feat.get("count"), hn)
+    if feat.get("spacing") is not None:
+        axis = (feat.get("axis") or "x").lower()
+        arr.setExpression("IntervalX.%s" % axis, _translate(feat["spacing"], hn))
+    feat["_consumed"] = [feat["base"]]
+    return arr
+
+
+# --------------------------------------------------------------------------- #
+# operations
+# --------------------------------------------------------------------------- #
+def op_create_component(document, name, label=None, parameters=None):
+    doc = (App.getDocument(document) if document in App.listDocuments()
+           else App.newDocument(document))
+    _begin(doc, "create_component")
+    try:
+        container = doc.addObject("App::Part", name)
+        container.Label = label or name
+        host = doc.addObject("App::FeaturePython", "%s_Params" % name)
+        host.Label = "%s Parameters" % name
+
+        groups = {}
+        for g in _GROUPS:
+            grp = doc.addObject("App::DocumentObjectGroup", "%s_%s" % (name, g))
+            grp.Label = g
+            groups[g] = grp.Name
+            container.addObject(grp)
+        container.addObject(host)
+
+        for prop in ("mcp_component_id", "mcp_meta"):
+            container.addProperty("App::PropertyString", prop, "MCP", "")
+            container.setEditorMode(prop, 2)  # hidden
+        cid = "component://%s/%s" % (document, name)
+        container.mcp_component_id = cid
+
+        created = 0
+        registry = []
+        for p in (parameters or []):
+            p = dict(p)
+            p["kind"] = _add_param(host, p)
+            registry.append(p)
+            created += 1
+
+        _save(container, {"host": host.Name, "groups": groups,
+                          "schema": registry, "build_graph": [],
+                          "id_map": {}, "variants": {}, "validation": None})
+        doc.recompute()
+        doc.commitTransaction()
+    except Exception:
+        _abort(doc)
+        raise
+    return {"component_id": cid, "object_name": container.Name,
+            "parameters_created": created}
+
+
+def op_define_component(component_id, features):
+    doc, container, meta = _resolve(component_id)
+    host = _host(doc, meta)
+    feats_grp = _group(doc, meta, "Features")
+    _begin(doc, "define_component")
+    try:
+        # remove any previously generated features
+        for nm in meta.get("id_map", {}).values():
+            old = doc.getObject(nm)
+            if old is not None:
+                doc.removeObject(old.Name)
+
+        id_map = {}
+        graph = []
+        for feat in features:
+            feat = dict(feat)
+            obj = _build_feature(doc, host, feat, id_map)
+            id_map[feat["id"]] = obj
+            if obj.Name not in [o.Name for o in feats_grp.Group]:
+                feats_grp.addObject(obj)
+            graph.append(feat)
+
+        # boolean/array inputs are claimed by their parent — drop from the group
+        for feat in graph:
+            for cid in feat.get("_consumed", []):
+                feats_grp.removeObject(id_map[cid])
+
+        name_map = {fid: o.Name for fid, o in id_map.items()}
+        doc.recompute()
+        errs = _errors(doc)
+        if errs:
+            # Transactional: roll back so the prior valid graph survives.
+            raise ValueError("build failed; invalid features: %s" % ", ".join(errs))
+        meta["build_graph"] = graph
+        meta["id_map"] = name_map
+        _save(container, meta)
+        doc.commitTransaction()
+    except Exception:
+        _abort(doc)
+        raise
+
+    return {"features_created": list(name_map.keys()), "object_names": name_map}
+
+
+def _consumed(feat):
+    """Feature ids this feature consumes (boolean/array/transform inputs)."""
+    ids = []
+    for k in ("base", "tool"):
+        if isinstance(feat.get(k), str):
+            ids.append(feat[k])
+    ids += list(feat.get("shapes") or [])
+    return ids
+
+
+def _dependents(meta, changed):
+    """Feature ids affected by changed params: those whose expressions reference
+    a changed param (expanded through derived params), then propagated downstream
+    through feature->feature consumption edges (a cut regenerates when its tool
+    does)."""
+    changed = set(changed)
+    derived = {p["name"]: p.get("expression", "") for p in meta["schema"]
+               if p.get("kind") == "derived"}
+    grew = True
+    while grew:  # expand changed set through derived params
+        grew = False
+        for dname, expr in derived.items():
+            if set(_TOKEN.findall(expr)) & changed and dname not in changed:
+                changed.add(dname)
+                grew = True
+
+    graph = meta["build_graph"]
+    affected = {f["id"] for f in graph
+                if set(_TOKEN.findall(json.dumps(f))) & changed}
+    grew = True
+    while grew:  # propagate downstream through consumption topology
+        grew = False
+        for feat in graph:
+            if feat["id"] not in affected and set(_consumed(feat)) & affected:
+                affected.add(feat["id"])
+                grew = True
+    return [f["id"] for f in graph if f["id"] in affected]
+
+
+def op_set_component_parameters(component_id, values, rebuild=True, validate=False):
+    doc, container, meta = _resolve(component_id)
+    host = _host(doc, meta)
+    kinds = {p["name"]: p.get("kind", "input") for p in meta["schema"]}
+    types = {p["name"]: _prop_type(p) for p in meta["schema"]}
+
+    _begin(doc, "set_component_parameters")
+    try:
+        changed = []
+        for k, v in (values or {}).items():
+            if k not in kinds:
+                raise ValueError("unknown parameter %r" % k)
+            if kinds[k] == "derived":
+                raise ValueError("parameter %r is derived (read-only)" % k)
+            _set_value(host, k, types[k], v)
+            changed.append(k)
+        if rebuild:
+            doc.recompute()
+            errs = _errors(doc)
+            if errs:
+                # Transactional: keep the last valid geometry on a bad rebuild.
+                raise ValueError("rebuild failed; invalid features: %s" % ", ".join(errs))
+        doc.commitTransaction()
+    except Exception:
+        _abort(doc)
+        raise
+
+    result = {"changed": changed,
+              "regenerated": _dependents(meta, changed),
+              "bbox": _merge_bbox(_feature_solids(doc, meta))}
+    if validate:
+        result["validation"] = op_validate_component(component_id)
+    return result
+
+
+def op_get_component(component_id):
+    doc, container, meta = _resolve(component_id)
+    host = _host(doc, meta)
+    params = []
+    for p in meta["schema"]:
+        try:
+            cur = getattr(host, p["name"])
+            cur = str(cur)
+        except Exception:
+            cur = None
+        params.append({"name": p["name"], "kind": p.get("kind"),
+                       "type": p.get("type"), "value": cur,
+                       "min": p.get("min"), "max": p.get("max"),
+                       "expression": p.get("expression")})
+    graph = [{"id": f["id"], "type": f["type"],
+              "depends_on": sorted(set(_TOKEN.findall(json.dumps(f))))}
+             for f in meta["build_graph"]]
+    return {"component_id": component_id, "object_name": container.Name,
+            "parameters": params, "build_graph": graph,
+            "variants": list(meta.get("variants", {}).keys()),
+            "validation": meta.get("validation")}
+
+
+def op_create_component_variant(component_id, name, values):
+    doc, container, meta = _resolve(component_id)
+    meta.setdefault("variants", {})[name] = values
+    _save(container, meta)
+    return {"variant": name, "values": values,
+            "variants": list(meta["variants"].keys())}
+
+
+# --------------------------------------------------------------------------- #
+# validation
+# --------------------------------------------------------------------------- #
+def _finding(status, rule, message, feature=None, fix=None):
+    f = {"status": status, "rule": rule, "message": message}
+    if feature:
+        f["feature"] = feature
+    if fix:
+        f["suggested_fix"] = fix
+    return f
+
+
+def op_validate_component(component_id, rules=None):
+    doc, container, meta = _resolve(component_id)
+    host = _host(doc, meta)
+    solids = _feature_solids(doc, meta)
+    default = ["geometry_valid", "parameter_ranges", "minimum_wall_thickness",
+               "no_collisions", "contained_tools"]
+    rules = rules or default
+    findings = []
+
+    if "geometry_valid" in rules:
+        for o in solids:
+            if "Invalid" in o.State or not o.isValid() or o.Shape.isNull():
+                findings.append(_finding("error", "geometry_valid",
+                                "%s has invalid geometry" % o.Name, o.Name))
+
+    if "parameter_ranges" in rules:
+        for p in meta["schema"]:
+            if p.get("kind") == "derived":
+                continue
+            findings += _check_range(host, p)
+
+    if "minimum_wall_thickness" in rules:
+        for p in meta["schema"]:
+            if "thickness" in p["name"].lower() and p.get("min") is not None:
+                val = App.Units.Quantity(str(getattr(host, p["name"])))
+                lo = App.Units.Quantity(str(p["min"]))
+                if val < lo:
+                    findings.append(_finding(
+                        "warning", "minimum_wall_thickness",
+                        "%s is %s; configured minimum is %s" % (p["name"], val, lo),
+                        fix="Set %s to at least %s." % (p["name"], lo)))
+
+    if "no_collisions" in rules:
+        allow = set()  # could be extended via meta
+        for i in range(len(solids)):
+            for j in range(i + 1, len(solids)):
+                a, b = solids[i], solids[j]
+                if (a.Name, b.Name) in allow:
+                    continue
+                try:
+                    if a.Shape.common(b.Shape).Volume > 1e-6:
+                        findings.append(_finding(
+                            "warning", "no_collisions",
+                            "%s and %s overlap" % (a.Name, b.Name)))
+                except Exception:
+                    pass
+
+    if "contained_tools" in rules:
+        idm = meta["id_map"]
+        for feat in meta["build_graph"]:
+            if feat["type"] == "cut":
+                base, tool = doc.getObject(idm.get(feat["base"], "")), \
+                    doc.getObject(idm.get(feat["tool"], ""))
+                try:
+                    if base and tool and base.Shape.common(tool.Shape).Volume <= 1e-6:
+                        findings.append(_finding(
+                            "warning", "contained_tools",
+                            "cut tool %r does not intersect %r" % (feat["tool"], feat["base"]),
+                            feat["id"]))
+                except Exception:
+                    pass
+
+    if "manufacturable" in rules:
+        for feat in meta["build_graph"]:
+            if feat["type"] == "cylinder" and feat.get("radius"):
+                # purely structural heuristic placeholder
+                pass
+
+    status = "ok"
+    if any(f["status"] == "error" for f in findings):
+        status = "error"
+    elif any(f["status"] == "warning" for f in findings):
+        status = "warning"
+    out = {"status": status, "findings": findings}
+    meta["validation"] = out
+    _save(container, meta)
+    return out
+
+
+def _check_range(host, p):
+    name = p["name"]
+    out = []
+    try:
+        val = getattr(host, name)
+    except Exception:
+        return [_finding("error", "parameter_ranges", "%s missing" % name, fix=None)]
+    if p.get("enum"):
+        if str(val) not in p["enum"]:
+            out.append(_finding("error", "parameter_ranges",
+                       "%s=%s not in %s" % (name, val, p["enum"])))
+        return out
+    try:
+        q = App.Units.Quantity(str(val))
+        if p.get("min") is not None and q < App.Units.Quantity(str(p["min"])):
+            out.append(_finding("error", "parameter_ranges",
+                       "%s=%s below min %s" % (name, val, p["min"]),
+                       fix="Increase %s." % name))
+        if p.get("max") is not None and q > App.Units.Quantity(str(p["max"])):
+            out.append(_finding("error", "parameter_ranges",
+                       "%s=%s above max %s" % (name, val, p["max"]),
+                       fix="Decrease %s." % name))
+    except Exception:
+        pass
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# render / export
+# --------------------------------------------------------------------------- #
+def op_render_component(component_id, view="iso", section=None, hide_features=None,
+                        width=900, height=700):
+    gui = _gui()
+    if gui is None or not gui.ActiveDocument or not gui.ActiveDocument.ActiveView:
+        return {"error": "no active 3D view — render requires the FreeCAD GUI"}
+    import base64
+    doc, container, meta = _resolve(component_id)
+    idm = meta["id_map"]
+    v = gui.ActiveDocument.ActiveView
+
+    hidden = []          # (obj, prior visibility) to restore
+    temp = []            # temp section objects to delete
+    try:
+        for fid in (hide_features or []):
+            o = doc.getObject(idm.get(fid, ""))
+            if o is not None:
+                hidden.append((o, o.ViewObject.Visibility))
+                o.ViewObject.Visibility = False
+
+        if section:
+            temp, more_hidden = _make_section(doc, meta, section)
+            hidden += more_hidden
+
+        orient = {"iso": v.viewIsometric, "front": v.viewFront, "rear": v.viewRear,
+                  "top": v.viewTop, "bottom": v.viewBottom,
+                  "left": v.viewLeft, "right": v.viewRight}
+        if view != "current":
+            orient.get(view, v.viewIsometric)()
+        v.fitAll()
+        path = os.path.join(tempfile.gettempdir(), "freecad_mcp_component.png")
+        v.saveImage(path, int(width), int(height), "Current")
+        data = base64.b64encode(open(path, "rb").read()).decode("ascii")
+        return {"image_base64": data, "view": view,
+                "sectioned": bool(section), "width": int(width), "height": int(height)}
+    finally:
+        for o in temp:
+            try:
+                doc.removeObject(o.Name)
+            except Exception:
+                pass
+        for o, vis in hidden:
+            try:
+                o.ViewObject.Visibility = vis
+            except Exception:
+                pass
+        doc.recompute()
+
+
+def _make_section(doc, meta, section):
+    """Cut the visible solids with a half-space box at plane/offset, show only
+    the section result. Returns (temp_objects, hidden_pairs)."""
+    import Part
+    solids = _feature_solids(doc, meta)
+    if not solids:
+        return [], []
+    bb = solids[0].Shape.BoundBox
+    for o in solids[1:]:
+        bb = bb.united(o.Shape.BoundBox)
+    pad = max(bb.XLength, bb.YLength, bb.ZLength) + 10
+    plane = (section.get("plane") or "XZ").upper()
+    off = float(App.Units.Quantity(str(section.get("offset", "0 mm"))).getValueAs("mm"))
+
+    # half-space box removing the near side of the cut plane
+    if plane in ("XZ", "ZX"):       # cut along Y
+        box = Part.makeBox(bb.XLength + 2 * pad, pad, bb.ZLength + 2 * pad,
+                           App.Vector(bb.XMin - pad, off, bb.ZMin - pad))
+    elif plane in ("YZ", "ZY"):     # cut along X
+        box = Part.makeBox(pad, bb.YLength + 2 * pad, bb.ZLength + 2 * pad,
+                           App.Vector(off, bb.YMin - pad, bb.ZMin - pad))
+    else:                            # XY, cut along Z
+        box = Part.makeBox(bb.XLength + 2 * pad, bb.YLength + 2 * pad, pad,
+                           App.Vector(bb.XMin - pad, bb.YMin - pad, off))
+
+    comp = Part.makeCompound([o.Shape for o in solids])
+    sect = doc.addObject("Part::Feature", "MCP_Section")
+    sect.Shape = comp.cut(box)
+    hidden = [(o, o.ViewObject.Visibility) for o in solids]
+    for o in solids:
+        o.ViewObject.Visibility = False
+    return [sect], hidden
+
+
+def op_export_component(component_id, path, format="FCStd", variant=None):
+    doc, container, meta = _resolve(component_id)
+    host = _host(doc, meta)
+    fmt = (format or os.path.splitext(path)[1].lstrip(".")).upper()
+
+    restore = {}
+    try:
+        if variant:
+            values = meta.get("variants", {}).get(variant)
+            if values is None:
+                return {"error": "unknown variant %r" % variant}
+            types = {p["name"]: _prop_type(p) for p in meta["schema"]}
+            for k, v in values.items():
+                restore[k] = getattr(host, k)
+                _set_value(host, k, types[k], v)
+            doc.recompute()
+
+        if fmt == "FCSTD":
+            doc.saveCopy(path)
+        else:
+            objs = _feature_solids(doc, meta)
+            if fmt == "STL":
+                import Part
+                shape = (objs[0].Shape if len(objs) == 1
+                         else Part.makeCompound([o.Shape for o in objs]))
+                shape.exportStl(path)
+            elif fmt in ("STEP", "STP", "IGES", "IGS", "BREP", "BRP"):
+                import Part
+                Part.export(objs, path)
+            else:
+                return {"error": "unsupported format %r" % fmt}
+    finally:
+        if restore:
+            for k, v in restore.items():
+                setattr(host, k, v)
+            doc.recompute()
+
+    return {"path": path, "format": fmt, "bytes": os.path.getsize(path),
+            "variant": variant}

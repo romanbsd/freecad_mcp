@@ -228,6 +228,95 @@ async def get_screenshot(
     return Image(data=base64.b64decode(inner["image_base64"]), format="png")
 
 
+@mcp.tool()
+async def create_component(document: str, name: str, label: str = "",
+                          parameters: list = None) -> str:
+    """Create a parametric component: an App::Part container with a typed
+    parameter registry. Each parameter declares kind "input" (concrete, with
+    `default` and optional min/max/enum/unit) or "derived" (read-only, with an
+    `expression` over other params using $name). Returns the component_id used
+    by the other component tools.
+    """
+    return json.dumps(await send_to_freecad({"type": "create_component", "params": {
+        "document": document, "name": name, "label": label or None,
+        "parameters": parameters or []}}), indent=2)
+
+
+@mcp.tool()
+async def define_component(component_id: str, features: list) -> str:
+    """Define (or replace) the component's build graph — a list of features.
+    Feature types: box, cylinder, cone, prism, transform, cut, union,
+    intersection, array, group. Sizes/positions are expressions over $params
+    (with units), e.g. "$width / 2", "$wall_thickness + 2 mm". Booleans/arrays
+    reference other features by id. Read freecad://guide/cookbook for shapes.
+    """
+    return json.dumps(await send_to_freecad({"type": "define_component", "params": {
+        "component_id": component_id, "features": features}}), indent=2)
+
+
+@mcp.tool()
+async def set_component_parameters(component_id: str, values: dict,
+                                   rebuild: bool = True, validate: bool = False) -> str:
+    """Update input parameters and rebuild only affected features (native
+    incremental recompute). Returns changed params, regenerated feature ids,
+    optional validation, and the component bounding box. Derived params are
+    read-only and rejected."""
+    return json.dumps(await send_to_freecad({"type": "set_component_parameters", "params": {
+        "component_id": component_id, "values": values,
+        "rebuild": rebuild, "validate": validate}}), indent=2)
+
+
+@mcp.tool()
+async def get_component(component_id: str) -> str:
+    """Return the component's parameter registry (with current values),
+    dependency graph summary, variants, and latest validation status."""
+    return json.dumps(await send_to_freecad({"type": "get_component", "params": {
+        "component_id": component_id}}), indent=2)
+
+
+@mcp.tool()
+async def create_component_variant(component_id: str, name: str, values: dict) -> str:
+    """Store a named set of parameter overrides that export_component can apply."""
+    return json.dumps(await send_to_freecad({"type": "create_component_variant", "params": {
+        "component_id": component_id, "name": name, "values": values}}), indent=2)
+
+
+@mcp.tool()
+async def validate_component(component_id: str, rules: list = None) -> str:
+    """Run validation rules (default: geometry_valid, parameter_ranges,
+    minimum_wall_thickness, no_collisions, contained_tools). Returns structured
+    findings (status/rule/feature/message/suggested_fix)."""
+    return json.dumps(await send_to_freecad({"type": "validate_component", "params": {
+        "component_id": component_id, "rules": rules}}), indent=2)
+
+
+@mcp.tool()
+async def render_component(component_id: str, view: str = "iso", section: dict = None,
+                          hide_features: list = None,
+                          width: int = 900, height: int = 700) -> Image:
+    """Render the component to a PNG. `view` is iso/front/top/etc. Optional
+    `section` = {"plane":"XZ","offset":"90 mm"} produces a cross-section.
+    `hide_features` is a list of feature ids to hide for this render."""
+    result = await send_to_freecad({"type": "render_component", "params": {
+        "component_id": component_id, "view": view, "section": section,
+        "hide_features": hide_features, "width": width, "height": height}})
+    inner = result.get("result", result) if isinstance(result, dict) else {}
+    if not isinstance(inner, dict) or "image_base64" not in inner:
+        raise RuntimeError(result.get("message") or inner.get("error") or "render failed")
+    return Image(data=base64.b64decode(inner["image_base64"]), format="png")
+
+
+@mcp.tool()
+async def export_component(component_id: str, path: str, format: str = "FCStd",
+                          variant: str = "") -> str:
+    """Export the component (or a named variant) to a file. Formats: FCStd,
+    STEP, STL, IGES, BREP. FCStd saves the whole document; the others export
+    the generated solids."""
+    return json.dumps(await send_to_freecad({"type": "export_component", "params": {
+        "component_id": component_id, "path": path, "format": format,
+        "variant": variant or None}}), indent=2)
+
+
 @mcp.resource("freecad://guide/cookbook", mime_type="text/markdown")
 def cookbook() -> str:
     """Working FreeCAD scripting idioms for the `execute` tool. Read this before

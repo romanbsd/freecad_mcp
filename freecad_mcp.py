@@ -156,6 +156,7 @@ class FreeCADMCPServer:
                 "set_selection": self.handle_set_selection,
                 "get_subelements": self.handle_get_subelements,
             }
+            handlers.update(self._component_handlers())
 
             handler = handlers.get(cmd_type)
             if handler:
@@ -568,6 +569,21 @@ class FreeCADMCPServer:
             except Exception as e:
                 out["shape_error"] = str(e)
         return out
+
+    def _component_handlers(self):
+        """Parametric component workflow ops (parametric.py). Module functions
+        already match the handler(**params) contract, so map them directly."""
+        import parametric
+        return {
+            "create_component": parametric.op_create_component,
+            "define_component": parametric.op_define_component,
+            "set_component_parameters": parametric.op_set_component_parameters,
+            "get_component": parametric.op_get_component,
+            "create_component_variant": parametric.op_create_component_variant,
+            "validate_component": parametric.op_validate_component,
+            "render_component": parametric.op_render_component,
+            "export_component": parametric.op_export_component,
+        }
 
     def get_document_context(self):
         """Get comprehensive information about the current document state"""

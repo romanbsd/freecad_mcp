@@ -122,6 +122,21 @@ The FreeCAD MCP exposes these tools, plus an MCP resource `freecad://guide/cookb
 
 - **Description**: Returns a shape's edges (`Edge1..N` with curve type, length, center) and faces (`Face1..N` with area, center), or a Sketcher sketch's `Geometry` and `Constraints`. Use the edge/face names to fillet/chamfer by index or to `set_selection`.
 
+## Parametric components
+
+A higher-level declarative layer (see `parametric-spec.md`) for building reusable parametric models without embedding Python. It is a thin wrapper over FreeCAD's native expression + dependency engine, so unit math, derived values, incremental rebuild, and dependency tracking are FreeCAD's own.
+
+A component is an `App::Part` container with a typed **parameter registry** (each parameter is either `input` — concrete with `default`/`min`/`max`/`enum` — or `derived` — read-only with an `expression`) and groups of generated features. Tools:
+
+- **`create_component(document, name, label, parameters)`** — container + parameter registry.
+- **`define_component(component_id, features)`** — the build graph. Feature types: `box`, `cylinder`, `cone`, `prism`, `transform`, `cut`, `union`, `intersection`, `array`, `group`. Sizes/positions are expressions over `$param` with units (`"$width / 2"`, `"$wall_thickness + 2 mm"`); booleans/arrays reference other features by id. A build that produces invalid geometry is rolled back, leaving the prior model intact.
+- **`set_component_parameters(component_id, values, rebuild, validate)`** — update inputs; rebuilds only affected features; returns changed/regenerated/validation/bbox. Derived params are read-only.
+- **`get_component(component_id)`** — registry + current values + dependency summary + variants + last validation.
+- **`create_component_variant(component_id, name, values)`** — a named override set.
+- **`validate_component(component_id, rules)`** — `geometry_valid`, `parameter_ranges`, `minimum_wall_thickness`, `no_collisions`, `contained_tools` (plus optional `manufacturable`, `enclosure_access`); structured findings.
+- **`render_component(component_id, view, section, hide_features, width, height)`** — image, optional cross-section (`{"plane":"XZ","offset":"90 mm"}`).
+- **`export_component(component_id, path, format, variant)`** — `FCStd`, `STEP`, `STL`, `IGES`, `BREP`.
+
 ### Example Usage
 
 The server speaks a length-prefixed framing protocol: each message (both
