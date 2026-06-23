@@ -129,7 +129,14 @@ if __name__ == "__main__":
     sub = call({"type": "get_subelements", "params": {"name": "MCPBox"}})["result"]
     assert len(sub["edges"]) == 12 and len(sub["faces"]) == 6, sub
     assert sub["edges"][0]["name"] == "Edge1" and sub["faces"][0]["name"] == "Face1", sub
-    print(f"OK: get_subelements lists {len(sub['edges'])} edges / {len(sub['faces'])} faces")
+    # straight box edges carry endpoints + unit direction for orientation filtering
+    e0 = sub["edges"][0]
+    assert "direction" in e0 and abs(sum(c * c for c in e0["direction"]) - 1.0) < 1e-6, e0
+    vertical = [e["name"] for e in sub["edges"] if e.get("direction") == [0.0, 0.0, 1.0]
+                or e.get("direction") == [0.0, 0.0, -1.0]]
+    assert len(vertical) == 4, f"expected 4 vertical edges, got {vertical}"
+    print(f"OK: get_subelements lists {len(sub['edges'])} edges / {len(sub['faces'])} "
+          f"faces; {len(vertical)} vertical by direction")
 
     # 8. selection (GUI only — skip gracefully headless / no GUI view).
     sel = call({"type": "set_selection", "params": {"names": ["MCPBox"]}})["result"]

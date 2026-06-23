@@ -428,12 +428,19 @@ class FreeCADMCPServer:
         if b is None:
             s = oa.Shape
             bb = s.BoundBox
-            c = s.CenterOfMass
+            # CenterOfMass isn't defined on every shape type (e.g. a Compound);
+            # fall back to the bounding-box center.
+            try:
+                c = s.CenterOfMass
+                com = [c.x, c.y, c.z]
+            except Exception:
+                com = [bb.Center.x, bb.Center.y, bb.Center.z]
             return {
                 "object": a,
+                "shape_type": s.ShapeType,
                 "volume": float(s.Volume),
                 "area": float(s.Area),
-                "center_of_mass": [c.x, c.y, c.z],
+                "center_of_mass": com,
                 "bbox": {"xmin": bb.XMin, "ymin": bb.YMin, "zmin": bb.ZMin,
                          "xmax": bb.XMax, "ymax": bb.YMax, "zmax": bb.ZMax},
                 "bbox_size": [bb.XLength, bb.YLength, bb.ZLength],
@@ -522,9 +529,22 @@ class FreeCADMCPServer:
                         curve = e.Curve.__class__.__name__
                     except Exception:
                         curve = None
-                    edges.append({"name": f"Edge{i + 1}", "curve": curve,
-                                  "length": float(e.Length),
-                                  "center": [c.x, c.y, c.z]})
+                    info = {"name": f"Edge{i + 1}", "curve": curve,
+                            "length": float(e.Length),
+                            "center": [c.x, c.y, c.z]}
+                    # Endpoints + unit direction let an agent tell a vertical
+                    # edge from a horizontal one. Closed/curved edges have a
+                    # single vertex, so direction is null there.
+                    vs = e.Vertexes
+                    if len(vs) >= 2:
+                        p0, p1 = vs[0].Point, vs[-1].Point
+                        info["start"] = [p0.x, p0.y, p0.z]
+                        info["end"] = [p1.x, p1.y, p1.z]
+                        d = p1 - p0
+                        if d.Length > 1e-9:
+                            d = d / d.Length
+                            info["direction"] = [d.x, d.y, d.z]
+                    edges.append(info)
                 faces = []
                 for i, f in enumerate(s.Faces[:limit]):
                     c = f.CenterOfMass

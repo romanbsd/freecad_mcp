@@ -49,9 +49,11 @@ box.Visibility = False   # hide the source so only the result shows
 ```
 
 ## Fillet specific edges (target by index)
-Use the `get_subelements` tool to list a shape's edges (Edge1..N with curve
-type, length, and center point), pick the ones you want, then fillet by their
-1-based index:
+Use the `get_subelements` tool to list a shape's edges. Each edge has a curve
+type, length, center, endpoints (`start`/`end`) and a unit `direction` (null
+for closed/curved edges) — filter by `direction` to pick, e.g., only the
+vertical edges (`direction == [0,0,1]` or `[0,0,-1]`). Then fillet by 1-based
+index:
 ```python
 fil = doc.addObject("Part::Fillet", "Fillet")
 fil.Base = box
