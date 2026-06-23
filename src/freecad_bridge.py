@@ -220,9 +220,12 @@ async def get_screenshot(
         "type": "get_screenshot",
         "params": {"width": width, "height": height, "view": view, "fit": fit},
     })
-    if "image_base64" not in result:
-        raise RuntimeError(result.get("message") or result.get("error") or "screenshot failed")
-    return Image(data=base64.b64decode(result["image_base64"]), format="png")
+    # Handler payloads come wrapped as {"status":"success","result":{...}};
+    # a socket-level failure is a flat {"status":"error","message":...}.
+    inner = result.get("result", result) if isinstance(result, dict) else {}
+    if not isinstance(inner, dict) or "image_base64" not in inner:
+        raise RuntimeError(result.get("message") or inner.get("error") or "screenshot failed")
+    return Image(data=base64.b64decode(inner["image_base64"]), format="png")
 
 
 @mcp.resource("freecad://guide/cookbook", mime_type="text/markdown")
