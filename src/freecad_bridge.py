@@ -1,6 +1,7 @@
 from typing import Any, Dict
 import asyncio
 import base64
+import os
 import socket
 import json
 from mcp.server.fastmcp import FastMCP, Image
@@ -50,10 +51,23 @@ async def send_to_freecad(command: Dict[str, Any]) -> Dict[str, Any]:
 async def execute(code: str, return_context: bool = False) -> str:
     """Execute Python inside the running FreeCAD instance.
 
-    The script namespace has `App` (FreeCAD), `Gui` (FreeCADGui) and `doc`
-    (the active document). To return data, either assign to `result` or use
-    print() — both are captured and sent back. The action runs inside one undo
-    transaction and the document is recomputed afterwards.
+    Namespace already bound: `App` (FreeCAD), `Gui` (FreeCADGui), `doc` (the
+    active document, may be None — `doc = App.ActiveDocument or App.newDocument()`).
+    Import `Part` / `Sketcher` / `Draft` yourself as needed.
+
+    Returning data: assign to `result` or `print()` — both are captured.
+    The document is recomputed for you after the call, and the whole call is a
+    single undo step (auto-aborted on error), so do NOT wrap your own
+    transactions.
+
+    Choosing an approach: prefer the `Part` workbench (Part::Box, Part::Cut,
+    Part::Fillet, …) for straightforward solids; use `PartDesign` (Body +
+    Sketch + Pad/Pocket) when you need an editable parametric feature tree.
+    For full working idioms (booleans, fillets, sketch→pad, export, inspect,
+    error-checking) read the `freecad://guide/cookbook` resource first.
+
+    After building geometry, call the `get_screenshot` tool to see the result
+    and verify it before reporting success.
 
     Args:
         code: Python source to execute.
@@ -91,6 +105,15 @@ async def get_screenshot(
     if "image_base64" not in result:
         raise RuntimeError(result.get("message") or result.get("error") or "screenshot failed")
     return Image(data=base64.b64decode(result["image_base64"]), format="png")
+
+
+@mcp.resource("freecad://guide/cookbook", mime_type="text/markdown")
+def cookbook() -> str:
+    """Working FreeCAD scripting idioms for the `execute` tool. Read this before
+    writing non-trivial geometry code."""
+    path = os.path.join(os.path.dirname(__file__), "cookbook.md")
+    with open(path, encoding="utf-8") as f:
+        return f.read()
 
 
 if __name__ == "__main__":
