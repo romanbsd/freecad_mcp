@@ -77,67 +77,62 @@ To configure the MCP server, you can use a JSON format to specify the server set
 
 ## Features
 
-The FreeCAD MCP currently supports the following functionalities:
+The FreeCAD MCP exposes two tools:
 
-### 1. `get_scene_info`
+### 1. `send_command`
 
-- **Description**: Retrieves comprehensive information about the current FreeCAD document, including:
-  - Document properties (name, label, filename, object count)
-  - Detailed object information (type, position, rotation, shape properties)
-  - Sketch data (geometry, constraints)
-  - View information (camera position, direction, etc.)
+- **Description**: Executes a Python command string in the FreeCAD context, recomputes the active document, and (unless `get_context=False`) returns the current document context:
+  - Document properties (name, filename, object count)
+  - Per-object info (name, label, type, visibility, placement, and shape type/volume/area when present)
+  - View/camera state (best-effort — omitted with an `error` note if the Coin/pivy bindings aren't loaded)
+
+  Object enrichment is best-effort per object: one object that fails to introspect reports an `error` field instead of aborting the whole response.
 
 ### 2. `run_script`
 
-- **Description**: Executes arbitrary Python code within the FreeCAD context. This allows users to perform complex operations, create new objects, modify existing ones, and automate tasks using FreeCAD's Python API.
+- **Description**: Executes an arbitrary Python script in the FreeCAD context (namespace includes `App`, `Gui`, `doc`). Returns only success/error — no document context.
 
 ### Example Usage
 
-To use the FreeCAD MCP, you can connect to the server and send commands as follows:
+The server speaks a length-prefixed framing protocol: each message (both
+directions) is a 4-byte big-endian length followed by that many bytes of
+UTF-8 JSON. A minimal client:
 
 ```python
 import socket
 import json
 
-# Connect to the FreeCAD MCP server
-client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-client.connect(('localhost', 9876))
+def _recv(sock, n):
+    buf = bytearray()
+    while len(buf) < n:
+        chunk = sock.recv(min(65536, n - len(buf)))
+        if not chunk:
+            raise ConnectionError("closed early")
+        buf += chunk
+    return bytes(buf)
 
-# Example: Get scene information
-command = {
-    "type": "get_scene_info"
-}
-client.sendall(json.dumps(command).encode('utf-8'))
+def call(command):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.connect(('localhost', 9876))
+        payload = json.dumps(command).encode('utf-8')
+        s.sendall(len(payload).to_bytes(4, 'big') + payload)
+        length = int.from_bytes(_recv(s, 4), 'big')
+        return json.loads(_recv(s, length).decode('utf-8'))
 
-# Receive the response
-response = client.recv(4096)
-print(json.loads(response.decode('utf-8')))
-
-# Example: Run a script
-script = """
-import FreeCAD
-doc = FreeCAD.ActiveDocument
-box = doc.addObject("Part::Box", "MyBox")
-box.Length = 20
-box.Width = 20
-box.Height = 20
-doc.recompute()
-"""
-command = {
-    "type": "run_script",
+# Run a command and read the document context back
+print(call({
+    "type": "send_command",
     "params": {
-        "script": script
-    }
-}
-client.sendall(json.dumps(command).encode('utf-8'))
+        "command": "box = (App.ActiveDocument or App.newDocument()).addObject('Part::Box', 'MyBox'); box.Length = 20",
+        "get_context": True,
+    },
+}))
 
-# Receive the response
-response = client.recv(4096)
-print(json.loads(response.decode('utf-8')))
-
-# Close the connection
-client.close()
+# Run a script (no context returned)
+print(call({"type": "run_script", "params": {"script": "doc.recompute()"}}))
 ```
+
+See `test_e2e.py` for a runnable version of this against a live FreeCAD.
 
 ## Installation
 
