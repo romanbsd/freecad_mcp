@@ -9,6 +9,8 @@ import traceback
 from PySide import QtCore, QtGui
 
 class FreeCADMCPServer:
+    MAX_MESSAGE = 64 * 1024 * 1024  # 64 MiB frame guard
+
     def __init__(self, host='localhost', port=9876):
         self.host = host
         self.port = port
@@ -66,39 +68,64 @@ class FreeCADMCPServer:
             if self.client:
                 try:
                     try:
-                        data = self.client.recv(8192)
+                        data = self.client.recv(65536)
                         if data:
                             self.buffer += data
-                            try:
-                                command = json.loads(self.buffer.decode('utf-8'))
-                                self.buffer = b''
-                                response = self.execute_command(command)
-                                response_json = json.dumps(response)
-                                self.client.sendall(response_json.encode('utf-8'))
-                            except json.JSONDecodeError:
-                                pass
+                            self._process_frames()
                         else:
                             App.Console.PrintMessage("Client disconnected\n")
-                            self.client.close()
-                            self.client = None
-                            self.buffer = b''
+                            self._reset_client()
                     except BlockingIOError:
                         pass
                     except Exception as e:
                         App.Console.PrintError(f"Error receiving data: {str(e)}\n")
-                        self.client.close()
-                        self.client = None
-                        self.buffer = b''
-                        
+                        self._reset_client()
+
                 except Exception as e:
                     App.Console.PrintError(f"Error with client: {str(e)}\n")
-                    if self.client:
-                        self.client.close()
-                        self.client = None
-                    self.buffer = b''
-                    
+                    self._reset_client()
+
         except Exception as e:
             App.Console.PrintError(f"Server error: {str(e)}\n")
+
+    def _reset_client(self):
+        if self.client:
+            try:
+                self.client.close()
+            except Exception:
+                pass
+        self.client = None
+        self.buffer = b''
+
+    def _send_frame(self, payload):
+        # Length-prefixed framing: 4-byte big-endian length + UTF-8 JSON.
+        # default=str keeps an unserializable context value from killing the
+        # connection (ponytail: best-effort stringify, fine for a debug dump).
+        data = json.dumps(payload, default=str).encode('utf-8')
+        self.client.sendall(len(data).to_bytes(4, 'big') + data)
+
+    def _process_frames(self):
+        # Drain every complete frame currently buffered. Each frame is
+        # 4-byte length header + that many bytes of JSON. Partial frames stay
+        # in the buffer for the next tick; oversized or garbage frames drop the
+        # client instead of wedging it forever.
+        while len(self.buffer) >= 4:
+            length = int.from_bytes(self.buffer[:4], 'big')
+            if length > self.MAX_MESSAGE:
+                App.Console.PrintError(
+                    f"Message too large ({length} bytes); dropping client\n")
+                self._reset_client()
+                return
+            if len(self.buffer) < 4 + length:
+                return  # wait for the rest of this frame
+            frame = self.buffer[4:4 + length]
+            self.buffer = self.buffer[4 + length:]
+            try:
+                command = json.loads(frame.decode('utf-8'))
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                self._send_frame({"status": "error", "message": f"Invalid JSON: {e}"})
+                continue
+            self._send_frame(self.execute_command(command))
 
     def execute_command(self, command):
         try:
@@ -220,15 +247,20 @@ class FreeCADMCPServer:
             
             objects.append(obj_info)
 
-        # View state
+        # View state. Best-effort: camera introspection needs the Coin/pivy
+        # SWIG bindings, which aren't always loaded ("No SWIG wrapped library
+        # loaded"). Never let view state abort the whole context dump.
         view_info = None
-        if Gui.ActiveDocument:
-            cam = Gui.ActiveDocument.ActiveView.getCameraNode()
-            view_info = {
-                "camera_type": cam.getTypeId(),
-                "camera_position": [float(x) for x in cam.position.getValue()],
-                "camera_orientation": [float(x) for x in cam.orientation.getValue()]
-            }
+        try:
+            if Gui.ActiveDocument and Gui.ActiveDocument.ActiveView:
+                cam = Gui.ActiveDocument.ActiveView.getCameraNode()
+                view_info = {
+                    "camera_type": str(cam.getTypeId().getName()),
+                    "camera_position": [float(x) for x in cam.position.getValue()],
+                    "camera_orientation": [float(x) for x in cam.orientation.getValue()]
+                }
+        except Exception as e:
+            view_info = {"error": str(e)}
 
         return {
             "document": doc_info,
@@ -279,6 +311,13 @@ class FreeCADMCPPanel:
             self.start_button.setEnabled(True)
             self.stop_button.setEnabled(False)
 
+# Module-level reference so the panel isn't garbage-collected while open.
+_panel = None
+
 def show_panel():
-    panel = FreeCADMCPPanel()
-    Gui.Control.showDialog(panel)
+    global _panel
+    if _panel is None:
+        _panel = FreeCADMCPPanel()
+    _panel.form.show()
+    _panel.form.raise_()
+    _panel.form.activateWindow()
