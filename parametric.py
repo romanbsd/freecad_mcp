@@ -186,6 +186,31 @@ def _apply_material(obj, name):
 # --------------------------------------------------------------------------- #
 # parameter registry
 # --------------------------------------------------------------------------- #
+_ROLE_GROUP = {"output": "Features", "construction": "Construction",
+               "inspection": "Construction", "tool": "Construction"}
+
+
+def _check_cycles(parameters):
+    """Reject cyclic derived expressions before any setExpression (PARAMETER_CYCLE)."""
+    derived = {p["name"]: set(_TOKEN.findall(p.get("expression", "")))
+               for p in parameters if _kind(p) == "derived"}
+    names = set(derived)
+    color = {n: 0 for n in names}  # 0=unvisited 1=in-stack 2=done
+
+    def visit(n):
+        color[n] = 1
+        for m in derived[n] & names:
+            if color[m] == 1:
+                raise ValueError("PARAMETER_CYCLE: derived parameters form a cycle at %r" % m)
+            if color[m] == 0:
+                visit(m)
+        color[n] = 2
+
+    for n in names:
+        if color[n] == 0:
+            visit(n)
+
+
 def _add_param(host, p):
     name = p["name"]
     ptype = _prop_type(p)
@@ -324,6 +349,7 @@ def op_create_component(document, name, label=None, parameters=None):
         cid = "component://%s/%s" % (document, name)
         container.mcp_component_id = cid
 
+        _check_cycles(parameters or [])
         created = 0
         registry = []
         for p in (parameters or []):
@@ -344,10 +370,9 @@ def op_create_component(document, name, label=None, parameters=None):
             "parameters_created": created}
 
 
-def op_define_component(component_id, features):
+def op_define_component(component_id, features, rules=None, profiles=None):
     doc, container, meta = _resolve(component_id)
     host = _host(doc, meta)
-    feats_grp = _group(doc, meta, "Features")
     _begin(doc, "define_component")
     try:
         # remove any previously generated features
@@ -362,14 +387,19 @@ def op_define_component(component_id, features):
             feat = dict(feat)
             obj = _build_feature(doc, host, feat, id_map)
             id_map[feat["id"]] = obj
-            if obj.Name not in [o.Name for o in feats_grp.Group]:
-                feats_grp.addObject(obj)
+            grp = _group(doc, meta, _ROLE_GROUP.get(feat.get("role", "output"), "Features"))
+            if obj.Name not in [o.Name for o in grp.Group]:
+                grp.addObject(obj)
             graph.append(feat)
 
-        # boolean/array inputs are claimed by their parent — drop from the group
+        # boolean/array inputs are claimed by their parent — drop from any group
         for feat in graph:
-            for cid in feat.get("_consumed", []):
-                feats_grp.removeObject(id_map[cid])
+            for cons in feat.get("_consumed", []):
+                o = id_map[cons]
+                for g in ("Features", "Construction"):
+                    grp = _group(doc, meta, g)
+                    if o in grp.Group:
+                        grp.removeObject(o)
 
         name_map = {fid: o.Name for fid, o in id_map.items()}
         doc.recompute()
@@ -379,6 +409,10 @@ def op_define_component(component_id, features):
             raise ValueError("build failed; invalid features: %s" % ", ".join(errs))
         meta["build_graph"] = graph
         meta["id_map"] = name_map
+        if rules is not None:
+            meta["rules"] = rules
+        if profiles is not None:
+            meta["profiles"] = profiles
         _save(container, meta)
         doc.commitTransaction()
     except Exception:
@@ -496,119 +530,87 @@ def op_create_component_variant(component_id, name, values):
 # --------------------------------------------------------------------------- #
 # validation
 # --------------------------------------------------------------------------- #
-def _finding(status, rule, message, feature=None, fix=None):
-    f = {"status": status, "rule": rule, "message": message}
-    if feature:
-        f["feature"] = feature
-    if fix:
-        f["suggested_fix"] = fix
-    return f
-
-
-def op_validate_component(component_id, rules=None):
-    doc, container, meta = _resolve(component_id)
+def _build_context(doc, meta, tolerance):
+    """Resolve the component into the context the rule engine consumes:
+    parameter values, named feature shapes (with role/tags), and tolerance."""
     host = _host(doc, meta)
-    solids = _feature_solids(doc, meta)
-    default = ["geometry_valid", "parameter_ranges", "minimum_wall_thickness",
-               "no_collisions", "contained_tools"]
-    rules = rules or default
-    findings = []
+    params = {}
+    for p in meta["schema"]:
+        try:
+            val = getattr(host, p["name"])
+        except Exception:
+            val = None
+        params[p["name"]] = {"value": val, "kind": p.get("kind"),
+                             "type": p.get("type"), "min": p.get("min"),
+                             "max": p.get("max"), "enum": p.get("enum")}
+    features = {}
+    idm = meta.get("id_map", {})
+    for feat in meta.get("build_graph", []):
+        obj = doc.getObject(idm.get(feat["id"], ""))
+        shape = getattr(obj, "Shape", None) if obj is not None else None
+        if shape is not None and shape.isNull():
+            shape = None
+        features[feat["id"]] = {"obj": obj, "shape": shape,
+                                "role": feat.get("role", "output"),
+                                "tags": feat.get("tags", [])}
+    return {"params": params, "features": features,
+            "graph": meta.get("build_graph", []), "tolerance": tolerance}
 
-    if "geometry_valid" in rules:
-        for o in solids:
-            if "Invalid" in o.State or not o.isValid() or o.Shape.isNull():
-                findings.append(_finding("error", "geometry_valid",
-                                "%s has invalid geometry" % o.Name, o.Name))
 
-    if "parameter_ranges" in rules:
-        for p in meta["schema"]:
-            if p.get("kind") == "derived":
-                continue
-            findings += _check_range(host, p)
+def _measurements(doc, meta):
+    out = {}
+    idm = meta.get("id_map", {})
+    for feat in meta.get("build_graph", []):
+        obj = doc.getObject(idm.get(feat["id"], ""))
+        s = getattr(obj, "Shape", None) if obj is not None else None
+        if s is not None and not s.isNull():
+            bb = s.BoundBox
+            out[feat["id"]] = {"volume": s.Volume, "area": s.Area,
+                               "bbox_size": [bb.XLength, bb.YLength, bb.ZLength]}
+    return out
 
-    if "minimum_wall_thickness" in rules:
-        for p in meta["schema"]:
-            if "thickness" in p["name"].lower() and p.get("min") is not None:
-                val = App.Units.Quantity(str(getattr(host, p["name"])))
-                lo = App.Units.Quantity(str(p["min"]))
-                if val < lo:
-                    findings.append(_finding(
-                        "warning", "minimum_wall_thickness",
-                        "%s is %s; configured minimum is %s" % (p["name"], val, lo),
-                        fix="Set %s to at least %s." % (p["name"], lo)))
 
-    if "no_collisions" in rules:
-        allow = set()  # could be extended via meta
-        for i in range(len(solids)):
-            for j in range(i + 1, len(solids)):
-                a, b = solids[i], solids[j]
-                if (a.Name, b.Name) in allow:
-                    continue
-                try:
-                    if a.Shape.common(b.Shape).Volume > 1e-6:
-                        findings.append(_finding(
-                            "warning", "no_collisions",
-                            "%s and %s overlap" % (a.Name, b.Name)))
-                except Exception:
-                    pass
+def op_validate_component(component_id, profiles=None, rule_ids=None,
+                          include_measurements=False, tolerance=None):
+    """Run baseline/profile rules + custom component rules over the recomputed
+    component (design_rules.py). Read-only; returns the rich result schema."""
+    import design_rules as DR
+    doc, container, meta = _resolve(component_id)
+    tol = tolerance or meta.get("tolerance") or "0.01 mm"
+    ctx = _build_context(doc, meta, tol)
 
-    if "contained_tools" in rules:
-        idm = meta["id_map"]
-        for feat in meta["build_graph"]:
-            if feat["type"] == "cut":
-                base, tool = doc.getObject(idm.get(feat["base"], "")), \
-                    doc.getObject(idm.get(feat["tool"], ""))
-                try:
-                    if base and tool and base.Shape.common(tool.Shape).Volume <= 1e-6:
-                        findings.append(_finding(
-                            "warning", "contained_tools",
-                            "cut tool %r does not intersect %r" % (feat["tool"], feat["base"]),
-                            feat["id"]))
-                except Exception:
-                    pass
+    selected = profiles if profiles is not None \
+        else (meta.get("profiles") or ["geometry_baseline"])
+    thresholds = meta.get("profile_thresholds", {})
+    rules, prof_info = [], []
+    for pid in selected:
+        ver, prules = DR.expand_profile(pid, ctx, thresholds.get(pid))
+        if ver is not None:
+            prof_info.append({"id": pid, "version": ver})
+            rules += prules
 
-    if "manufacturable" in rules:
-        for feat in meta["build_graph"]:
-            if feat["type"] == "cylinder" and feat.get("radius"):
-                # purely structural heuristic placeholder
-                pass
+    custom = meta.get("rules", [])
+    if rule_ids is not None:
+        wanted = set(rule_ids)
+        custom = [r for r in custom if r.get("id") in wanted]
+    rules += custom
 
-    status = "ok"
-    if any(f["status"] == "error" for f in findings):
-        status = "error"
-    elif any(f["status"] == "warning" for f in findings):
-        status = "warning"
-    out = {"status": status, "findings": findings}
-    meta["validation"] = out
+    findings, passed = DR.evaluate(ctx, rules)
+    errors = sum(1 for f in findings if f["severity"] == "error")
+    warnings = sum(1 for f in findings if f["severity"] == "warning")
+    status = "error" if errors else ("warning" if warnings else "ok")
+
+    result = {"component_id": component_id,
+              "build_status": "failed" if _errors(doc) else "success",
+              "validation_status": status, "tolerance": str(tol),
+              "profiles": prof_info,
+              "summary": {"errors": errors, "warnings": warnings, "passed": passed},
+              "findings": findings}
+    if include_measurements:
+        result["measurements"] = _measurements(doc, meta)
+    meta["validation"] = result
     _save(container, meta)
-    return out
-
-
-def _check_range(host, p):
-    name = p["name"]
-    out = []
-    try:
-        val = getattr(host, name)
-    except Exception:
-        return [_finding("error", "parameter_ranges", "%s missing" % name, fix=None)]
-    if p.get("enum"):
-        if str(val) not in p["enum"]:
-            out.append(_finding("error", "parameter_ranges",
-                       "%s=%s not in %s" % (name, val, p["enum"])))
-        return out
-    try:
-        q = App.Units.Quantity(str(val))
-        if p.get("min") is not None and q < App.Units.Quantity(str(p["min"])):
-            out.append(_finding("error", "parameter_ranges",
-                       "%s=%s below min %s" % (name, val, p["min"]),
-                       fix="Increase %s." % name))
-        if p.get("max") is not None and q > App.Units.Quantity(str(p["max"])):
-            out.append(_finding("error", "parameter_ranges",
-                       "%s=%s above max %s" % (name, val, p["max"]),
-                       fix="Decrease %s." % name))
-    except Exception:
-        pass
-    return out
+    return result
 
 
 # --------------------------------------------------------------------------- #

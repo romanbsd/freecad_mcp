@@ -243,15 +243,24 @@ async def create_component(document: str, name: str, label: str = "",
 
 
 @mcp.tool()
-async def define_component(component_id: str, features: list) -> str:
+async def define_component(component_id: str, features: list,
+                          rules: list = None, profiles: list = None) -> str:
     """Define (or replace) the component's build graph — a list of features.
     Feature types: box, cylinder, cone, prism, transform, cut, union,
     intersection, array, group. Sizes/positions are expressions over $params
     (with units), e.g. "$width / 2", "$wall_thickness + 2 mm". Booleans/arrays
-    reference other features by id. Read freecad://guide/cookbook for shapes.
+    reference other features by id. Each feature may set `role`
+    (output/construction/tool/inspection) and `tags`. Read
+    freecad://guide/cookbook for shapes.
+
+    Optional `rules` (declarative design-rule definitions, each with id/type/
+    severity/targets/message) and default `profiles` are stored with the
+    component for validate_component. A build that yields invalid geometry is
+    rolled back, keeping the prior model.
     """
     return json.dumps(await send_to_freecad({"type": "define_component", "params": {
-        "component_id": component_id, "features": features}}), indent=2)
+        "component_id": component_id, "features": features,
+        "rules": rules, "profiles": profiles}}), indent=2)
 
 
 @mcp.tool()
@@ -282,12 +291,21 @@ async def create_component_variant(component_id: str, name: str, values: dict) -
 
 
 @mcp.tool()
-async def validate_component(component_id: str, rules: list = None) -> str:
-    """Run validation rules (default: geometry_valid, parameter_ranges,
-    minimum_wall_thickness, no_collisions, contained_tools). Returns structured
-    findings (status/rule/feature/message/suggested_fix)."""
+async def validate_component(component_id: str, profiles: list = None,
+                            rule_ids: list = None, include_measurements: bool = False,
+                            tolerance: str = "") -> str:
+    """Run design-rule checks over the recomputed component (read-only). Combines
+    built-in profiles (geometry_baseline, cnc_plywood; defaults
+    to the component's stored profiles or geometry_baseline) with its custom rules
+    (filter via rule_ids). `tolerance` is a length in document units (default
+    0.01 mm) and is echoed in the result. Returns build_status, validation_status,
+    a summary count, and findings carrying severity, rule, target, actual/required,
+    message, and suggested_parameter_change. Set include_measurements for per-feature
+    volume/area/bbox."""
     return json.dumps(await send_to_freecad({"type": "validate_component", "params": {
-        "component_id": component_id, "rules": rules}}), indent=2)
+        "component_id": component_id, "profiles": profiles, "rule_ids": rule_ids,
+        "include_measurements": include_measurements,
+        "tolerance": tolerance or None}}), indent=2)
 
 
 @mcp.tool()

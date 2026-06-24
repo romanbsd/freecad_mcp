@@ -128,5 +128,16 @@ of raw `execute` — they build a live parametric tree FreeCAD rebuilds itself:
    are expressions with units, e.g. `"$width / 2"`, `"$wall_thickness + 2 mm"`.
    Booleans/arrays reference other features by `id` (`{"type":"cut","base":"wall","tool":"hole"}`).
 3. `set_component_parameters(component_id, {"width":"200 mm"})` — rebuilds only
-   affected features. `validate_component` checks geometry/ranges/collisions.
-   `render_component` (with optional `section`) and `export_component` finish.
+   affected features. `render_component` (with optional `section`) and
+   `export_component` finish.
+
+Design-rule checks: give features a `role` (output/construction/tool/inspection)
+and `tags`, attach custom `rules` + default `profiles` in `define_component`,
+then `validate_component(component_id, profiles=["geometry_baseline",...])`.
+Built-in profiles: geometry_baseline (validity, solids, cut tools intersect,
+declared param bounds, no derived cycles) and cnc_plywood. Domain-specific
+checks (e.g. a nest-box entrance range or removable roof) go in custom `rules`,
+not built-in profiles.
+Custom rule example (a join that must hold):
+`{"id":"perch_join","type":"must_intersect","severity":"error","features":["perch","front_wall"],"minimum_overlap":"6 mm"}`.
+Findings carry severity, actual/required, and suggested_parameter_change.

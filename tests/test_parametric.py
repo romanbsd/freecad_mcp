@@ -99,13 +99,50 @@ def main():
     assert iw.startswith("176"), iw
     print("OK: width=200 -> regenerated %s, inner_width=%s" % (s2["regenerated"], iw))
 
-    # 5. validation: thin wall flagged, then restored
-    call("set_component_parameters", component_id=cid, values={"wall_thickness": "5 mm"})
+    # 5. validation (DRC engine): clean baseline, then a thin wall flagged
     v = call("validate_component", component_id=cid)
-    assert v["status"] in ("warning", "error"), v
-    assert any(f["rule"] == "minimum_wall_thickness" for f in v["findings"]), v
+    assert v["build_status"] == "success" and v["validation_status"] == "ok", v
+    assert v["tolerance"] and v["summary"]["passed"] > 0, v
+    assert any(p["id"] == "geometry_baseline" for p in v["profiles"]), v
+    print("OK: baseline validation ok (%d passed, tol %s)"
+          % (v["summary"]["passed"], v["tolerance"]))
+
+    call("set_component_parameters", component_id=cid, values={"wall_thickness": "5 mm"})
+    v2 = call("validate_component", component_id=cid)
+    assert v2["validation_status"] == "error", v2
+    bad = next(f for f in v2["findings"] if f.get("parameter") == "wall_thickness")
+    assert bad["severity"] == "error" and bad["required"] == "6 mm", bad
+    assert bad["suggested_parameter_change"] == {"wall_thickness": "6 mm"}, bad
     call("set_component_parameters", component_id=cid, values={"wall_thickness": "12 mm"})
-    print("OK: validation flagged thin wall (%s)" % v["status"])
+    print("OK: thin wall -> error with suggested_parameter_change")
+
+    # 5b. domain checks as CUSTOM rules (not a built-in profile) + measurements.
+    # A nest-box's entrance range / cleanout access are component rules, not
+    # baked into the engine.
+    call("define_component", component_id=cid, features=FEATURES, rules=[
+        {"id": "entrance_min", "type": "parameter_minimum", "severity": "error",
+         "parameter": "entrance_diameter", "minimum": "35 mm"},
+        {"id": "entrance_max", "type": "parameter_maximum", "severity": "error",
+         "parameter": "entrance_diameter", "maximum": "45 mm"},
+        {"id": "floor_join", "type": "must_intersect", "severity": "error",
+         "features": ["base", "front_wall"], "message": "front wall must sit on floor"},
+    ])
+    vd = call("validate_component", component_id=cid,
+              profiles=["geometry_baseline"],
+              rule_ids=["entrance_min", "entrance_max"], include_measurements=True)
+    assert any(p["id"] == "geometry_baseline" for p in vd["profiles"]), vd
+    assert "measurements" in vd and "base" in vd["measurements"], vd
+    # entrance_diameter is 42 mm -> both entrance rules pass
+    assert not any(f["id"] in ("entrance_min", "entrance_max") for f in vd["findings"]), vd
+    print("OK: domain checks via custom rules + measurements (status %s, %d passed)"
+          % (vd["validation_status"], vd["summary"]["passed"]))
+
+    # 5c. cyclic derived parameters are rejected up front
+    cyc = call("create_component", document=DOC, name="Cyclic", parameters=[
+        {"name": "a", "kind": "derived", "type": "length", "expression": "$b + 1 mm"},
+        {"name": "b", "kind": "derived", "type": "length", "expression": "$a + 1 mm"}])
+    assert "error" in cyc and "PARAMETER_CYCLE" in json.dumps(cyc), cyc
+    print("OK: derived parameter cycle rejected")
 
     # 6. transactional: a bad build leaves the prior valid model untouched
     bad = call("define_component", component_id=cid,
