@@ -333,6 +333,9 @@ def evaluate(ctx, rules):
     for r in rules:
         fn = _EVAL.get(r.get("type"))
         if fn is None:
+            # A typo'd rule type used to be dropped silently, reporting a clean
+            # pass for a check that never ran. Make it visible instead.
+            results.append(_finding(r, "error", "unknown rule type %r" % r.get("type")))
             continue
         try:
             res = fn(ctx, r)

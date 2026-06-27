@@ -251,6 +251,86 @@ def test_bbox_clearances_report_escape(parametric):
     assert result["directions"]["-x"] == -1
 
 
+def test_bound_violations_detects_out_of_range(parametric):
+    schema = [
+        {"name": "width", "min": "10 mm", "max": "100 mm"},
+        {"name": "count", "min": 1, "max": 8},
+    ]
+    assert parametric._bound_violations(schema, {"width": "5 mm"})
+    assert parametric._bound_violations(schema, {"count": 9})
+    assert parametric._bound_violations(schema, {"width": "50 mm", "count": 4}) == []
+    # unknown / unbounded / non-numeric params are skipped, not flagged
+    assert parametric._bound_violations(schema, {"other": "x", "width": "abc"}) == []
+
+
+def test_array_requires_explicit_count(parametric):
+    with pytest.raises(ValueError, match="requires 'count'"):
+        parametric._require_array_count({"id": "a", "base": "seed"})
+    parametric._require_array_count({"id": "a", "base": "seed", "count": 3})
+    parametric._require_array_count({"id": "a", "base": "seed", "count_x": 2})
+
+
+def test_profile_points_requires_at_least_three(parametric):
+    with pytest.raises(ValueError, match="at least 3 points"):
+        parametric._profile_points({"id": "p", "points": [[0, 0], [1, 0]]})
+    assert parametric._profile_points(
+        {"id": "p", "points": [[0, 0], [1, 0], [1, 1]]}
+    ) == [[0, 0], [1, 0], [1, 1]]
+
+
+def test_evaluate_reports_unknown_rule_type(parametric):
+    import design_rules as DR
+    ctx = {"params": {}, "features": {}, "graph": [], "tolerance": "0.01 mm"}
+    findings, passed = DR.evaluate(ctx, [{"id": "oops", "type": "no_such_rule"}])
+    assert passed == 0
+    assert len(findings) == 1
+    assert findings[0]["severity"] == "error"
+    assert "unknown rule type" in findings[0]["message"]
+
+
+def test_expand_profile_unknown_returns_none(parametric):
+    import design_rules as DR
+    ctx = {"params": {}, "features": {}, "graph": [], "tolerance": "0.01 mm"}
+    version, rules = DR.expand_profile("geomtry_baseline", ctx)  # typo
+    assert version is None
+    assert rules == []
+
+
+def test_create_component_rejects_duplicate_id(parametric):
+    # Guard runs before any FreeCAD object creation, so a tiny fake suffices.
+    class _Obj:
+        mcp_component_id = "component://doc/Widget"
+
+    class _Doc:
+        Objects = [_Obj()]
+
+    parametric.App.listDocuments = lambda: ["doc"]
+    parametric.App.getDocument = lambda name: _Doc()
+    with pytest.raises(ValueError, match="already exists"):
+        parametric.op_create_component("doc", "Widget")
+
+
+def test_edge_treatment_proxy_round_trips_mode(parametric):
+    # FreeCAD restores a saved Proxy via __setstate__/loads; the chamfer/fillet
+    # mode must survive or a reopened document applies the wrong operation.
+    proxy = parametric._EdgeTreatmentProxy("chamfer")
+    restored = parametric._EdgeTreatmentProxy.__new__(parametric._EdgeTreatmentProxy)
+    restored.__setstate__(proxy.__getstate__())
+    assert restored.mode == "chamfer"
+
+
+def test_edge_treatment_proxy_defaults_mode_on_empty_state(parametric):
+    restored = parametric._EdgeTreatmentProxy.__new__(parametric._EdgeTreatmentProxy)
+    restored.__setstate__(None)
+    assert restored.mode == "fillet"
+
+
+def test_profile_extrusion_proxy_serialization_is_stable(parametric):
+    proxy = parametric._ProfileExtrusionProxy()
+    assert proxy.__getstate__() is None
+    proxy.__setstate__(proxy.__getstate__())  # must not raise
+
+
 def test_fdm_profile_expands_manufacturing_checks(parametric):
     import design_rules
     ctx = {

@@ -12,6 +12,10 @@ mcp = FastMCP("freecad-bridge")
 # Constants
 FREECAD_HOST = 'localhost'
 FREECAD_PORT = 9876
+# execute runs on FreeCAD's single GUI thread, so a heavy script blocks the
+# whole UI. The default 30s covers typical ops; raise FREECAD_MCP_TIMEOUT for
+# long recomputes (the server keeps running the script even past a client timeout).
+FREECAD_TIMEOUT = float(os.environ.get('FREECAD_MCP_TIMEOUT', '30'))
 
 
 def _recv_exactly(sock: socket.socket, n: int) -> bytes:
@@ -29,7 +33,7 @@ def _call_blocking(command: Dict[str, Any]) -> bytes:
     """Synchronous framed request/response. Wire format (both directions):
     4-byte big-endian length prefix followed by that many bytes of UTF-8 JSON."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.settimeout(30)
+        sock.settimeout(FREECAD_TIMEOUT)
         sock.connect((FREECAD_HOST, FREECAD_PORT))
         payload = json.dumps(command).encode('utf-8')
         sock.sendall(len(payload).to_bytes(4, 'big') + payload)
@@ -262,14 +266,20 @@ async def define_component(component_id: str, features: list,
 
 @mcp.tool()
 async def set_component_parameters(component_id: str, values: dict,
-                                   rebuild: bool = True, validate: bool = False) -> Any:
+                                   rebuild: bool = True, validate: bool = False,
+                                   enforce_bounds: bool = False) -> Any:
     """Update input parameters and rebuild only affected features (native
     incremental recompute). Returns changed params, regenerated feature ids,
     optional validation, and the component bounding box. Derived params are
-    read-only and rejected."""
+    read-only and rejected.
+
+    Declared min/max bounds are advisory by default (a value outside them is
+    accepted and only flagged when you validate). Set enforce_bounds=True to
+    reject out-of-range values up front instead."""
     return await _request({"type": "set_component_parameters", "params": {
         "component_id": component_id, "values": values,
-        "rebuild": rebuild, "validate": validate}})
+        "rebuild": rebuild, "validate": validate,
+        "enforce_bounds": enforce_bounds}})
 
 
 @mcp.tool()

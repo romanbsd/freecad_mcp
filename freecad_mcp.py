@@ -39,6 +39,9 @@ class FreeCADMCPServer:
             self.socket.setblocking(False)
             self.timer = QtCore.QTimer()
             self.timer.timeout.connect(self._process_server)
+            # ponytail: single client, polled on the GUI thread every 100ms.
+            # Calls are serialized and incur up to one tick of latency — fine
+            # for one agent; drop the interval or accept-in-loop if it matters.
             self.timer.start(100)  # 100ms interval
             App.Console.PrintMessage(
                 f"FreeCAD MCP server started on {self.host}:{self.port}\n"
@@ -109,6 +112,9 @@ class FreeCADMCPServer:
 
     def _send_frame(self, payload):
         # Length-prefixed framing: 4-byte big-endian length + UTF-8 JSON.
+        # Outgoing frames are unbounded (incoming is capped at MAX_MESSAGE); a
+        # huge default=str dump of a mesh-heavy result could be large, but
+        # capping here would silently truncate legitimate geometry — left open.
         # default=str keeps an unserializable context value from killing the
         # connection (ponytail: best-effort stringify, fine for a debug dump).
         data = json.dumps(payload, default=str).encode("utf-8")
@@ -267,6 +273,16 @@ class FreeCADMCPServer:
             for o in objects if hasattr(o, "ViewObject")
         }
         old_camera = v.getCameraOrientation()
+        temp_files = []
+
+        def _tempfile():
+            # Unique per call: fixed names in the temp dir collided between
+            # concurrent screenshots and were never cleaned up.
+            fd, p = tempfile.mkstemp(prefix="freecad_mcp_screenshot_", suffix=".png")
+            os.close(fd)
+            temp_files.append(p)
+            return p
+
         try:
             if targets:
                 missing = sorted(targets - {o.Name for o in objects})
@@ -333,14 +349,11 @@ class FreeCADMCPServer:
             requested_views = list(views or [])
             if requested_views:
                 tile_paths = []
-                for index, requested in enumerate(requested_views):
+                for requested in requested_views:
                     orient_camera(requested)
                     if fit:
                         v.fitAll()
-                    tile_path = os.path.join(
-                        tempfile.gettempdir(),
-                        "freecad_mcp_screenshot_%d.png" % index,
-                    )
+                    tile_path = _tempfile()
                     v.saveImage(tile_path, int(width), int(height), "Current")
                     tile_paths.append(tile_path)
                 canvas = QtGui.QImage(
@@ -356,9 +369,7 @@ class FreeCADMCPServer:
                         )
                 finally:
                     painter.end()
-                path = os.path.join(
-                    tempfile.gettempdir(), "freecad_mcp_screenshot.png"
-                )
+                path = _tempfile()
                 canvas.save(path, "PNG")
                 resolved_view = "contact_sheet"
                 output_width = int(width) * len(tile_paths)
@@ -366,9 +377,7 @@ class FreeCADMCPServer:
                 resolved_view = orient_camera(view)
                 if fit:
                     v.fitAll()
-                path = os.path.join(
-                    tempfile.gettempdir(), "freecad_mcp_screenshot.png"
-                )
+                path = _tempfile()
                 v.saveImage(path, int(width), int(height), "Current")
                 output_width = int(width)
             with open(path, "rb") as f:
@@ -390,6 +399,11 @@ class FreeCADMCPServer:
                 "temporary": bool(temporary),
             }
         finally:
+            for p in temp_files:
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
             if temporary:
                 for obj in objects:
                     previous = state.get(obj.Name)

@@ -88,7 +88,7 @@ def main():
     s = call("set_component_parameters", component_id=cid,
              values={"entrance_diameter": "42 mm"}, validate=True)
     assert set(s["regenerated"]) == {"entrance_hole", "front_with_entrance"}, s
-    assert s["validation"]["status"] in ("ok", "warning"), s
+    assert s["validation"]["validation_status"] in ("ok", "warning"), s
     print("OK: entrance_diameter regenerated only %s" % s["regenerated"])
 
     # 4. width updates all dependent walls + derived dimensions
@@ -141,7 +141,7 @@ def main():
     cyc = call("create_component", document=DOC, name="Cyclic", parameters=[
         {"name": "a", "kind": "derived", "type": "length", "expression": "$b + 1 mm"},
         {"name": "b", "kind": "derived", "type": "length", "expression": "$a + 1 mm"}])
-    assert "error" in cyc and "PARAMETER_CYCLE" in json.dumps(cyc), cyc
+    assert cyc.get("status") == "error" and "PARAMETER_CYCLE" in json.dumps(cyc), cyc
     print("OK: derived parameter cycle rejected")
 
     # 6. transactional: a bad build leaves the prior valid model untouched

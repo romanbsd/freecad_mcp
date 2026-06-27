@@ -73,7 +73,10 @@ if __name__ == "__main__":
 
     # bad view name is rejected cleanly, not crashed.
     bad_view = call({"type": "get_screenshot", "params": {"view": "sideways"}})
-    assert "unknown view" in bad_view["result"].get("error", ""), bad_view
+    # An unknown view raises ValueError -> standard error envelope (status/message),
+    # not a result-level error. Accept either form.
+    bad_msg = bad_view.get("message", "") or bad_view.get("result", {}).get("error", "")
+    assert "unknown view" in bad_msg, bad_view
     print("OK: unknown view name rejected with a helpful error")
 
     # 4. list_objects / get_object.

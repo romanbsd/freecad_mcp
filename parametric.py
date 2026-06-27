@@ -44,6 +44,18 @@ def _edge_matches(edge, selector, tolerance=1e-6):
 
 
 class _ProfileExtrusionProxy:
+    # FreeCAD serializes obj.Proxy on save and restores it on load; without
+    # these the feature reopens with a dead Proxy and stops recomputing.
+    # (FreeCAD 0.21+ calls dumps/loads, older calls __getstate__/__setstate__.)
+    def dumps(self):
+        return None
+
+    def loads(self, state):
+        return None
+
+    __getstate__ = dumps
+    __setstate__ = loads
+
     def execute(self, obj):
         import Part
         points = json.loads(obj.ProfilePoints)
@@ -60,8 +72,20 @@ class _ProfileExtrusionProxy:
 
 
 class _EdgeTreatmentProxy:
-    def __init__(self, mode):
+    def __init__(self, mode="fillet"):
         self.mode = mode
+
+    # mode ("fillet"/"chamfer") lives only on the proxy, so it must be
+    # serialized or a reopened document loses which operation to apply.
+    def dumps(self):
+        return {"mode": self.mode}
+
+    def loads(self, state):
+        self.mode = (state or {}).get("mode", "fillet") \
+            if isinstance(state, dict) else "fillet"
+
+    __getstate__ = dumps
+    __setstate__ = loads
 
     def execute(self, obj):
         selector = json.loads(obj.EdgeSelector or "{}")
@@ -324,6 +348,18 @@ def _add_param(host, p):
 # --------------------------------------------------------------------------- #
 # feature build graph
 # --------------------------------------------------------------------------- #
+def _profile_points(feat):
+    """A polygon profile needs at least 3 points; reject anything less with a
+    clear error instead of an IndexError deep inside the proxy's execute."""
+    points = feat.get("points") or []
+    if len(points) < 3:
+        raise ValueError(
+            "profile_extrude %r needs at least 3 points; got %d"
+            % (feat.get("id"), len(points))
+        )
+    return points
+
+
 def _build_feature(doc, host, feat, id_map):
     """Create one feature object and bind its expressions. Returns the object."""
     ftype = feat["type"]
@@ -363,11 +399,12 @@ def _build_feature(doc, host, feat, id_map):
         obj = doc.addObject("Part::Cut", feat["id"])
         obj.Base, obj.Tool = outer, inner
     elif ftype == "profile_extrude":
+        points = _profile_points(feat)  # fail clearly, not as an opaque rollback
         obj = doc.addObject("Part::FeaturePython", feat["id"])
         obj.addProperty("App::PropertyString", "ProfilePoints", "Geometry")
         obj.addProperty("App::PropertyLength", "Length", "Geometry")
         obj.addProperty("App::PropertyEnumeration", "Axis", "Geometry")
-        obj.ProfilePoints = json.dumps(feat.get("points") or [])
+        obj.ProfilePoints = json.dumps(points)
         obj.Axis = ["x", "y", "z"]
         obj.Axis = (feat.get("axis") or "z").lower()
         _bind(obj, "Length", feat.get("length"), hn)
@@ -435,8 +472,19 @@ def _build_boolean(doc, feat, id_map):
     return obj
 
 
+def _require_array_count(feat):
+    """A missing count silently produced an array of one (Draft's default).
+    Require an explicit count so that footgun fails loudly instead."""
+    if (feat.get("count") is None and feat.get("count_x") is None
+            and feat.get("count_y") is None):
+        raise ValueError(
+            "array %r requires 'count' (or 'count_x'/'count_y')" % feat.get("id")
+        )
+
+
 def _build_array(doc, host, feat, id_map):
     import Draft
+    _require_array_count(feat)
     base = id_map[feat["base"]]
     arr = Draft.make_array(base, App.Vector(1, 0, 0), App.Vector(0, 1, 0), 1, 1)
     arr.Label = feat.get("id", arr.Label)
@@ -461,8 +509,18 @@ def _build_array(doc, host, feat, id_map):
 # operations
 # --------------------------------------------------------------------------- #
 def op_create_component(document, name, label=None, parameters=None):
-    doc = (App.getDocument(document) if document in App.listDocuments()
-           else App.newDocument(document))
+    existing_doc = document in App.listDocuments()
+    doc = App.getDocument(document) if existing_doc else App.newDocument(document)
+    cid = "component://%s/%s" % (document, name)
+    # addObject auto-renames on a name clash, but the component_id is built from
+    # the requested name — so two same-named components would share one id and
+    # _resolve would target the wrong one. Reject the duplicate up front.
+    if existing_doc:
+        for o in doc.Objects:
+            if getattr(o, "mcp_component_id", None) == cid:
+                raise ValueError(
+                    "component %r already exists in document %r" % (name, document)
+                )
     _begin(doc, "create_component")
     try:
         container = doc.addObject("App::Part", name)
@@ -481,7 +539,6 @@ def op_create_component(document, name, label=None, parameters=None):
         for prop in ("mcp_component_id", "mcp_meta"):
             container.addProperty("App::PropertyString", prop, "MCP", "")
             container.setEditorMode(prop, 2)  # hidden
-        cid = "component://%s/%s" % (document, name)
         container.mcp_component_id = cid
 
         _check_cycles(parameters or [])
@@ -924,11 +981,49 @@ def _dependents(meta, changed):
     return [f["id"] for f in graph if f["id"] in affected]
 
 
-def op_set_component_parameters(component_id, values, rebuild=True, validate=False):
+def _as_number(v):
+    """Best-effort numeric value of a number / length / '5 mm' for bound checks."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        return float(str(v).split()[0])
+    except (ValueError, IndexError):
+        return None
+
+
+def _bound_violations(schema, values):
+    """Names whose new value falls outside a declared min/max. Best-effort
+    numeric compare; units are assumed consistent with the bound (matching how
+    the geometry_baseline profile checks the same ranges)."""
+    by_name = {p["name"]: p for p in schema}
+    bad = []
+    for name, raw in (values or {}).items():
+        p = by_name.get(name)
+        if not p:
+            continue
+        val = _as_number(raw)
+        if val is None:
+            continue
+        lo, hi = _as_number(p.get("min")), _as_number(p.get("max"))
+        if (lo is not None and val < lo) or (hi is not None and val > hi):
+            bad.append("%s=%s outside [%s, %s]"
+                       % (name, raw, p.get("min"), p.get("max")))
+    return bad
+
+
+def op_set_component_parameters(component_id, values, rebuild=True, validate=False,
+                                enforce_bounds=False):
     doc, container, meta = _resolve(component_id)
     host = _host(doc, meta)
     kinds = {p["name"]: p.get("kind", "input") for p in meta["schema"]}
     types = {p["name"]: _prop_type(p) for p in meta["schema"]}
+
+    if enforce_bounds:
+        violations = _bound_violations(meta["schema"], values)
+        if violations:
+            raise ValueError("parameter(s) out of bounds: %s" % "; ".join(violations))
 
     _begin(doc, "set_component_parameters")
     try:
@@ -941,6 +1036,9 @@ def op_set_component_parameters(component_id, values, rebuild=True, validate=Fal
             _set_value(host, k, types[k], v)
             changed.append(k)
         if rebuild:
+            # Whole-document recompute: FreeCAD's touch-tracking makes it
+            # incremental internally. The "regenerated" list below is computed
+            # only for the response — it does not scope this rebuild.
             doc.recompute()
             errs = _errors(_component_objects(doc, meta))
             if errs:
@@ -1058,12 +1156,16 @@ def op_validate_component(component_id, profiles=None, rule_ids=None,
     selected = profiles if profiles is not None \
         else (meta.get("profiles") or ["geometry_baseline"])
     thresholds = meta.get("profile_thresholds", {})
-    rules, prof_info = [], []
+    rules, prof_info, unknown_profiles = [], [], []
     for pid in selected:
         ver, prules = DR.expand_profile(pid, ctx, thresholds.get(pid))
-        if ver is not None:
-            prof_info.append({"id": pid, "version": ver})
-            rules += prules
+        if ver is None:
+            # A misspelled profile used to be skipped silently, validating
+            # nothing while reporting "ok". Surface it as an error finding.
+            unknown_profiles.append(pid)
+            continue
+        prof_info.append({"id": pid, "version": ver})
+        rules += prules
 
     custom = meta.get("rules", [])
     if rule_ids is not None:
@@ -1072,6 +1174,10 @@ def op_validate_component(component_id, profiles=None, rule_ids=None,
     rules += custom
 
     findings, passed = DR.evaluate(ctx, rules)
+    for pid in unknown_profiles:
+        findings.append({"id": "unknown_profile:%s" % pid, "severity": "error",
+                         "rule": "profile",
+                         "message": "unknown validation profile %r" % pid})
     errors = sum(1 for f in findings if f["severity"] == "error")
     warnings = sum(1 for f in findings if f["severity"] == "warning")
     status = "error" if errors else ("warning" if warnings else "ok")
@@ -1300,6 +1406,11 @@ def op_check_fit(component_id, container, insert, retainers=None,
         "+y": App.Vector(0, 1, 0), "-y": App.Vector(0, -1, 0),
         "+z": App.Vector(0, 0, 1), "-z": App.Vector(0, 0, -1),
     }
+    # Cache retainer bounding boxes once; a cheap bbox-overlap test prunes the
+    # expensive boolean common() for the many probe positions that can't touch
+    # a retainer at all (non-overlapping bboxes can't share volume — exact).
+    retainer_bbs = [(obj, obj.Shape.BoundBox) for obj in retainer_objects]
+    vol_eps = tolerance ** 3
     blocked = {}
     for label, axis in axes.items():
         hit = False
@@ -1308,9 +1419,14 @@ def op_check_fit(component_id, container, insert, retainers=None,
             distance = travel * step / float(probe_steps)
             moved.translate(App.Vector(axis.x * distance, axis.y * distance,
                                        axis.z * distance))
-            if any(moved.common(obj.Shape).Volume > tolerance ** 3
-                   for obj in retainer_objects):
-                hit = True
+            moved_bb = moved.BoundBox
+            for obj, obj_bb in retainer_bbs:
+                if not moved_bb.intersect(obj_bb):
+                    continue
+                if moved.common(obj.Shape).Volume > vol_eps:
+                    hit = True
+                    break
+            if hit:
                 break
         blocked[label] = hit
 

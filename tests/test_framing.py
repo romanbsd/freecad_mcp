@@ -57,6 +57,20 @@ def test_large_framed_response_round_trips():
     assert result["echo"] == command
 
 
+def test_timeout_is_configurable_via_env():
+    import importlib
+    with patch.dict(os.environ, {"FREECAD_MCP_TIMEOUT": "120"}):
+        reloaded = importlib.reload(bridge)
+        try:
+            assert reloaded.FREECAD_TIMEOUT == 120.0
+            fake_socket = FramedSocket({"status": "success"})
+            with patch.object(reloaded.socket, "socket", return_value=fake_socket):
+                reloaded._call_blocking({"type": "noop"})
+            assert fake_socket.timeout == 120.0
+        finally:
+            importlib.reload(bridge)  # restore default for other tests
+
+
 def main():
     test_large_framed_response_round_trips()
     print("OK: framed >4096B response round-trips intact")
