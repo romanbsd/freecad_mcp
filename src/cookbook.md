@@ -127,6 +127,7 @@ graph intact.
 Core feature types:
 
 - primitives: `box`, `cylinder`, `tube`, `cone`, `prism`;
+- generated solids: `profile_extrude`, `fillet`, `chamfer`;
 - relationships: `transform`, `cut`, `union`, `intersection`;
 - repetition: `array`, `grid_array`;
 - organization: `group`;
@@ -163,6 +164,32 @@ Use `list_feature_types` for the server's current list.
 ```
 
 Boolean and array features reference earlier graph nodes by ID.
+
+### Profile extrusion and geometric edge selectors
+
+```json
+[
+  {
+    "id": "profile",
+    "type": "profile_extrude",
+    "points": [[0, 0], [20, 0], [20, 8], [0, 8]],
+    "length": "$body_height",
+    "axis": "z"
+  },
+  {
+    "id": "rounded",
+    "type": "fillet",
+    "base": "profile",
+    "radius": "1 mm",
+    "edges": {"parallel_to": "z"},
+    "role": "output"
+  }
+]
+```
+
+`chamfer` uses `size` instead of `radius`. Selectors support
+`parallel_to: "x" | "y" | "z"` and optional `length` plus `tolerance`.
+These nodes recompute when their linked base or dimensional expressions change.
 
 ## Reusable patterns
 

@@ -21,6 +21,59 @@ import FreeCAD as App
 
 _TOKEN = re.compile(r"\$([A-Za-z_]\w*)")
 
+
+def _edge_matches(edge, selector, tolerance=1e-6):
+    bb = edge.BoundBox
+    if selector.get("parallel_to"):
+        axis = selector["parallel_to"].lower()
+        lengths = {"x": bb.XLength, "y": bb.YLength, "z": bb.ZLength}
+        dominant = max(lengths, key=lengths.get)
+        if dominant != axis:
+            return False
+        if any(value > tolerance for key, value in lengths.items()
+               if key != axis):
+            return False
+    if selector.get("length") is not None:
+        target = App.Units.Quantity(str(selector["length"])).Value
+        edge_tolerance = App.Units.Quantity(
+            str(selector.get("tolerance", tolerance))
+        ).Value
+        if abs(edge.Length - target) > edge_tolerance:
+            return False
+    return True
+
+
+class _ProfileExtrusionProxy:
+    def execute(self, obj):
+        import Part
+        points = json.loads(obj.ProfilePoints)
+        vectors = [App.Vector(float(p[0]), float(p[1]), 0) for p in points]
+        if vectors[0].distanceToPoint(vectors[-1]) > 1e-9:
+            vectors.append(vectors[0])
+        face = Part.Face(Part.makePolygon(vectors))
+        axis = {
+            "x": App.Vector(obj.Length.Value, 0, 0),
+            "y": App.Vector(0, obj.Length.Value, 0),
+            "z": App.Vector(0, 0, obj.Length.Value),
+        }[obj.Axis]
+        obj.Shape = face.extrude(axis)
+
+
+class _EdgeTreatmentProxy:
+    def __init__(self, mode):
+        self.mode = mode
+
+    def execute(self, obj):
+        selector = json.loads(obj.EdgeSelector or "{}")
+        edges = [edge for edge in obj.Base.Shape.Edges
+                 if _edge_matches(edge, selector)]
+        if not edges:
+            raise ValueError("%s selector matched no edges" % self.mode)
+        if self.mode == "fillet":
+            obj.Shape = obj.Base.Shape.makeFillet(obj.Size.Value, edges)
+        else:
+            obj.Shape = obj.Base.Shape.makeChamfer(obj.Size.Value, edges)
+
 # spec parameter type -> FreeCAD property type
 TYPE_MAP = {
     "length": "App::PropertyLength",
@@ -309,6 +362,26 @@ def _build_feature(doc, host, feat, id_map):
         place(inner)
         obj = doc.addObject("Part::Cut", feat["id"])
         obj.Base, obj.Tool = outer, inner
+    elif ftype == "profile_extrude":
+        obj = doc.addObject("Part::FeaturePython", feat["id"])
+        obj.addProperty("App::PropertyString", "ProfilePoints", "Geometry")
+        obj.addProperty("App::PropertyLength", "Length", "Geometry")
+        obj.addProperty("App::PropertyEnumeration", "Axis", "Geometry")
+        obj.ProfilePoints = json.dumps(feat.get("points") or [])
+        obj.Axis = ["x", "y", "z"]
+        obj.Axis = (feat.get("axis") or "z").lower()
+        _bind(obj, "Length", feat.get("length"), hn)
+        obj.Proxy = _ProfileExtrusionProxy()
+        place(obj)
+    elif ftype in ("fillet", "chamfer"):
+        obj = doc.addObject("Part::FeaturePython", feat["id"])
+        obj.addProperty("App::PropertyLink", "Base", "Geometry")
+        obj.addProperty("App::PropertyLength", "Size", "Geometry")
+        obj.addProperty("App::PropertyString", "EdgeSelector", "Geometry")
+        obj.Base = id_map[feat["base"]]
+        obj.EdgeSelector = json.dumps(feat.get("edges") or {})
+        _bind(obj, "Size", feat.get("radius") or feat.get("size"), hn)
+        obj.Proxy = _EdgeTreatmentProxy(ftype)
     elif ftype == "cone":
         obj = doc.addObject("Part::Cone", feat["id"])
         _bind(obj, "Radius1", feat.get("radius1"), hn)
@@ -611,7 +684,7 @@ def op_list_feature_types():
         "feature_types": [
             "box", "cylinder", "tube", "cone", "prism", "transform",
             "cut", "union", "intersection", "array", "grid_array",
-            "group", "pattern",
+            "profile_extrude", "fillet", "chamfer", "group", "pattern",
         ]
     }
 
@@ -625,6 +698,12 @@ FEATURE_SCHEMAS = {
              "properties": {"axis": {"enum": ["x", "y", "z"]}}},
     "grid_array": {"required": ["id", "base", "count_x", "count_y"],
                    "properties": {"spacing_x": {}, "spacing_y": {}}},
+    "profile_extrude": {
+        "required": ["id", "points", "length"],
+        "properties": {"axis": {"enum": ["x", "y", "z"], "default": "z"}},
+    },
+    "fillet": {"required": ["id", "base", "radius", "edges"]},
+    "chamfer": {"required": ["id", "base", "size", "edges"]},
     "cut": {"required": ["id", "base", "tool"]},
     "union": {"required": ["id", "base", "tool"]},
     "intersection": {"required": ["id", "base", "tool"]},
@@ -689,7 +768,8 @@ def _feature_inputs(feat):
 def _consumed(feat):
     """Inputs hidden because a boolean or array owns their visible output."""
     if feat.get("type") not in (
-        "cut", "union", "intersection", "array", "grid_array"
+        "cut", "union", "intersection", "array", "grid_array",
+        "fillet", "chamfer"
     ):
         return []
     return _feature_inputs(feat)

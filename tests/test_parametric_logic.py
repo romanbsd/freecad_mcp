@@ -185,6 +185,18 @@ def test_describe_feature_type_returns_machine_readable_requirements(parametric)
     ]
 
 
+def test_edge_selector_matches_axis_aligned_edges(parametric):
+    class Bounds:
+        XLength, YLength, ZLength = 0.0, 0.0, 12.0
+
+    class Edge:
+        BoundBox = Bounds()
+        Length = 12.0
+
+    assert parametric._edge_matches(Edge(), {"parallel_to": "z"})
+    assert not parametric._edge_matches(Edge(), {"parallel_to": "x"})
+
+
 def test_lego_stud_grid_pattern_expands_to_seed_and_grid(parametric):
     from patterns import expand_patterns
     features = expand_patterns([{

@@ -48,7 +48,8 @@ def test_v2_component_workflow():
     call(
         "execute",
         code=(
-            "import FreeCAD as App\n"
+            "import FreeCAD as App, importlib, parametric\n"
+            "importlib.reload(parametric)\n"
             "if 'ApiV2Live' in App.listDocuments():\n"
             "    App.closeDocument('ApiV2Live')"
         ),
@@ -95,6 +96,19 @@ def test_v2_component_workflow():
                     "position": {"x": "1 mm", "y": "1 mm", "z": "1 mm"},
                     "role": "output",
                 },
+                {
+                    "id": "profile", "type": "profile_extrude",
+                    "points": [[0, 0], [6, 0], [6, 6], [0, 6]],
+                    "length": "4 mm",
+                    "position": {"x": "20 mm", "y": "0 mm", "z": "0 mm"},
+                    "role": "construction",
+                },
+                {
+                    "id": "rounded_profile", "type": "fillet",
+                    "base": "profile", "radius": "0.5 mm",
+                    "edges": {"parallel_to": "z"},
+                    "role": "inspection",
+                },
             ],
             "outputs": ["insert"],
         },
@@ -110,6 +124,9 @@ def test_v2_component_workflow():
 
     graph = call("get_component_graph", component_id=component_id, detail="full")
     assert graph["revision"] == 1
+    assert {feature["type"] for feature in graph["features"]} >= {
+        "profile_extrude", "fillet"
+    }
     before_visibility = call(
         "execute",
         code=(
