@@ -166,6 +166,25 @@ def test_patch_component_rejects_stale_revision_without_building(parametric, mon
         )
 
 
+def test_structural_dependents_rebuild_only_changed_branch(parametric):
+    graph = [
+        {"id": "base", "type": "box"},
+        {"id": "hole", "type": "cylinder"},
+        {"id": "body", "type": "cut", "base": "base", "tool": "hole"},
+        {"id": "independent", "type": "box"},
+    ]
+    impacted = parametric._structural_dependents(graph, graph, ["hole"])
+    assert impacted == {"hole", "body"}
+
+
+def test_describe_feature_type_returns_machine_readable_requirements(parametric):
+    schema = parametric.op_describe_feature_type("tube")
+    assert schema["feature_type"] == "tube"
+    assert schema["schema"]["required"] == [
+        "id", "outer_radius", "inner_radius", "height"
+    ]
+
+
 def test_lego_stud_grid_pattern_expands_to_seed_and_grid(parametric):
     from patterns import expand_patterns
     features = expand_patterns([{

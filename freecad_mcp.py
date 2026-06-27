@@ -643,6 +643,8 @@ class FreeCADMCPServer:
             "get_component_graph": parametric.op_get_component_graph,
             "patch_component": parametric.op_patch_component,
             "list_feature_types": parametric.op_list_feature_types,
+            "describe_feature_type": parametric.op_describe_feature_type,
+            "capabilities": parametric.op_capabilities,
             "list_patterns": parametric.op_list_patterns,
             "expand_pattern": parametric.op_expand_pattern,
             "check_fit": parametric.op_check_fit,

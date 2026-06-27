@@ -306,6 +306,19 @@ async def list_feature_types() -> Any:
 
 
 @mcp.tool()
+async def describe_feature_type(feature_type: str) -> Any:
+    """Return the machine-readable schema for one declarative feature type."""
+    return await _request({"type": "describe_feature_type", "params": {
+        "feature_type": feature_type}})
+
+
+@mcp.tool()
+async def capabilities() -> Any:
+    """Return API, FreeCAD, feature, pattern, and validation capabilities."""
+    return await _request({"type": "capabilities"})
+
+
+@mcp.tool()
 async def list_patterns() -> Any:
     """List versioned server-owned CAD patterns."""
     return await _request({"type": "list_patterns"})

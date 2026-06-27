@@ -580,17 +580,25 @@ def op_patch_component(component_id, operations, expected_revision=None,
             "removed": patch["removed"], "outputs": patch["outputs"],
         }
 
-    # Reuse the existing transactional builder. The dependency-scoped builder can
-    # replace this call later without changing the patch API.
-    op_define_component(component_id, patch["graph"])
-    doc, container, new_meta = _resolve(component_id)
+    impacted = _structural_dependents(
+        meta.get("build_graph", []), patch["graph"],
+        patch["added"] + patch["changed"] + patch["removed"],
+    )
+    new_meta = _rebuild_graph_patch(
+        doc, container, meta, patch["graph"], impacted
+    )
+    if new_meta is None:
+        op_define_component(component_id, patch["graph"])
+        doc, container, new_meta = _resolve(component_id)
     new_meta["outputs"] = patch["outputs"]
     _save(container, new_meta)
     result = {
         "revision": int(new_meta.get("revision", revision + 1)),
         "added": patch["added"], "changed": patch["changed"],
         "removed": patch["removed"],
-        "regenerated": [f["id"] for f in patch["graph"]],
+        "regenerated": [
+            f["id"] for f in patch["graph"] if f["id"] in impacted
+        ],
         "outputs": patch["outputs"],
     }
     if validate:
@@ -605,6 +613,53 @@ def op_list_feature_types():
             "cut", "union", "intersection", "array", "grid_array",
             "group", "pattern",
         ]
+    }
+
+
+FEATURE_SCHEMAS = {
+    "box": {"required": ["id", "size"], "properties": {
+        "size": {"required": ["x", "y", "z"]}, "position": {"optional": True}}},
+    "cylinder": {"required": ["id", "radius", "height"],
+                 "properties": {"axis": {"enum": ["x", "y", "z"]}}},
+    "tube": {"required": ["id", "outer_radius", "inner_radius", "height"],
+             "properties": {"axis": {"enum": ["x", "y", "z"]}}},
+    "grid_array": {"required": ["id", "base", "count_x", "count_y"],
+                   "properties": {"spacing_x": {}, "spacing_y": {}}},
+    "cut": {"required": ["id", "base", "tool"]},
+    "union": {"required": ["id", "base", "tool"]},
+    "intersection": {"required": ["id", "base", "tool"]},
+    "pattern": {"required": ["id", "pattern", "parameters"],
+                "properties": {"version": {"default": "1"}}},
+}
+
+
+def op_describe_feature_type(feature_type):
+    if feature_type not in op_list_feature_types()["feature_types"]:
+        raise ValueError("unknown feature type %r" % feature_type)
+    return {
+        "feature_type": feature_type,
+        "schema": FEATURE_SCHEMAS.get(feature_type, {
+            "required": ["id"], "description": "See cookbook for fields."
+        }),
+        "common_properties": {
+            "role": {"enum": ["output", "construction", "tool", "inspection"]},
+            "label": {"type": "string"},
+            "tags": {"type": "array"},
+        },
+    }
+
+
+def op_capabilities():
+    from patterns import list_patterns
+    import FreeCAD
+    return {
+        "api_version": "2.0",
+        "freecad_version": ".".join(FreeCAD.Version()[:3]),
+        "feature_types": op_list_feature_types()["feature_types"],
+        "patterns": list_patterns(),
+        "validation_profiles": ["geometry_baseline", "cnc_plywood", "fdm"],
+        "response_format": "native",
+        "structural_patch_mode": "dependency_scoped",
     }
 
 
@@ -633,9 +688,114 @@ def _feature_inputs(feat):
 
 def _consumed(feat):
     """Inputs hidden because a boolean or array owns their visible output."""
-    if feat.get("type") not in ("cut", "union", "intersection", "array"):
+    if feat.get("type") not in (
+        "cut", "union", "intersection", "array", "grid_array"
+    ):
         return []
     return _feature_inputs(feat)
+
+
+def _structural_dependents(old_graph, new_graph, seeds):
+    """Changed feature ids plus their old/new downstream closure."""
+    impacted = set(seeds)
+    combined = list(old_graph) + list(new_graph)
+    grew = True
+    while grew:
+        grew = False
+        for feature in combined:
+            if feature["id"] in impacted:
+                continue
+            if impacted.intersection(_feature_inputs(feature)):
+                impacted.add(feature["id"])
+                grew = True
+    return impacted
+
+
+def _remove_generated_feature(doc, feature, obj):
+    """Remove one graph object and any private children owned by its type."""
+    if obj is None:
+        return
+    private_children = []
+    if feature.get("type") == "tube":
+        private_children = [
+            getattr(obj, "Base", None), getattr(obj, "Tool", None)
+        ]
+    doc.removeObject(obj.Name)
+    for child in private_children:
+        if child is not None and doc.getObject(child.Name) is not None:
+            doc.removeObject(child.Name)
+
+
+def _rebuild_graph_patch(doc, container, meta, new_graph, impacted):
+    """Transactionally rebuild only structurally affected graph nodes."""
+    old_graph = meta.get("build_graph", [])
+    old_by_id = {feature["id"]: feature for feature in old_graph}
+    new_by_id = {feature["id"]: feature for feature in new_graph}
+    old_names = dict(meta.get("id_map", {}))
+
+    # A transform aliases its base object instead of owning an independent
+    # object. Use the full builder when an affected path contains one.
+    if any((old_by_id.get(fid) or new_by_id.get(fid) or {}).get("type") ==
+           "transform" for fid in impacted):
+        return None
+
+    _begin(doc, "patch_component")
+    try:
+        for feature in reversed(old_graph):
+            fid = feature["id"]
+            if fid in impacted:
+                _remove_generated_feature(
+                    doc, feature, doc.getObject(old_names.get(fid, ""))
+                )
+
+        id_map = {}
+        for fid, name in old_names.items():
+            if fid not in impacted:
+                obj = doc.getObject(name)
+                if obj is not None:
+                    id_map[fid] = obj
+
+        host = _host(doc, meta)
+        for feature in new_graph:
+            fid = feature["id"]
+            if fid not in impacted:
+                continue
+            obj = _build_feature(doc, host, feature, id_map)
+            id_map[fid] = obj
+            group_name = _ROLE_GROUP.get(
+                feature.get("role", "output"), "Features"
+            )
+            group = _group(doc, meta, group_name)
+            if obj.Name not in [member.Name for member in group.Group]:
+                group.addObject(obj)
+
+        for feature in new_graph:
+            for consumed in _consumed(feature):
+                obj = id_map.get(consumed)
+                if obj is None:
+                    continue
+                for group_name in ("Features", "Construction"):
+                    group = _group(doc, meta, group_name)
+                    if obj in group.Group:
+                        group.removeObject(obj)
+
+        doc.recompute()
+        errors = _errors(_component_objects(doc, meta, id_map.values()))
+        if errors:
+            raise ValueError(
+                "patch rebuild failed; invalid features: %s" %
+                ", ".join(errors)
+            )
+        meta["build_graph"] = new_graph
+        meta["id_map"] = {fid: obj.Name for fid, obj in id_map.items()}
+        meta["dependency_index"] = _dependency_index(meta["schema"], new_graph)
+        meta["revision"] = int(meta.get("revision", 0)) + 1
+        _save(container, meta)
+        doc.commitTransaction()
+        return meta
+    except Exception:
+        _abort(doc)
+        raise
 
 
 def _dependency_index(schema, graph):

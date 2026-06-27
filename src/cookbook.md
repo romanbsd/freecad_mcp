@@ -7,8 +7,8 @@ Tool results are native MCP objects; do not JSON-decode them a second time.
 
 ## Recommended workflow
 
-1. Discover available features and patterns with `list_feature_types` and
-   `list_patterns`.
+1. Call `capabilities`, then discover feature schemas and patterns with
+   `describe_feature_type` and `list_patterns`.
 2. Build with `build_component`, or use `create_component` followed by
    `define_component`.
 3. Inspect with `get_component_graph`, `validate_component`, `check_fit`, and
@@ -270,8 +270,8 @@ Supported patch operations:
 Apply the same patch with `dry_run=false`. A stale `expected_revision` is
 rejected rather than overwriting another edit.
 
-Structural patches currently reuse the transactional graph builder. Parameter
-changes remain natively incremental:
+Structural patches rebuild only the changed feature and its downstream
+dependents. Parameter changes remain natively incremental:
 
 ```text
 set_component_parameters(
