@@ -203,7 +203,7 @@ async def get_subelements(name: str, limit: int = 200) -> Any:
 async def get_screenshot(
     width: int = 1024, height: int = 768, view: str = "iso", fit: bool = True,
     targets: list[str] = None, transparent: list[str] = None,
-    temporary: bool = True, camera: dict = None,
+    temporary: bool = True, camera: dict = None, views: list[str] = None,
 ) -> Image:
     """Capture the active FreeCAD 3D view as a PNG so you can see the model.
 
@@ -217,7 +217,8 @@ async def get_screenshot(
         "type": "get_screenshot",
         "params": {"width": width, "height": height, "view": view, "fit": fit,
                    "targets": targets or [], "transparent": transparent or [],
-                   "temporary": temporary, "camera": camera},
+                   "temporary": temporary, "camera": camera,
+                   "views": views or []},
     })
     if not isinstance(inner, dict) or "image_base64" not in inner:
         raise RuntimeError("screenshot failed")

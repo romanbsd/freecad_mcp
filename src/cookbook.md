@@ -401,8 +401,28 @@ get_screenshot(
 ```
 
 With `temporary=true`, camera orientation, visibility, and transparency are
-restored after capture. A quaternion camera may be supplied as
+restored after capture. Set an explicit camera basis with:
+
+```text
+camera={"direction":[1,1,-1], "up":[0,0,1]}
+```
+
+A quaternion may instead be supplied as
 `camera={"quaternion":[x,y,z,w]}`.
+
+Create a horizontal contact sheet in one call:
+
+```text
+get_screenshot(
+  targets=["MotorMountBrick"],
+  views=["iso","front","rear","bottom"],
+  width=320,
+  height=240,
+  temporary=true
+)
+```
+
+The returned image width is the tile width multiplied by the number of views.
 
 ## Export bundles
 

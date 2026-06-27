@@ -48,8 +48,15 @@ def test_v2_component_workflow():
     call(
         "execute",
         code=(
-            "import FreeCAD as App, importlib, parametric\n"
+            "import FreeCAD as App, importlib, parametric, freecad_mcp, types\n"
+            "_panel=freecad_mcp._panel\n"
+            "_server=_panel.server if _panel else None\n"
             "importlib.reload(parametric)\n"
+            "importlib.reload(freecad_mcp)\n"
+            "if _server:\n"
+            "    _server.handle_get_screenshot=types.MethodType(\n"
+            "        freecad_mcp.FreeCADMCPServer.handle_get_screenshot,_server)\n"
+            "freecad_mcp._panel=_panel\n"
             "if 'ApiV2Live' in App.listDocuments():\n"
             "    App.closeDocument('ApiV2Live')"
         ),
@@ -147,6 +154,29 @@ def test_v2_component_workflow():
     assert screenshot["width"] == 256
     assert screenshot["visible_objects"] == ["insert"]
     assert screenshot["axis_convention"]["z"] == "up"
+    vector_view = call(
+        "get_screenshot",
+        width=128,
+        height=128,
+        view="current",
+        fit=True,
+        targets=["insert"],
+        camera={"direction": [1, 1, -1], "up": [0, 0, 1]},
+        temporary=True,
+    )
+    assert vector_view["view"] == "vector"
+    contact_sheet = call(
+        "get_screenshot",
+        width=128,
+        height=128,
+        fit=True,
+        targets=["insert"],
+        views=["front", "rear", "top", "bottom"],
+        temporary=True,
+    )
+    assert contact_sheet["view"] == "contact_sheet"
+    assert contact_sheet["views"] == ["front", "rear", "top", "bottom"]
+    assert contact_sheet["width"] == 512
     after_visibility = call(
         "execute",
         code=(

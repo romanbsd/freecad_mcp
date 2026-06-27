@@ -242,7 +242,7 @@ class FreeCADMCPServer:
 
     def handle_get_screenshot(self, width=1024, height=768, view="iso", fit=True,
                               targets=None, transparent=None, temporary=True,
-                              camera=None):
+                              camera=None, views=None):
         """Orient the camera, optionally fit, and return the view as a PNG.
 
         view: one of STANDARD_VIEWS, or "current" to leave the camera as-is.
@@ -283,34 +283,102 @@ class FreeCADMCPServer:
                 if hasattr(obj.ViewObject, "Transparency"):
                     obj.ViewObject.Transparency = 70
 
-            if camera and camera.get("quaternion"):
-                q = camera["quaternion"]
-                if not isinstance(q, (list, tuple)) or len(q) != 4:
-                    raise ValueError("camera.quaternion must contain four numbers")
-                v.setCameraOrientation(*[float(x) for x in q])
-                resolved_view = "quaternion"
-            else:
-                resolved_view = view
-                if view != "current":
-                    setter = orient.get(view)
+            def orient_camera(requested_view):
+                if camera and camera.get("quaternion"):
+                    q = camera["quaternion"]
+                    if not isinstance(q, (list, tuple)) or len(q) != 4:
+                        raise ValueError(
+                            "camera.quaternion must contain four numbers"
+                        )
+                    v.setCameraOrientation(tuple(float(x) for x in q))
+                    return "quaternion"
+                if camera and camera.get("direction"):
+                    direction = camera["direction"]
+                    up = camera.get("up", [0, 0, 1])
+                    if len(direction) != 3 or len(up) != 3:
+                        raise ValueError(
+                            "camera direction and up must contain three numbers"
+                        )
+                    forward = App.Vector(*[float(x) for x in direction])
+                    up_vector = App.Vector(*[float(x) for x in up])
+                    if forward.Length <= 1e-12 or up_vector.Length <= 1e-12:
+                        raise ValueError("camera direction and up must be non-zero")
+                    forward.normalize()
+                    up_vector.normalize()
+                    right = forward.cross(up_vector)
+                    if right.Length <= 1e-12:
+                        raise ValueError(
+                            "camera direction and up may not be parallel"
+                        )
+                    right.normalize()
+                    corrected_up = right.cross(forward)
+                    corrected_up.normalize()
+                    rotation = App.Rotation(
+                        right, corrected_up,
+                        App.Vector(-forward.x, -forward.y, -forward.z),
+                        "ZXY",
+                    )
+                    v.setCameraOrientation(rotation.Q)
+                    return "vector"
+                if requested_view != "current":
+                    setter = orient.get(requested_view)
                     if setter is None:
                         raise ValueError(
-                            f"unknown view {view!r}; use one of "
+                            f"unknown view {requested_view!r}; use one of "
                             f"{', '.join(self.STANDARD_VIEWS)} or 'current'"
                         )
                     setter()
-            if fit:
-                v.fitAll()
+                return requested_view
 
-            path = os.path.join(tempfile.gettempdir(), "freecad_mcp_screenshot.png")
-            v.saveImage(path, int(width), int(height), "Current")
+            requested_views = list(views or [])
+            if requested_views:
+                tile_paths = []
+                for index, requested in enumerate(requested_views):
+                    orient_camera(requested)
+                    if fit:
+                        v.fitAll()
+                    tile_path = os.path.join(
+                        tempfile.gettempdir(),
+                        "freecad_mcp_screenshot_%d.png" % index,
+                    )
+                    v.saveImage(tile_path, int(width), int(height), "Current")
+                    tile_paths.append(tile_path)
+                canvas = QtGui.QImage(
+                    int(width) * len(tile_paths), int(height),
+                    QtGui.QImage.Format_ARGB32,
+                )
+                canvas.fill(QtGui.QColor("white"))
+                painter = QtGui.QPainter(canvas)
+                try:
+                    for index, tile_path in enumerate(tile_paths):
+                        painter.drawImage(
+                            int(width) * index, 0, QtGui.QImage(tile_path)
+                        )
+                finally:
+                    painter.end()
+                path = os.path.join(
+                    tempfile.gettempdir(), "freecad_mcp_screenshot.png"
+                )
+                canvas.save(path, "PNG")
+                resolved_view = "contact_sheet"
+                output_width = int(width) * len(tile_paths)
+            else:
+                resolved_view = orient_camera(view)
+                if fit:
+                    v.fitAll()
+                path = os.path.join(
+                    tempfile.gettempdir(), "freecad_mcp_screenshot.png"
+                )
+                v.saveImage(path, int(width), int(height), "Current")
+                output_width = int(width)
             with open(path, "rb") as f:
                 data = base64.b64encode(f.read()).decode("ascii")
             return {
                 "image_base64": data,
-                "width": int(width),
+                "width": output_width,
                 "height": int(height),
                 "view": resolved_view,
+                "views": requested_views or None,
                 "visible_objects": [
                     o.Name for o in objects
                     if hasattr(o, "ViewObject") and o.ViewObject.Visibility
