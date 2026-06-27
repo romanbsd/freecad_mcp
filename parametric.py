@@ -177,12 +177,20 @@ def _resolve(component_id):
     if not str(component_id).startswith("component://"):
         raise ValueError("component_id must look like component://<doc>/<name>")
     docname, _, name = component_id[len("component://"):].partition("/")
-    if docname not in App.listDocuments():
+    documents = App.listDocuments()
+    candidates = []
+    if docname in documents:
+        candidates.append(App.getDocument(docname))
+    candidates.extend(
+        doc for key, doc in documents.items()
+        if key != docname
+    )
+    for doc in candidates:
+        for o in doc.Objects:
+            if getattr(o, "mcp_component_id", None) == component_id:
+                return doc, o, _load(o)
+    if not candidates:
         raise ValueError("document %r is not open" % docname)
-    doc = App.getDocument(docname)
-    for o in doc.Objects:
-        if getattr(o, "mcp_component_id", None) == component_id:
-            return doc, o, _load(o)
     raise ValueError("component %r not found in %r" % (name, docname))
 
 

@@ -12,6 +12,24 @@ import FreeCADGui as Gui
 from PySide import QtCore, QtGui
 
 
+class MCPCommandError(RuntimeError):
+    def __init__(self, code, message, recoverable=False):
+        super().__init__(message)
+        self.code = code
+        self.recoverable = bool(recoverable)
+
+
+def error_response(code, message, recoverable=False):
+    return {
+        "status": "error",
+        "error": {
+            "code": code,
+            "message": str(message),
+            "recoverable": bool(recoverable),
+        },
+    }
+
+
 class FreeCADMCPServer:
     MAX_MESSAGE = 64 * 1024 * 1024  # 64 MiB frame guard
     # Actionable errors so an agent that calls a tool before anything exists
@@ -140,7 +158,9 @@ class FreeCADMCPServer:
             try:
                 command = json.loads(frame.decode("utf-8"))
             except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                self._send_frame({"status": "error", "message": f"Invalid JSON: {e}"})
+                self._send_frame(error_response(
+                    "INVALID_JSON", f"Invalid JSON: {e}", recoverable=True
+                ))
                 continue
             self._send_frame(self.execute_command(command))
 
@@ -170,20 +190,24 @@ class FreeCADMCPServer:
                     App.Console.PrintMessage(f"Executing handler for {cmd_type}\n")
                     result = handler(**params)
                     return {"status": "success", "result": result}
+                except MCPCommandError as e:
+                    App.Console.PrintError(f"Command error: {str(e)}\n")
+                    return error_response(e.code, str(e), e.recoverable)
                 except Exception as e:
                     App.Console.PrintError(f"Error in handler: {str(e)}\n")
                     traceback.print_exc()
-                    return {"status": "error", "message": str(e)}
+                    return error_response("COMMAND_FAILED", str(e))
             else:
-                return {
-                    "status": "error",
-                    "message": f"Unknown command type: {cmd_type}",
-                }
+                return error_response(
+                    "UNKNOWN_COMMAND",
+                    f"Unknown command type: {cmd_type}",
+                    recoverable=True,
+                )
 
         except Exception as e:
             App.Console.PrintError(f"Error executing command: {str(e)}\n")
             traceback.print_exc()
-            return {"status": "error", "message": str(e)}
+            return error_response("COMMAND_DISPATCH_FAILED", str(e))
 
     def handle_execute(self, code, return_context=False, recompute=True):
         """Execute Python in the FreeCAD context and report back.
@@ -255,7 +279,7 @@ class FreeCADMCPServer:
         fit:  zoom to fit all visible geometry before capturing.
         """
         if not (Gui.ActiveDocument and Gui.ActiveDocument.ActiveView):
-            return {"error": self.NO_VIEW}
+            raise MCPCommandError("NO_ACTIVE_VIEW", self.NO_VIEW, recoverable=True)
         v = Gui.ActiveDocument.ActiveView
 
         orient = {

@@ -18,6 +18,13 @@ FREECAD_PORT = 9876
 FREECAD_TIMEOUT = float(os.environ.get('FREECAD_MCP_TIMEOUT', '30'))
 
 
+class FreeCADToolError(RuntimeError):
+    def __init__(self, code: str, message: str, recoverable: bool = False):
+        super().__init__(message)
+        self.code = code
+        self.recoverable = bool(recoverable)
+
+
 def _recv_exactly(sock: socket.socket, n: int) -> bytes:
     """Read exactly n bytes or raise (the socket has a timeout set)."""
     buf = bytearray()
@@ -48,7 +55,11 @@ async def send_to_freecad(command: Dict[str, Any]) -> Dict[str, Any]:
         raw = await asyncio.to_thread(_call_blocking, command)
         return json.loads(raw.decode('utf-8'))
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "error": {
+            "code": "TRANSPORT_ERROR",
+            "message": str(e),
+            "recoverable": True,
+        }}
 
 
 def _unwrap_response(response: Any) -> Any:
@@ -56,7 +67,12 @@ def _unwrap_response(response: Any) -> Any:
     if not isinstance(response, dict):
         raise RuntimeError("invalid response from FreeCAD")
     if response.get("status") == "error":
-        raise RuntimeError(response.get("message") or "FreeCAD command failed")
+        error = response.get("error") or {}
+        raise FreeCADToolError(
+            error.get("code", "UNKNOWN_ERROR"),
+            error.get("message", "FreeCAD command failed"),
+            error.get("recoverable", False),
+        )
     result = response.get("result", response)
     if isinstance(result, dict) and result.get("error"):
         raise RuntimeError(result["error"])

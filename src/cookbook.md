@@ -5,6 +5,27 @@ FreeCAD operations that the component graph does not yet express.
 
 Tool results are native MCP objects; do not JSON-decode them a second time.
 
+## Error contract
+
+Failed commands use one envelope:
+
+```json
+{
+  "status": "error",
+  "error": {
+    "code": "NO_ACTIVE_VIEW",
+    "message": "no active 3D view",
+    "recoverable": true
+  }
+}
+```
+
+There is no legacy top-level `message`. Bridge calls raise `FreeCADToolError`
+with `code` and `recoverable` attributes. Screenshot validation failures,
+including no active view, invalid cameras, unknown views, and missing targets,
+all use the error envelope rather than returning a successful result containing
+`{"error": ...}`.
+
 ## Recommended workflow
 
 1. Call `capabilities`, then discover feature schemas and patterns with

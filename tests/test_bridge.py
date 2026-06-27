@@ -28,12 +28,18 @@ def test_get_screenshot_unwraps_envelope():
 
 def test_get_screenshot_reports_error():
     async def fake(cmd):
-        return {"status": "error", "message": "no active 3D view to capture"}
+        return {"status": "error", "error": {
+            "code": "NO_ACTIVE_VIEW",
+            "message": "no active 3D view to capture",
+            "recoverable": True,
+        }}
     fb.send_to_freecad = fake
     try:
         asyncio.run(fb.get_screenshot())
-    except RuntimeError as e:
+    except fb.FreeCADToolError as e:
         assert "no active 3D view" in str(e), e
+        assert e.code == "NO_ACTIVE_VIEW"
+        assert e.recoverable is True
     else:
         raise AssertionError("expected RuntimeError on error envelope")
 
