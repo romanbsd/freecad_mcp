@@ -1,49 +1,64 @@
-"""Runnable check for the length-prefixed framing fix (C1/C2).
-
-Drives the real bridge `send_to_freecad` against a loopback server that speaks
-the same 4-byte-length protocol and replies with a payload far larger than the
-old 4096-byte single-recv cap. Run: python3 test_framing.py
-"""
-import asyncio
+"""Length-prefixed bridge framing tests without a real network listener."""
 import json
-import socket
+import os
 import sys
-import threading
+from unittest.mock import patch
 
-sys.path.insert(0, "src")
-from freecad_bridge import send_to_freecad, _recv_exactly, FREECAD_PORT
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+import freecad_bridge as bridge
 
 
-def _serve_once(port, ready):
-    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind(("localhost", port))
-    srv.listen(1)
-    ready.set()
-    conn, _ = srv.accept()
-    with conn:
-        # Read the framed request (mirrors the FreeCAD-side parser).
-        length = int.from_bytes(_recv_exactly(conn, 4), "big")
-        req = json.loads(_recv_exactly(conn, length).decode())
-        # Reply with a deliberately big payload (>> 4096 bytes).
-        big = {"status": "success", "echo": req, "blob": "x" * 50000}
-        data = json.dumps(big).encode()
-        conn.sendall(len(data).to_bytes(4, "big") + data)
-    srv.close()
+class FramedSocket:
+    """Small socket double that fragments a large framed response."""
+
+    def __init__(self, response):
+        data = json.dumps(response).encode("utf-8")
+        self.remaining = len(data).to_bytes(4, "big") + data
+        self.sent = b""
+        self.timeout = None
+        self.address = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def settimeout(self, timeout):
+        self.timeout = timeout
+
+    def connect(self, address):
+        self.address = address
+
+    def sendall(self, data):
+        self.sent += data
+
+    def recv(self, size):
+        chunk = self.remaining[:min(size, 1024)]
+        self.remaining = self.remaining[len(chunk):]
+        return chunk
+
+
+def test_large_framed_response_round_trips():
+    command = {"type": "send_command", "params": {"command": "noop"}}
+    response = {"status": "success", "echo": command, "blob": "x" * 50000}
+    fake_socket = FramedSocket(response)
+
+    with patch.object(bridge.socket, "socket", return_value=fake_socket):
+        result = json.loads(bridge._call_blocking(command).decode("utf-8"))
+
+    request_length = int.from_bytes(fake_socket.sent[:4], "big")
+    assert request_length == len(fake_socket.sent[4:])
+    assert json.loads(fake_socket.sent[4:].decode("utf-8")) == command
+    assert fake_socket.timeout == 30
+    assert fake_socket.address == (bridge.FREECAD_HOST, bridge.FREECAD_PORT)
+    assert result["status"] == "success"
+    assert len(result["blob"]) == 50000
+    assert result["echo"] == command
 
 
 def main():
-    ready = threading.Event()
-    t = threading.Thread(target=_serve_once, args=(FREECAD_PORT, ready), daemon=True)
-    t.start()
-    ready.wait(timeout=5)
-
-    resp = asyncio.run(send_to_freecad({"type": "send_command", "params": {"command": "noop"}}))
-    t.join(timeout=5)
-
-    assert resp.get("status") == "success", resp
-    assert len(resp["blob"]) == 50000, "large payload truncated -> C1 not fixed"
-    assert resp["echo"]["params"]["command"] == "noop", "request not round-tripped"
+    test_large_framed_response_round_trips()
     print("OK: framed >4096B response round-trips intact")
 
 

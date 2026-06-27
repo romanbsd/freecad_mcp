@@ -37,6 +37,8 @@ TYPE_MAP = {
 }
 
 _GROUPS = ("Features", "Construction", "Validation", "Variants")
+_MAX_RENDER_DIMENSION = 4096
+_MAX_RENDER_PIXELS = 16 * 1024 * 1024
 
 
 # --------------------------------------------------------------------------- #
@@ -129,9 +131,31 @@ def _abort(doc):
         pass
 
 
-def _errors(doc):
-    """Objects left in an error/invalid state after recompute."""
-    return [o.Name for o in doc.Objects
+def _component_objects(doc, meta, extra=()):
+    """Live objects owned by one component, optionally including new objects.
+
+    A document may contain unrelated, invalid FreeCAD objects. Component
+    operations must not treat those as failures of this component.
+    """
+    names = {meta.get("host")}
+    names.update(meta.get("id_map", {}).values())
+    objects = []
+    seen = set()
+    for name in names:
+        obj = doc.getObject(name) if name else None
+        if obj is not None and obj.Name not in seen:
+            objects.append(obj)
+            seen.add(obj.Name)
+    for obj in extra:
+        if obj is not None and obj.Name not in seen:
+            objects.append(obj)
+            seen.add(obj.Name)
+    return objects
+
+
+def _errors(objects):
+    """Names of component objects left in an error/invalid state."""
+    return [o.Name for o in objects
             if any(s in ("Error", "Invalid") for s in o.State)]
 
 
@@ -158,6 +182,21 @@ def _merge_bbox(objs):
     return {"xmin": bb.XMin, "ymin": bb.YMin, "zmin": bb.ZMin,
             "xmax": bb.XMax, "ymax": bb.YMax, "zmax": bb.ZMax,
             "size": [bb.XLength, bb.YLength, bb.ZLength]}
+
+
+def _render_dimensions(width, height):
+    """Validate image dimensions before asking the GUI to allocate a bitmap."""
+    try:
+        width, height = int(width), int(height)
+    except (TypeError, ValueError):
+        raise ValueError("render width and height must be integers")
+    if width < 1 or height < 1:
+        raise ValueError("render width and height must be positive")
+    if width > _MAX_RENDER_DIMENSION or height > _MAX_RENDER_DIMENSION:
+        raise ValueError("render dimensions may not exceed %d pixels" % _MAX_RENDER_DIMENSION)
+    if width * height > _MAX_RENDER_PIXELS:
+        raise ValueError("render image may not exceed %d pixels" % _MAX_RENDER_PIXELS)
+    return width, height
 
 
 def _axis_rotation(axis):
@@ -392,9 +431,11 @@ def op_define_component(component_id, features, rules=None, profiles=None):
                 grp.addObject(obj)
             graph.append(feat)
 
-        # boolean/array inputs are claimed by their parent — drop from any group
+        # Boolean and array inputs are claimed by their parent — drop them from
+        # visible groups. A transform mutates its base in place, so consuming
+        # that base would incorrectly remove the transformed output.
         for feat in graph:
-            for cons in feat.get("_consumed", []):
+            for cons in _consumed(feat):
                 o = id_map[cons]
                 for g in ("Features", "Construction"):
                     grp = _group(doc, meta, g)
@@ -403,12 +444,13 @@ def op_define_component(component_id, features, rules=None, profiles=None):
 
         name_map = {fid: o.Name for fid, o in id_map.items()}
         doc.recompute()
-        errs = _errors(doc)
+        errs = _errors(_component_objects(doc, meta, id_map.values()))
         if errs:
             # Transactional: roll back so the prior valid graph survives.
             raise ValueError("build failed; invalid features: %s" % ", ".join(errs))
         meta["build_graph"] = graph
         meta["id_map"] = name_map
+        meta["dependency_index"] = _dependency_index(meta["schema"], graph)
         if rules is not None:
             meta["rules"] = rules
         if profiles is not None:
@@ -422,8 +464,8 @@ def op_define_component(component_id, features, rules=None, profiles=None):
     return {"features_created": list(name_map.keys()), "object_names": name_map}
 
 
-def _consumed(feat):
-    """Feature ids this feature consumes (boolean/array/transform inputs)."""
+def _feature_inputs(feat):
+    """Feature ids referenced by a graph node."""
     ids = []
     for k in ("base", "tool"):
         if isinstance(feat.get(k), str):
@@ -432,32 +474,56 @@ def _consumed(feat):
     return ids
 
 
+def _consumed(feat):
+    """Inputs hidden because a boolean or array owns their visible output."""
+    if feat.get("type") not in ("cut", "union", "intersection", "array"):
+        return []
+    return _feature_inputs(feat)
+
+
+def _dependency_index(schema, graph):
+    """Precompute reporting dependencies when the build graph is defined."""
+    parameter_features = {p["name"]: [] for p in schema}
+    downstream = {f["id"]: [] for f in graph}
+    derived = {p["name"]: list(_TOKEN.findall(p.get("expression", "")))
+               for p in schema if p.get("kind") == "derived"}
+    for feat in graph:
+        fid = feat["id"]
+        for name in set(_TOKEN.findall(json.dumps(feat))):
+            parameter_features.setdefault(name, []).append(fid)
+        for source in _feature_inputs(feat):
+            downstream.setdefault(source, []).append(fid)
+    return {"derived": derived, "parameter_features": parameter_features,
+            "downstream": downstream}
+
+
 def _dependents(meta, changed):
     """Feature ids affected by changed params: those whose expressions reference
     a changed param (expanded through derived params), then propagated downstream
     through feature->feature consumption edges (a cut regenerates when its tool
     does)."""
     changed = set(changed)
-    derived = {p["name"]: p.get("expression", "") for p in meta["schema"]
-               if p.get("kind") == "derived"}
+    graph = meta["build_graph"]
+    index = meta.get("dependency_index") or _dependency_index(meta["schema"], graph)
+    derived = index["derived"]
     grew = True
     while grew:  # expand changed set through derived params
         grew = False
-        for dname, expr in derived.items():
-            if set(_TOKEN.findall(expr)) & changed and dname not in changed:
+        for dname, refs in derived.items():
+            if set(refs) & changed and dname not in changed:
                 changed.add(dname)
                 grew = True
 
-    graph = meta["build_graph"]
-    affected = {f["id"] for f in graph
-                if set(_TOKEN.findall(json.dumps(f))) & changed}
-    grew = True
-    while grew:  # propagate downstream through consumption topology
-        grew = False
-        for feat in graph:
-            if feat["id"] not in affected and set(_consumed(feat)) & affected:
-                affected.add(feat["id"])
-                grew = True
+    affected = set()
+    for name in changed:
+        affected.update(index["parameter_features"].get(name, ()))
+    pending = list(affected)
+    while pending:  # propagate downstream through feature topology
+        source = pending.pop()
+        for dependent in index["downstream"].get(source, ()):
+            if dependent not in affected:
+                affected.add(dependent)
+                pending.append(dependent)
     return [f["id"] for f in graph if f["id"] in affected]
 
 
@@ -479,7 +545,7 @@ def op_set_component_parameters(component_id, values, rebuild=True, validate=Fal
             changed.append(k)
         if rebuild:
             doc.recompute()
-            errs = _errors(doc)
+            errs = _errors(_component_objects(doc, meta))
             if errs:
                 # Transactional: keep the last valid geometry on a bad rebuild.
                 raise ValueError("rebuild failed; invalid features: %s" % ", ".join(errs))
@@ -521,9 +587,20 @@ def op_get_component(component_id):
 
 def op_create_component_variant(component_id, name, values):
     doc, container, meta = _resolve(component_id)
-    meta.setdefault("variants", {})[name] = values
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("variant name must be a non-empty string")
+    if not isinstance(values, dict):
+        raise ValueError("variant values must be an object")
+    kinds = {p["name"]: p.get("kind", "input") for p in meta["schema"]}
+    unknown = sorted(set(values) - set(kinds))
+    derived = sorted(k for k in values if k in kinds and kinds[k] == "derived")
+    if unknown:
+        raise ValueError("variant contains unknown parameter(s): %s" % ", ".join(unknown))
+    if derived:
+        raise ValueError("variant overrides derived parameter(s): %s" % ", ".join(derived))
+    meta.setdefault("variants", {})[name] = dict(values)
     _save(container, meta)
-    return {"variant": name, "values": values,
+    return {"variant": name, "values": dict(values),
             "variants": list(meta["variants"].keys())}
 
 
@@ -601,7 +678,7 @@ def op_validate_component(component_id, profiles=None, rule_ids=None,
     status = "error" if errors else ("warning" if warnings else "ok")
 
     result = {"component_id": component_id,
-              "build_status": "failed" if _errors(doc) else "success",
+              "build_status": "failed" if _errors(_component_objects(doc, meta)) else "success",
               "validation_status": status, "tolerance": str(tol),
               "profiles": prof_info,
               "summary": {"errors": errors, "warnings": warnings, "passed": passed},
@@ -623,11 +700,13 @@ def op_render_component(component_id, view="iso", section=None, hide_features=No
         return {"error": "no active 3D view — render requires the FreeCAD GUI"}
     import base64
     doc, container, meta = _resolve(component_id)
+    width, height = _render_dimensions(width, height)
     idm = meta["id_map"]
     v = gui.ActiveDocument.ActiveView
 
     hidden = []          # (obj, prior visibility) to restore
     temp = []            # temp section objects to delete
+    path = None
     try:
         for fid in (hide_features or []):
             o = doc.getObject(idm.get(fid, ""))
@@ -643,14 +722,24 @@ def op_render_component(component_id, view="iso", section=None, hide_features=No
                   "top": v.viewTop, "bottom": v.viewBottom,
                   "left": v.viewLeft, "right": v.viewRight}
         if view != "current":
-            orient.get(view, v.viewIsometric)()
+            setter = orient.get(view)
+            if setter is None:
+                raise ValueError("unknown view %r" % view)
+            setter()
         v.fitAll()
-        path = os.path.join(tempfile.gettempdir(), "freecad_mcp_component.png")
-        v.saveImage(path, int(width), int(height), "Current")
-        data = base64.b64encode(open(path, "rb").read()).decode("ascii")
+        fd, path = tempfile.mkstemp(prefix="freecad_mcp_component_", suffix=".png")
+        os.close(fd)
+        v.saveImage(path, width, height, "Current")
+        with open(path, "rb") as image:
+            data = base64.b64encode(image.read()).decode("ascii")
         return {"image_base64": data, "view": view,
-                "sectioned": bool(section), "width": int(width), "height": int(height)}
+                "sectioned": bool(section), "width": width, "height": height}
     finally:
+        if path:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
         for o in temp:
             try:
                 doc.removeObject(o.Name)
@@ -668,6 +757,8 @@ def _make_section(doc, meta, section):
     """Cut the visible solids with a half-space box at plane/offset, show only
     the section result. Returns (temp_objects, hidden_pairs)."""
     import Part
+    if not isinstance(section, dict):
+        raise ValueError("section must be an object with plane and offset")
     solids = _feature_solids(doc, meta)
     if not solids:
         return [], []
@@ -676,6 +767,8 @@ def _make_section(doc, meta, section):
         bb = bb.united(o.Shape.BoundBox)
     pad = max(bb.XLength, bb.YLength, bb.ZLength) + 10
     plane = (section.get("plane") or "XZ").upper()
+    if plane not in ("XY", "YX", "XZ", "ZX", "YZ", "ZY"):
+        raise ValueError("unknown section plane %r" % plane)
     off = float(App.Units.Quantity(str(section.get("offset", "0 mm"))).getValueAs("mm"))
 
     # half-space box removing the near side of the cut plane
@@ -703,22 +796,35 @@ def op_export_component(component_id, path, format="FCStd", variant=None):
     host = _host(doc, meta)
     fmt = (format or os.path.splitext(path)[1].lstrip(".")).upper()
 
-    restore = {}
+    variant_transaction = False
     try:
         if variant:
             values = meta.get("variants", {}).get(variant)
             if values is None:
                 return {"error": "unknown variant %r" % variant}
             types = {p["name"]: _prop_type(p) for p in meta["schema"]}
+            kinds = {p["name"]: p.get("kind", "input") for p in meta["schema"]}
+            unknown = sorted(set(values) - set(types))
+            derived = sorted(k for k in values if k in kinds and kinds[k] == "derived")
+            if unknown:
+                return {"error": "variant contains unknown parameter(s): %s" % ", ".join(unknown)}
+            if derived:
+                return {"error": "variant overrides derived parameter(s): %s" % ", ".join(derived)}
+            _begin(doc, "export_component_variant")
+            variant_transaction = True
             for k, v in values.items():
-                restore[k] = getattr(host, k)
                 _set_value(host, k, types[k], v)
             doc.recompute()
+            errs = _errors(_component_objects(doc, meta))
+            if errs:
+                raise ValueError("variant rebuild failed; invalid features: %s" % ", ".join(errs))
 
         if fmt == "FCSTD":
             doc.saveCopy(path)
         else:
             objs = _feature_solids(doc, meta)
+            if not objs:
+                return {"error": "component has no exportable output solids"}
             if fmt == "STL":
                 import Part
                 shape = (objs[0].Shape if len(objs) == 1
@@ -730,10 +836,8 @@ def op_export_component(component_id, path, format="FCStd", variant=None):
             else:
                 return {"error": "unsupported format %r" % fmt}
     finally:
-        if restore:
-            for k, v in restore.items():
-                setattr(host, k, v)
-            doc.recompute()
+        if variant_transaction:
+            _abort(doc)
 
     return {"path": path, "format": fmt, "bytes": os.path.getsize(path),
             "variant": variant}
