@@ -14,6 +14,7 @@ import FreeCAD as App
 PROFILE_VERSIONS = {
     "geometry_baseline": 1,
     "cnc_plywood": 1,
+    "fdm": 1,
 }
 
 
@@ -415,9 +416,34 @@ def _expand_cnc_plywood(ctx, th):
     return rules
 
 
+def _expand_fdm(ctx, th):
+    rules = []
+    minwall = th.get("min_wall_thickness", "0.8 mm")
+    for name in _thickness_params(ctx):
+        rules.append({
+            "id": "fdm_min_wall:%s" % name,
+            "type": "parameter_minimum", "severity": "warning",
+            "parameter": name, "minimum": minwall,
+        })
+    rules.extend([
+        {
+            "id": "fdm_nozzle", "type": "info_note", "severity": "info",
+            "message": "FDM profile assumes nozzle diameter %s" %
+                       th.get("nozzle_diameter", "0.4 mm"),
+        },
+        {
+            "id": "fdm_clearance", "type": "info_note", "severity": "info",
+            "message": "verify mating-part clearance >= %s" %
+                       th.get("minimum_clearance", "0.2 mm"),
+        },
+    ])
+    return rules
+
+
 _EXPANDERS = {
     "geometry_baseline": _expand_geometry_baseline,
     "cnc_plywood": _expand_cnc_plywood,
+    "fdm": _expand_fdm,
 }
 
 

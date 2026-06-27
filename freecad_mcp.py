@@ -240,7 +240,9 @@ class FreeCADMCPServer:
         "iso", "front", "rear", "top", "bottom", "left", "right",
     )
 
-    def handle_get_screenshot(self, width=1024, height=768, view="iso", fit=True):
+    def handle_get_screenshot(self, width=1024, height=768, view="iso", fit=True,
+                              targets=None, transparent=None, temporary=True,
+                              camera=None):
         """Orient the camera, optionally fit, and return the view as a PNG.
 
         view: one of STANDARD_VIEWS, or "current" to leave the camera as-is.
@@ -255,21 +257,80 @@ class FreeCADMCPServer:
             "top": v.viewTop, "bottom": v.viewBottom,
             "left": v.viewLeft, "right": v.viewRight,
         }
-        if view != "current":
-            setter = orient.get(view)
-            if setter is None:
-                return {"error": f"unknown view {view!r}; use one of "
-                                 f"{', '.join(self.STANDARD_VIEWS)} or 'current'"}
-            setter()
-        if fit:
-            v.fitAll()
+        targets = set(targets or [])
+        transparent = set(transparent or [])
+        doc = App.ActiveDocument
+        objects = list(doc.Objects) if doc else []
+        state = {
+            o.Name: (o.ViewObject.Visibility,
+                     getattr(o.ViewObject, "Transparency", None))
+            for o in objects if hasattr(o, "ViewObject")
+        }
+        old_camera = v.getCameraOrientation()
+        try:
+            if targets:
+                missing = sorted(targets - {o.Name for o in objects})
+                if missing:
+                    raise ValueError("unknown screenshot targets: %s" % ", ".join(missing))
+                for obj in objects:
+                    if hasattr(obj, "ViewObject"):
+                        obj.ViewObject.Visibility = obj.Name in targets
+            for name in transparent:
+                obj = doc.getObject(name) if doc else None
+                if obj is None:
+                    raise ValueError("unknown transparent object %s" % name)
+                obj.ViewObject.Visibility = True
+                if hasattr(obj.ViewObject, "Transparency"):
+                    obj.ViewObject.Transparency = 70
 
-        path = os.path.join(tempfile.gettempdir(), "freecad_mcp_screenshot.png")
-        v.saveImage(path, int(width), int(height), "Current")
-        with open(path, "rb") as f:
-            data = base64.b64encode(f.read()).decode("ascii")
-        return {"image_base64": data, "width": int(width), "height": int(height),
-                "view": view}
+            if camera and camera.get("quaternion"):
+                q = camera["quaternion"]
+                if not isinstance(q, (list, tuple)) or len(q) != 4:
+                    raise ValueError("camera.quaternion must contain four numbers")
+                v.setCameraOrientation(*[float(x) for x in q])
+                resolved_view = "quaternion"
+            else:
+                resolved_view = view
+                if view != "current":
+                    setter = orient.get(view)
+                    if setter is None:
+                        raise ValueError(
+                            f"unknown view {view!r}; use one of "
+                            f"{', '.join(self.STANDARD_VIEWS)} or 'current'"
+                        )
+                    setter()
+            if fit:
+                v.fitAll()
+
+            path = os.path.join(tempfile.gettempdir(), "freecad_mcp_screenshot.png")
+            v.saveImage(path, int(width), int(height), "Current")
+            with open(path, "rb") as f:
+                data = base64.b64encode(f.read()).decode("ascii")
+            return {
+                "image_base64": data,
+                "width": int(width),
+                "height": int(height),
+                "view": resolved_view,
+                "visible_objects": [
+                    o.Name for o in objects
+                    if hasattr(o, "ViewObject") and o.ViewObject.Visibility
+                ],
+                "axis_convention": {
+                    "x": "right", "y": "depth", "z": "up",
+                    "named_views": "FreeCAD standard camera orientations",
+                },
+                "temporary": bool(temporary),
+            }
+        finally:
+            if temporary:
+                for obj in objects:
+                    previous = state.get(obj.Name)
+                    if previous is None:
+                        continue
+                    obj.ViewObject.Visibility = previous[0]
+                    if previous[1] is not None:
+                        obj.ViewObject.Transparency = previous[1]
+                v.setCameraOrientation(old_camera)
 
     def _recompute_errors(self):
         """Names of objects currently flagged as in error (failed rebuild)."""
@@ -579,6 +640,14 @@ class FreeCADMCPServer:
             "define_component": parametric.op_define_component,
             "set_component_parameters": parametric.op_set_component_parameters,
             "get_component": parametric.op_get_component,
+            "get_component_graph": parametric.op_get_component_graph,
+            "patch_component": parametric.op_patch_component,
+            "list_feature_types": parametric.op_list_feature_types,
+            "list_patterns": parametric.op_list_patterns,
+            "expand_pattern": parametric.op_expand_pattern,
+            "check_fit": parametric.op_check_fit,
+            "export_bundle": parametric.op_export_bundle,
+            "build_component": parametric.op_build_component,
             "create_component_variant": parametric.op_create_component_variant,
             "validate_component": parametric.op_validate_component,
             "render_component": parametric.op_render_component,

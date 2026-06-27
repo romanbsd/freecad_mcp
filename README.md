@@ -199,3 +199,23 @@ Feel free to contribute by submitting issues or pull requests. Your feedback and
 ## License
 
 This project is licensed under the MIT License. See the LICENSE file for details.
+# Incremental parametric API
+
+The MCP server supports compact, revisioned component workflows in addition to raw
+FreeCAD Python execution:
+
+- `build_component` creates, defines, validates, and exports in one request.
+- `get_component_graph` returns a summary or editable full graph with its revision.
+- `patch_component` supports dry runs and optimistic concurrency.
+- `list_feature_types`, `list_patterns`, and `expand_pattern` provide on-demand schema
+  discovery.
+- `check_fit` reports containment, axis clearances, interference, and unrestrained
+  translations.
+- `export_bundle` writes assembly and per-output artifacts in several formats.
+
+Declarative features include `tube` and `grid_array`. Version 1 patterns include
+`lego.stud_grid` and `lego.brick_underside`; patterns expand into ordinary graph nodes
+so they remain inspectable and patchable.
+
+Bridge tools return native MCP objects rather than JSON encoded inside strings. Clients
+that parsed the old string response should remove that extra JSON decoding step.

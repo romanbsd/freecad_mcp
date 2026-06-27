@@ -47,8 +47,24 @@ async def send_to_freecad(command: Dict[str, Any]) -> Dict[str, Any]:
         return {"status": "error", "message": str(e)}
 
 
+def _unwrap_response(response: Any) -> Any:
+    """Normalize the wire envelope and surface failures as tool errors."""
+    if not isinstance(response, dict):
+        raise RuntimeError("invalid response from FreeCAD")
+    if response.get("status") == "error":
+        raise RuntimeError(response.get("message") or "FreeCAD command failed")
+    result = response.get("result", response)
+    if isinstance(result, dict) and result.get("error"):
+        raise RuntimeError(result["error"])
+    return result
+
+
+async def _request(command: Dict[str, Any]) -> Any:
+    return _unwrap_response(await send_to_freecad(command))
+
+
 @mcp.tool()
-async def execute(code: str, return_context: bool = False) -> str:
+async def execute(code: str, return_context: bool = False) -> Any:
     """Execute Python inside the running FreeCAD instance.
 
     Namespace already bound: `App` (FreeCAD), `Gui` (FreeCADGui), `doc` (the
@@ -79,36 +95,32 @@ async def execute(code: str, return_context: bool = False) -> str:
         JSON string with command_result, stdout, optional result, and (when
         requested) context.
     """
-    result = await send_to_freecad({
+    return await _request({
         "type": "execute",
         "params": {"code": code, "return_context": return_context},
     })
-    return json.dumps(result, indent=2)
 
 
 @mcp.tool()
-async def list_objects() -> str:
+async def list_objects() -> Any:
     """List every object in the active document (name, label, type). Cheap
     overview — use get_object for the full properties of one object."""
-    return json.dumps(await send_to_freecad({"type": "list_objects"}), indent=2)
+    return await _request({"type": "list_objects"})
 
 
 @mcp.tool()
-async def get_object(name: str) -> str:
+async def get_object(name: str) -> Any:
     """Full detail for one object: all properties, validity/state, and shape
     bounding box + topology counts (verts/edges/faces/solids) when present.
 
     Args:
         name: the object's Name (unique id), as shown by list_objects.
     """
-    return json.dumps(
-        await send_to_freecad({"type": "get_object", "params": {"name": name}}),
-        indent=2,
-    )
+    return await _request({"type": "get_object", "params": {"name": name}})
 
 
 @mcp.tool()
-async def export(names: list[str], path: str) -> str:
+async def export(names: list[str], path: str) -> Any:
     """Export objects to a CAD file. The format is chosen by the file
     extension: .step/.stp, .iges/.igs, .brep/.brp, or .stl.
 
@@ -116,41 +128,32 @@ async def export(names: list[str], path: str) -> str:
         names: object Names to export (from list_objects).
         path: absolute output path; its extension picks the format.
     """
-    return json.dumps(
-        await send_to_freecad({"type": "export", "params": {"names": names, "path": path}}),
-        indent=2,
-    )
+    return await _request({"type": "export", "params": {"names": names, "path": path}})
 
 
 @mcp.tool()
-async def list_types(filter: str = "") -> str:
+async def list_types(filter: str = "") -> Any:
     """List creatable FreeCAD object TypeIds (what you can pass to addObject).
 
     Args:
         filter: case-insensitive substring, e.g. "Part::" or "Sketch".
     """
-    return json.dumps(
-        await send_to_freecad({"type": "list_types", "params": {"filter": filter}}),
-        indent=2,
-    )
+    return await _request({"type": "list_types", "params": {"filter": filter}})
 
 
 @mcp.tool()
-async def describe_type(type_id: str) -> str:
+async def describe_type(type_id: str) -> Any:
     """Property schema for a TypeId: each property's type, group, doc string and
     enum options. Use this to learn what you can set before writing execute code.
 
     Args:
         type_id: e.g. "Part::Box", "PartDesign::Pad", "Sketcher::SketchObject".
     """
-    return json.dumps(
-        await send_to_freecad({"type": "describe_type", "params": {"type_id": type_id}}),
-        indent=2,
-    )
+    return await _request({"type": "describe_type", "params": {"type_id": type_id}})
 
 
 @mcp.tool()
-async def measure(a: str, b: str = "") -> str:
+async def measure(a: str, b: str = "") -> Any:
     """Measure geometry. With one object: volume, area, center of mass, bbox.
     With two: the minimum distance between them and the closest points.
 
@@ -159,33 +162,28 @@ async def measure(a: str, b: str = "") -> str:
         b: optional second object Name; omit to measure `a` alone.
     """
     params = {"a": a, "b": b or None}
-    return json.dumps(
-        await send_to_freecad({"type": "measure", "params": params}), indent=2
-    )
+    return await _request({"type": "measure", "params": params})
 
 
 @mcp.tool()
-async def get_selection() -> str:
+async def get_selection() -> Any:
     """What the user has selected in FreeCAD: objects and sub-elements
     (e.g. Edge1, Face2) — use these to target fillets/chamfers. GUI only."""
-    return json.dumps(await send_to_freecad({"type": "get_selection"}), indent=2)
+    return await _request({"type": "get_selection"})
 
 
 @mcp.tool()
-async def set_selection(names: list[str]) -> str:
+async def set_selection(names: list[str]) -> Any:
     """Replace the current selection with the given object Names. GUI only.
 
     Args:
         names: object Names to select.
     """
-    return json.dumps(
-        await send_to_freecad({"type": "set_selection", "params": {"names": names}}),
-        indent=2,
-    )
+    return await _request({"type": "set_selection", "params": {"names": names}})
 
 
 @mcp.tool()
-async def get_subelements(name: str, limit: int = 200) -> str:
+async def get_subelements(name: str, limit: int = 200) -> Any:
     """Sub-geometry of an object, so you can target it by index.
 
     For any shape: its edges (Edge1..N with curve type, length, center point)
@@ -197,16 +195,15 @@ async def get_subelements(name: str, limit: int = 200) -> str:
         name: object Name.
         limit: max edges/faces to return (default 200).
     """
-    return json.dumps(
-        await send_to_freecad({"type": "get_subelements",
-                               "params": {"name": name, "limit": limit}}),
-        indent=2,
-    )
+    return await _request({"type": "get_subelements",
+                           "params": {"name": name, "limit": limit}})
 
 
 @mcp.tool()
 async def get_screenshot(
-    width: int = 1024, height: int = 768, view: str = "iso", fit: bool = True
+    width: int = 1024, height: int = 768, view: str = "iso", fit: bool = True,
+    targets: list[str] = None, transparent: list[str] = None,
+    temporary: bool = True, camera: dict = None,
 ) -> Image:
     """Capture the active FreeCAD 3D view as a PNG so you can see the model.
 
@@ -216,35 +213,34 @@ async def get_screenshot(
             top, bottom, left, right, or "current" to leave the camera as-is.
         fit: zoom to fit all visible geometry before capturing (default True).
     """
-    result = await send_to_freecad({
+    inner = await _request({
         "type": "get_screenshot",
-        "params": {"width": width, "height": height, "view": view, "fit": fit},
+        "params": {"width": width, "height": height, "view": view, "fit": fit,
+                   "targets": targets or [], "transparent": transparent or [],
+                   "temporary": temporary, "camera": camera},
     })
-    # Handler payloads come wrapped as {"status":"success","result":{...}};
-    # a socket-level failure is a flat {"status":"error","message":...}.
-    inner = result.get("result", result) if isinstance(result, dict) else {}
     if not isinstance(inner, dict) or "image_base64" not in inner:
-        raise RuntimeError(result.get("message") or inner.get("error") or "screenshot failed")
+        raise RuntimeError("screenshot failed")
     return Image(data=base64.b64decode(inner["image_base64"]), format="png")
 
 
 @mcp.tool()
 async def create_component(document: str, name: str, label: str = "",
-                          parameters: list = None) -> str:
+                          parameters: list = None) -> Any:
     """Create a parametric component: an App::Part container with a typed
     parameter registry. Each parameter declares kind "input" (concrete, with
     `default` and optional min/max/enum/unit) or "derived" (read-only, with an
     `expression` over other params using $name). Returns the component_id used
     by the other component tools.
     """
-    return json.dumps(await send_to_freecad({"type": "create_component", "params": {
+    return await _request({"type": "create_component", "params": {
         "document": document, "name": name, "label": label or None,
-        "parameters": parameters or []}}), indent=2)
+        "parameters": parameters or []}})
 
 
 @mcp.tool()
 async def define_component(component_id: str, features: list,
-                          rules: list = None, profiles: list = None) -> str:
+                          rules: list = None, profiles: list = None) -> Any:
     """Define (or replace) the component's build graph — a list of features.
     Feature types: box, cylinder, cone, prism, transform, cut, union,
     intersection, array, group. Sizes/positions are expressions over $params
@@ -258,42 +254,113 @@ async def define_component(component_id: str, features: list,
     component for validate_component. A build that yields invalid geometry is
     rolled back, keeping the prior model.
     """
-    return json.dumps(await send_to_freecad({"type": "define_component", "params": {
+    return await _request({"type": "define_component", "params": {
         "component_id": component_id, "features": features,
-        "rules": rules, "profiles": profiles}}), indent=2)
+        "rules": rules, "profiles": profiles}})
 
 
 @mcp.tool()
 async def set_component_parameters(component_id: str, values: dict,
-                                   rebuild: bool = True, validate: bool = False) -> str:
+                                   rebuild: bool = True, validate: bool = False) -> Any:
     """Update input parameters and rebuild only affected features (native
     incremental recompute). Returns changed params, regenerated feature ids,
     optional validation, and the component bounding box. Derived params are
     read-only and rejected."""
-    return json.dumps(await send_to_freecad({"type": "set_component_parameters", "params": {
+    return await _request({"type": "set_component_parameters", "params": {
         "component_id": component_id, "values": values,
-        "rebuild": rebuild, "validate": validate}}), indent=2)
+        "rebuild": rebuild, "validate": validate}})
 
 
 @mcp.tool()
-async def get_component(component_id: str) -> str:
+async def get_component(component_id: str) -> Any:
     """Return the component's parameter registry (with current values),
     dependency graph summary, variants, and latest validation status."""
-    return json.dumps(await send_to_freecad({"type": "get_component", "params": {
-        "component_id": component_id}}), indent=2)
+    return await _request({"type": "get_component", "params": {
+        "component_id": component_id}})
 
 
 @mcp.tool()
-async def create_component_variant(component_id: str, name: str, values: dict) -> str:
+async def get_component_graph(component_id: str, detail: str = "summary") -> Any:
+    """Return the revisioned feature graph. Use detail='full' for editable
+    feature definitions and 'summary' for ids, types, roles, and inputs."""
+    return await _request({"type": "get_component_graph", "params": {
+        "component_id": component_id, "detail": detail}})
+
+
+@mcp.tool()
+async def patch_component(component_id: str, operations: list,
+                          expected_revision: int = None,
+                          validate: bool = False,
+                          dry_run: bool = False) -> Any:
+    """Apply revision-checked structural edits to a component graph."""
+    return await _request({"type": "patch_component", "params": {
+        "component_id": component_id, "operations": operations,
+        "expected_revision": expected_revision, "validate": validate,
+        "dry_run": dry_run}})
+
+
+@mcp.tool()
+async def list_feature_types() -> Any:
+    """List declarative component feature types supported by this server."""
+    return await _request({"type": "list_feature_types"})
+
+
+@mcp.tool()
+async def list_patterns() -> Any:
+    """List versioned server-owned CAD patterns."""
+    return await _request({"type": "list_patterns"})
+
+
+@mcp.tool()
+async def expand_pattern(feature: dict) -> Any:
+    """Expand one pattern to its ordinary, editable component features."""
+    return await _request({"type": "expand_pattern", "params": {
+        "feature": feature}})
+
+
+@mcp.tool()
+async def check_fit(component_id: str, container: str, insert: str,
+                    retainers: list[str] = None, probe_steps: int = 16,
+                    tolerance: float = 0.01) -> Any:
+    """Check containment, clearance, interference, and blocked translations."""
+    return await _request({"type": "check_fit", "params": {
+        "component_id": component_id, "container": container, "insert": insert,
+        "retainers": retainers or [], "probe_steps": probe_steps,
+        "tolerance": tolerance}})
+
+
+@mcp.tool()
+async def export_bundle(component_id: str, directory: str,
+                        formats: list[str] = None, per_output: bool = True,
+                        assembly: bool = True, overwrite: bool = True,
+                        basename: str = "") -> Any:
+    """Export several formats and component outputs in one request."""
+    return await _request({"type": "export_bundle", "params": {
+        "component_id": component_id, "directory": directory,
+        "formats": formats, "per_output": per_output, "assembly": assembly,
+        "overwrite": overwrite, "basename": basename or None}})
+
+
+@mcp.tool()
+async def build_component(document: dict, component: dict,
+                          validate: dict = None, exports: dict = None) -> Any:
+    """Create, define, validate, and optionally export a component in one call."""
+    return await _request({"type": "build_component", "params": {
+        "document": document, "component": component,
+        "validate": validate, "exports": exports}})
+
+
+@mcp.tool()
+async def create_component_variant(component_id: str, name: str, values: dict) -> Any:
     """Store a named set of parameter overrides that export_component can apply."""
-    return json.dumps(await send_to_freecad({"type": "create_component_variant", "params": {
-        "component_id": component_id, "name": name, "values": values}}), indent=2)
+    return await _request({"type": "create_component_variant", "params": {
+        "component_id": component_id, "name": name, "values": values}})
 
 
 @mcp.tool()
 async def validate_component(component_id: str, profiles: list = None,
                             rule_ids: list = None, include_measurements: bool = False,
-                            tolerance: str = "") -> str:
+                            tolerance: str = "") -> Any:
     """Run design-rule checks over the recomputed component (read-only). Combines
     built-in profiles (geometry_baseline, cnc_plywood; defaults
     to the component's stored profiles or geometry_baseline) with its custom rules
@@ -302,10 +369,10 @@ async def validate_component(component_id: str, profiles: list = None,
     a summary count, and findings carrying severity, rule, target, actual/required,
     message, and suggested_parameter_change. Set include_measurements for per-feature
     volume/area/bbox."""
-    return json.dumps(await send_to_freecad({"type": "validate_component", "params": {
+    return await _request({"type": "validate_component", "params": {
         "component_id": component_id, "profiles": profiles, "rule_ids": rule_ids,
         "include_measurements": include_measurements,
-        "tolerance": tolerance or None}}), indent=2)
+        "tolerance": tolerance or None}})
 
 
 @mcp.tool()
@@ -315,24 +382,23 @@ async def render_component(component_id: str, view: str = "iso", section: dict =
     """Render the component to a PNG. `view` is iso/front/top/etc. Optional
     `section` = {"plane":"XZ","offset":"90 mm"} produces a cross-section.
     `hide_features` is a list of feature ids to hide for this render."""
-    result = await send_to_freecad({"type": "render_component", "params": {
+    inner = await _request({"type": "render_component", "params": {
         "component_id": component_id, "view": view, "section": section,
         "hide_features": hide_features, "width": width, "height": height}})
-    inner = result.get("result", result) if isinstance(result, dict) else {}
     if not isinstance(inner, dict) or "image_base64" not in inner:
-        raise RuntimeError(result.get("message") or inner.get("error") or "render failed")
+        raise RuntimeError("render failed")
     return Image(data=base64.b64decode(inner["image_base64"]), format="png")
 
 
 @mcp.tool()
 async def export_component(component_id: str, path: str, format: str = "FCStd",
-                          variant: str = "") -> str:
+                          variant: str = "") -> Any:
     """Export the component (or a named variant) to a file. Formats: FCStd,
     STEP, STL, IGES, BREP. FCStd saves the whole document; the others export
     the generated solids."""
-    return json.dumps(await send_to_freecad({"type": "export_component", "params": {
+    return await _request({"type": "export_component", "params": {
         "component_id": component_id, "path": path, "format": format,
-        "variant": variant or None}}), indent=2)
+        "variant": variant or None}})
 
 
 @mcp.resource("freecad://guide/cookbook", mime_type="text/markdown")

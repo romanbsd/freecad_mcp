@@ -12,6 +12,7 @@ Each public op_* function takes the MCP params and returns a JSON-able dict.
 They are dispatched by FreeCADMCPServer in freecad_mcp.py.
 """
 import json
+import hashlib
 import os
 import re
 import tempfile
@@ -294,6 +295,20 @@ def _build_feature(doc, host, feat, id_map):
         _bind(obj, "Height", feat.get("height"), hn)
         obj.Placement.Rotation = _axis_rotation(feat.get("axis"))
         place(obj)
+    elif ftype == "tube":
+        outer = doc.addObject("Part::Cylinder", "%s_Outer" % feat["id"])
+        inner = doc.addObject("Part::Cylinder", "%s_Inner" % feat["id"])
+        _bind(outer, "Radius", feat.get("outer_radius"), hn)
+        _bind(inner, "Radius", feat.get("inner_radius"), hn)
+        _bind(outer, "Height", feat.get("height"), hn)
+        _bind(inner, "Height", feat.get("height"), hn)
+        rotation = _axis_rotation(feat.get("axis"))
+        outer.Placement.Rotation = rotation
+        inner.Placement.Rotation = rotation
+        place(outer)
+        place(inner)
+        obj = doc.addObject("Part::Cut", feat["id"])
+        obj.Base, obj.Tool = outer, inner
     elif ftype == "cone":
         obj = doc.addObject("Part::Cone", feat["id"])
         _bind(obj, "Radius1", feat.get("radius1"), hn)
@@ -317,7 +332,7 @@ def _build_feature(doc, host, feat, id_map):
         return obj  # not a new object
     elif ftype in ("cut", "union", "intersection"):
         obj = _build_boolean(doc, feat, id_map)
-    elif ftype == "array":
+    elif ftype in ("array", "grid_array"):
         obj = _build_array(doc, host, feat, id_map)
     elif ftype == "group":
         obj = doc.addObject("App::DocumentObjectGroup", feat["id"])
@@ -353,7 +368,15 @@ def _build_array(doc, host, feat, id_map):
     arr = Draft.make_array(base, App.Vector(1, 0, 0), App.Vector(0, 1, 0), 1, 1)
     arr.Label = feat.get("id", arr.Label)
     hn = host.Name
-    _bind(arr, "NumberX", feat.get("count"), hn)
+    if feat.get("count_x") is not None or feat.get("count_y") is not None:
+        _bind(arr, "NumberX", feat.get("count_x") or 1, hn)
+        _bind(arr, "NumberY", feat.get("count_y") or 1, hn)
+        if feat.get("spacing_x") is not None:
+            arr.setExpression("IntervalX.x", _translate(feat["spacing_x"], hn))
+        if feat.get("spacing_y") is not None:
+            arr.setExpression("IntervalY.y", _translate(feat["spacing_y"], hn))
+    else:
+        _bind(arr, "NumberX", feat.get("count"), hn)
     if feat.get("spacing") is not None:
         axis = (feat.get("axis") or "x").lower()
         arr.setExpression("IntervalX.%s" % axis, _translate(feat["spacing"], hn))
@@ -399,7 +422,8 @@ def op_create_component(document, name, label=None, parameters=None):
 
         _save(container, {"host": host.Name, "groups": groups,
                           "schema": registry, "build_graph": [],
-                          "id_map": {}, "variants": {}, "validation": None})
+                          "id_map": {}, "variants": {}, "validation": None,
+                          "revision": 0, "outputs": []})
         doc.recompute()
         doc.commitTransaction()
     except Exception:
@@ -420,6 +444,8 @@ def op_define_component(component_id, features, rules=None, profiles=None):
             if old is not None:
                 doc.removeObject(old.Name)
 
+        from patterns import expand_patterns
+        features = expand_patterns(features)
         id_map = {}
         graph = []
         for feat in features:
@@ -451,6 +477,10 @@ def op_define_component(component_id, features, rules=None, profiles=None):
         meta["build_graph"] = graph
         meta["id_map"] = name_map
         meta["dependency_index"] = _dependency_index(meta["schema"], graph)
+        meta["revision"] = int(meta.get("revision", 0)) + 1
+        meta.setdefault("outputs", [
+            f["id"] for f in graph if f.get("role", "output") == "output"
+        ])
         if rules is not None:
             meta["rules"] = rules
         if profiles is not None:
@@ -462,6 +492,133 @@ def op_define_component(component_id, features, rules=None, profiles=None):
         raise
 
     return {"features_created": list(name_map.keys()), "object_names": name_map}
+
+
+def _apply_graph_operations(graph, operations, outputs=None):
+    """Apply structural graph edits without touching FreeCAD."""
+    updated = [dict(f) for f in graph]
+    output_ids = list(outputs or [])
+    added, changed, removed = [], [], []
+    for operation in operations or []:
+        op = operation.get("op")
+        if op == "upsert":
+            feature = dict(operation.get("feature") or {})
+            if not feature.get("id") or not feature.get("type"):
+                raise ValueError("upsert requires feature.id and feature.type")
+            matches = [i for i, f in enumerate(updated) if f["id"] == feature["id"]]
+            if matches:
+                updated[matches[0]] = feature
+                changed.append(feature["id"])
+            else:
+                updated.append(feature)
+                added.append(feature["id"])
+        elif op == "remove":
+            fid = operation.get("id")
+            if not fid or not any(f["id"] == fid for f in updated):
+                raise ValueError("cannot remove unknown feature %r" % fid)
+            updated = [f for f in updated if f["id"] != fid]
+            output_ids = [x for x in output_ids if x != fid]
+            removed.append(fid)
+        elif op == "set_output":
+            output_ids = list(operation.get("ids") or [])
+        else:
+            raise ValueError("unknown patch operation %r" % op)
+
+    ids = [f["id"] for f in updated]
+    if len(ids) != len(set(ids)):
+        raise ValueError("feature ids must be unique")
+    known = set(ids)
+    for feature in updated:
+        missing = [x for x in _feature_inputs(feature) if x not in known]
+        if missing:
+            raise ValueError("feature %s references missing inputs: %s" %
+                             (feature["id"], ", ".join(missing)))
+    missing_outputs = [x for x in output_ids if x not in known]
+    if missing_outputs:
+        raise ValueError("unknown output features: %s" % ", ".join(missing_outputs))
+    return {
+        "graph": updated, "outputs": output_ids,
+        "added": added, "changed": changed, "removed": removed,
+    }
+
+
+def op_get_component_graph(component_id, detail="summary"):
+    doc, container, meta = _resolve(component_id)
+    graph = meta.get("build_graph", [])
+    if detail == "summary":
+        features = [
+            {"id": f["id"], "type": f["type"],
+             "inputs": _feature_inputs(f), "role": f.get("role", "output")}
+            for f in graph
+        ]
+    elif detail == "full":
+        features = graph
+    else:
+        raise ValueError("detail must be 'summary' or 'full'")
+    return {
+        "component_id": component_id,
+        "revision": int(meta.get("revision", 0)),
+        "features": features,
+        "outputs": list(meta.get("outputs", [])),
+    }
+
+
+def op_patch_component(component_id, operations, expected_revision=None,
+                       validate=False, dry_run=False):
+    doc, container, meta = _resolve(component_id)
+    revision = int(meta.get("revision", 0))
+    if expected_revision is not None and int(expected_revision) != revision:
+        raise ValueError("STALE_COMPONENT_REVISION: expected %s, current %s" %
+                         (expected_revision, revision))
+    patch = _apply_graph_operations(
+        meta.get("build_graph", []), operations, meta.get("outputs", [])
+    )
+    if dry_run:
+        return {
+            "dry_run": True, "revision": revision,
+            "added": patch["added"], "changed": patch["changed"],
+            "removed": patch["removed"], "outputs": patch["outputs"],
+        }
+
+    # Reuse the existing transactional builder. The dependency-scoped builder can
+    # replace this call later without changing the patch API.
+    op_define_component(component_id, patch["graph"])
+    doc, container, new_meta = _resolve(component_id)
+    new_meta["outputs"] = patch["outputs"]
+    _save(container, new_meta)
+    result = {
+        "revision": int(new_meta.get("revision", revision + 1)),
+        "added": patch["added"], "changed": patch["changed"],
+        "removed": patch["removed"],
+        "regenerated": [f["id"] for f in patch["graph"]],
+        "outputs": patch["outputs"],
+    }
+    if validate:
+        result["validation"] = op_validate_component(component_id)
+    return result
+
+
+def op_list_feature_types():
+    return {
+        "feature_types": [
+            "box", "cylinder", "tube", "cone", "prism", "transform",
+            "cut", "union", "intersection", "array", "grid_array",
+            "group", "pattern",
+        ]
+    }
+
+
+def op_list_patterns():
+    from patterns import list_patterns
+    return {"patterns": list_patterns()}
+
+
+def op_expand_pattern(feature):
+    from patterns import expand_patterns
+    if feature.get("type") != "pattern":
+        feature = dict(feature)
+        feature["type"] = "pattern"
+    return {"features": expand_patterns([feature])}
 
 
 def _feature_inputs(feat):
@@ -581,6 +738,8 @@ def op_get_component(component_id):
              for f in meta["build_graph"]]
     return {"component_id": component_id, "object_name": container.Name,
             "parameters": params, "build_graph": graph,
+            "revision": int(meta.get("revision", 0)),
+            "outputs": list(meta.get("outputs", [])),
             "variants": list(meta.get("variants", {}).keys()),
             "validation": meta.get("validation")}
 
@@ -841,3 +1000,192 @@ def op_export_component(component_id, path, format="FCStd", variant=None):
 
     return {"path": path, "format": fmt, "bytes": os.path.getsize(path),
             "variant": variant}
+
+
+def _bbox_clearances(container_bbox, insert_bbox):
+    """Axis-aligned clearances: negative values indicate non-containment."""
+    cx0, cy0, cz0, cx1, cy1, cz1 = container_bbox
+    ix0, iy0, iz0, ix1, iy1, iz1 = insert_bbox
+    values = {
+        "-x": ix0 - cx0, "+x": cx1 - ix1,
+        "-y": iy0 - cy0, "+y": cy1 - iy1,
+        "-z": iz0 - cz0, "+z": cz1 - iz1,
+    }
+    return {
+        "directions": values,
+        "minimum": min(values.values()),
+        "contained": all(value >= 0 for value in values.values()),
+    }
+
+
+def _bbox_tuple(shape):
+    bb = shape.BoundBox
+    return (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax)
+
+
+def op_check_fit(component_id, container, insert, retainers=None,
+                 probe_steps=16, tolerance=0.01):
+    """Check envelope containment, interference, and translational retention."""
+    doc, component, meta = _resolve(component_id)
+    id_map = meta.get("id_map", {})
+
+    def feature(fid):
+        name = id_map.get(fid)
+        obj = doc.getObject(name) if name else None
+        if obj is None or not hasattr(obj, "Shape"):
+            raise ValueError("unknown shape feature %r" % fid)
+        return obj
+
+    cavity = feature(container)
+    item = feature(insert)
+    retainer_objects = [feature(fid) for fid in (retainers or [])]
+    clearance = _bbox_clearances(_bbox_tuple(cavity.Shape), _bbox_tuple(item.Shape))
+    common_volume = cavity.Shape.common(item.Shape).Volume
+    insert_volume = item.Shape.Volume
+    contained = insert_volume > 0 and common_volume >= insert_volume - tolerance ** 3
+
+    interference = {}
+    for fid, obj in zip(retainers or [], retainer_objects):
+        volume = item.Shape.common(obj.Shape).Volume
+        if volume > tolerance ** 3:
+            interference[fid] = volume
+
+    bb = cavity.Shape.BoundBox
+    travel = max(bb.XLength, bb.YLength, bb.ZLength) + max(
+        item.Shape.BoundBox.XLength, item.Shape.BoundBox.YLength,
+        item.Shape.BoundBox.ZLength,
+    )
+    axes = {
+        "+x": App.Vector(1, 0, 0), "-x": App.Vector(-1, 0, 0),
+        "+y": App.Vector(0, 1, 0), "-y": App.Vector(0, -1, 0),
+        "+z": App.Vector(0, 0, 1), "-z": App.Vector(0, 0, -1),
+    }
+    blocked = {}
+    for label, axis in axes.items():
+        hit = False
+        for step in range(1, int(probe_steps) + 1):
+            moved = item.Shape.copy()
+            distance = travel * step / float(probe_steps)
+            moved.translate(App.Vector(axis.x * distance, axis.y * distance,
+                                       axis.z * distance))
+            if any(moved.common(obj.Shape).Volume > tolerance ** 3
+                   for obj in retainer_objects):
+                hit = True
+                break
+        blocked[label] = hit
+
+    return {
+        "container": container, "insert": insert,
+        "contained": contained and clearance["contained"],
+        "clearance_mm": clearance,
+        "interference_mm3": interference,
+        "blocked_translation": blocked,
+        "unrestrained_translation": [
+            direction for direction, is_blocked in blocked.items()
+            if not is_blocked
+        ],
+        "method": "exact overlap with sampled translational paths",
+    }
+
+
+def _safe_filename(value):
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._")
+    return cleaned or "component"
+
+
+def _file_result(path, fmt, output=None):
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return {
+        "path": path, "format": fmt, "output": output,
+        "bytes": os.path.getsize(path), "sha256": digest.hexdigest(),
+    }
+
+
+def op_export_bundle(component_id, directory, formats=None, per_output=True,
+                     assembly=True, overwrite=True, basename=None):
+    doc, container, meta = _resolve(component_id)
+    os.makedirs(directory, exist_ok=True)
+    formats = [str(fmt).upper() for fmt in (formats or ["FCSTD", "STEP", "STL"])]
+    base = _safe_filename(basename or container.Label or container.Name)
+    output_ids = list(meta.get("outputs") or [
+        f["id"] for f in meta.get("build_graph", [])
+        if f.get("role", "output") == "output"
+    ])
+    ext = {"FCSTD": "FCStd", "STEP": "step", "STP": "step",
+           "STL": "stl", "IGES": "iges", "IGS": "iges",
+           "BREP": "brep", "BRP": "brep"}
+    artifacts = []
+
+    def ensure(path):
+        if os.path.exists(path) and not overwrite:
+            raise ValueError("export exists and overwrite=false: %s" % path)
+
+    if assembly:
+        for fmt in formats:
+            suffix = ext.get(fmt)
+            if suffix is None:
+                raise ValueError("unsupported format %r" % fmt)
+            path = os.path.join(directory, "%s.%s" % (base, suffix))
+            ensure(path)
+            op_export_component(component_id, path, fmt)
+            artifacts.append(_file_result(path, fmt, "assembly"))
+
+    if per_output:
+        import Part
+        for fid in output_ids:
+            obj = doc.getObject(meta.get("id_map", {}).get(fid, ""))
+            if obj is None or not getattr(obj, "Shape", None):
+                continue
+            for fmt in formats:
+                if fmt == "FCSTD":
+                    continue
+                suffix = ext.get(fmt)
+                path = os.path.join(
+                    directory, "%s_%s.%s" % (base, _safe_filename(fid), suffix)
+                )
+                ensure(path)
+                if fmt == "STL":
+                    obj.Shape.exportStl(path)
+                else:
+                    Part.export([obj], path)
+                artifacts.append(_file_result(path, fmt, fid))
+    return {"component_id": component_id, "artifacts": artifacts}
+
+
+def op_build_component(document, component, validate=None, exports=None):
+    """Create, define, optionally validate, and export a component atomically by stage."""
+    document_spec = document if isinstance(document, dict) else {"name": document}
+    name = document_spec["name"]
+    if document_spec.get("replace") and name in App.listDocuments():
+        App.closeDocument(name)
+    created = op_create_component(
+        name, component["name"], component.get("label"),
+        component.get("parameters") or [],
+    )
+    component_id = created["component_id"]
+    defined = op_define_component(
+        component_id, component.get("features") or [],
+        component.get("rules"), component.get("profiles"),
+    )
+    result = {
+        "component_id": component_id,
+        "created": created, "defined": defined,
+    }
+    if component.get("outputs"):
+        doc, container, meta = _resolve(component_id)
+        meta["outputs"] = list(component["outputs"])
+        _save(container, meta)
+    if validate is not None:
+        spec = validate if isinstance(validate, dict) else {}
+        result["validation"] = op_validate_component(
+            component_id, profiles=spec.get("profiles"),
+            rule_ids=spec.get("rule_ids"),
+            include_measurements=spec.get("include_measurements", False),
+            tolerance=spec.get("tolerance"),
+        )
+    if exports:
+        result["exports"] = op_export_bundle(component_id, **exports)
+    return result

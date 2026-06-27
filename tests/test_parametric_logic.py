@@ -121,3 +121,116 @@ def test_create_component_variant_rejects_invalid_overrides(parametric, monkeypa
 
     with pytest.raises(ValueError, match=message):
         parametric.op_create_component_variant("component://Doc/Part", name, values)
+
+
+def test_apply_graph_operations_upserts_removes_and_sets_outputs(parametric):
+    graph = [
+        {"id": "base", "type": "box"},
+        {"id": "hole", "type": "cylinder"},
+        {"id": "body", "type": "cut", "base": "base", "tool": "hole"},
+    ]
+    result = parametric._apply_graph_operations(graph, [
+        {"op": "remove", "id": "body"},
+        {"op": "upsert", "feature": {
+            "id": "base", "type": "box", "size": {"x": "20 mm"},
+        }},
+        {"op": "upsert", "feature": {
+            "id": "cap", "type": "box", "role": "output",
+        }},
+        {"op": "set_output", "ids": ["base", "cap"]},
+    ], outputs=["body"])
+
+    assert result["added"] == ["cap"]
+    assert result["changed"] == ["base"]
+    assert result["removed"] == ["body"]
+    assert result["outputs"] == ["base", "cap"]
+    assert [f["id"] for f in result["graph"]] == ["base", "hole", "cap"]
+
+
+def test_apply_graph_operations_rejects_dangling_reference(parametric):
+    with pytest.raises(ValueError, match="missing inputs"):
+        parametric._apply_graph_operations([
+            {"id": "body", "type": "cut", "base": "base", "tool": "hole"},
+        ], [{"op": "upsert", "feature": {"id": "base", "type": "box"}}])
+
+
+def test_patch_component_rejects_stale_revision_without_building(parametric, monkeypatch):
+    meta = {"revision": 4, "build_graph": [], "outputs": []}
+    monkeypatch.setattr(
+        parametric, "_resolve",
+        lambda component_id: (object(), object(), meta),
+    )
+    with pytest.raises(ValueError, match="STALE_COMPONENT_REVISION"):
+        parametric.op_patch_component(
+            "component://Doc/Part", [], expected_revision=3
+        )
+
+
+def test_lego_stud_grid_pattern_expands_to_seed_and_grid(parametric):
+    from patterns import expand_patterns
+    features = expand_patterns([{
+        "id": "studs", "type": "pattern", "pattern": "lego.stud_grid",
+        "parameters": {
+            "count_x": 4, "count_y": 4, "pitch": "8 mm",
+            "diameter": "4.8 mm", "height": "1.8 mm",
+            "origin": {"x": "3.9 mm", "y": "3.9 mm", "z": "28.8 mm"},
+        },
+    }])
+    assert [f["id"] for f in features] == ["studs__seed", "studs"]
+    assert features[1]["type"] == "grid_array"
+    assert features[1]["count_x"] == 4 and features[1]["count_y"] == 4
+
+
+def test_lego_underside_pattern_contains_tubes_and_raised_ribs(parametric):
+    from patterns import expand_patterns
+    features = expand_patterns([{
+        "id": "underside", "type": "pattern",
+        "pattern": "lego.brick_underside",
+        "parameters": {
+            "base": "shell", "width": "31.8 mm", "length": "31.8 mm",
+            "wall": "1.5 mm", "depth": "2.7 mm",
+            "tube_od": "6.5 mm", "tube_id": "4.85 mm",
+            "pitch": "8 mm", "count_x": 4, "count_y": 4,
+        },
+    }])
+    by_id = {f["id"]: f for f in features}
+    assert by_id["underside__tube_seed"]["type"] == "tube"
+    assert by_id["underside__tubes"]["count_x"] == 3
+    assert by_id["underside__h_ribs"]["type"] == "grid_array"
+    assert by_id["underside__v_ribs"]["type"] == "grid_array"
+    assert by_id["underside"]["tags"] == ["lego_underside"]
+
+
+def test_bbox_clearances_report_containment_and_minimum(parametric):
+    result = parametric._bbox_clearances(
+        (0, 0, 0, 20, 30, 10),
+        (2, 3, 1, 18, 25, 9),
+    )
+    assert result["contained"] is True
+    assert result["minimum"] == 1
+    assert result["directions"]["+y"] == 5
+
+
+def test_bbox_clearances_report_escape(parametric):
+    result = parametric._bbox_clearances(
+        (0, 0, 0, 10, 10, 10),
+        (-1, 1, 1, 9, 9, 9),
+    )
+    assert result["contained"] is False
+    assert result["directions"]["-x"] == -1
+
+
+def test_fdm_profile_expands_manufacturing_checks(parametric):
+    import design_rules
+    ctx = {
+        "params": {"wall_thickness": {"kind": "input"}},
+        "features": {}, "graph": [],
+    }
+    version, rules = design_rules.expand_profile("fdm", ctx, {
+        "min_wall_thickness": "1.2 mm",
+        "nozzle_diameter": "0.6 mm",
+    })
+    assert version == 1
+    assert any(r["id"] == "fdm_min_wall:wall_thickness" and
+               r["minimum"] == "1.2 mm" for r in rules)
+    assert any("0.6 mm" in r.get("message", "") for r in rules)

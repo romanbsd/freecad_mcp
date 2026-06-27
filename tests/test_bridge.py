@@ -38,7 +38,30 @@ def test_get_screenshot_reports_error():
         raise AssertionError("expected RuntimeError on error envelope")
 
 
+def test_native_result_is_unwrapped_without_json_string():
+    async def fake(cmd):
+        return {"status": "success", "result": {"objects": [{"name": "Box"}]}}
+    fb.send_to_freecad = fake
+    result = asyncio.run(fb.list_objects())
+    assert result == {"objects": [{"name": "Box"}]}
+    assert not isinstance(result, str)
+
+
+def test_handler_error_inside_success_envelope_is_raised():
+    async def fake(cmd):
+        return {"status": "success", "result": {"error": "no active document"}}
+    fb.send_to_freecad = fake
+    try:
+        asyncio.run(fb.list_objects())
+    except RuntimeError as e:
+        assert "no active document" in str(e)
+    else:
+        raise AssertionError("expected nested handler error to be raised")
+
+
 if __name__ == "__main__":
     test_get_screenshot_unwraps_envelope()
     test_get_screenshot_reports_error()
+    test_native_result_is_unwrapped_without_json_string()
+    test_handler_error_inside_success_envelope_is_raised()
     print("OK: get_screenshot unwraps the result envelope and surfaces errors")
