@@ -2,6 +2,7 @@ import base64
 import contextlib
 import io
 import json
+import math
 import os
 import socket
 import tempfile
@@ -30,6 +31,19 @@ def error_response(code, message, recoverable=False):
     }
 
 
+def _fit_dims(width, height, max_dim):
+    """Scale (width, height) down so the larger side is <= max_dim, keeping
+    aspect ratio. No-op when max_dim is falsy or the image already fits."""
+    w, h = int(width), int(height)
+    if not max_dim:
+        return w, h
+    longest = max(w, h)
+    if longest <= max_dim:
+        return w, h
+    scale = max_dim / longest
+    return max(1, round(w * scale)), max(1, round(h * scale))
+
+
 class FreeCADMCPServer:
     MAX_MESSAGE = 64 * 1024 * 1024  # 64 MiB frame guard
     # Actionable errors so an agent that calls a tool before anything exists
@@ -45,6 +59,10 @@ class FreeCADMCPServer:
         self.client = None
         self.buffer = b""
         self.timer = None
+        # Persistent globals for `execute`, reused across calls so params and
+        # helpers defined once stay available. `doc` is re-bound every call;
+        # `result` is popped per-call. Pass reset=True to clear.
+        self._ns = {}
 
     def start(self):
         self.running = True
@@ -181,6 +199,8 @@ class FreeCADMCPServer:
                 "get_selection": self.handle_get_selection,
                 "set_selection": self.handle_set_selection,
                 "get_subelements": self.handle_get_subelements,
+                "transform": self.handle_transform,
+                "fillet": self.handle_fillet,
             }
             handlers.update(self._component_handlers())
 
@@ -209,14 +229,16 @@ class FreeCADMCPServer:
             traceback.print_exc()
             return error_response("COMMAND_DISPATCH_FAILED", str(e))
 
-    def handle_execute(self, code, return_context=False, recompute=True):
+    def handle_execute(self, code, return_context=False, recompute=True, reset=False):
         """Execute Python in the FreeCAD context and report back.
 
-        Namespace: App, Gui, doc (the active document). The script can return
-        data two ways, both captured: assign to `result`, or print(). Runs
-        inside an undo transaction so the whole action reverts as one Ctrl-Z;
-        recomputes afterwards unless recompute=False. With return_context=True
-        the document/object/view summary is appended.
+        Namespace: App, Gui, doc (the active document). Variables persist across
+        calls (define params/helpers once, reuse later); `doc` is re-bound every
+        call and `result` is per-call. Pass reset=True to clear persisted state.
+        The script can return data two ways, both captured: assign to `result`,
+        or print(). Runs inside an undo transaction so the whole action reverts
+        as one Ctrl-Z; recomputes afterwards unless recompute=False. With
+        return_context=True the document/object/view summary is appended.
         """
         doc = App.ActiveDocument
         out = io.StringIO()
@@ -224,7 +246,12 @@ class FreeCADMCPServer:
         if doc:
             doc.openTransaction("MCP execute")
         try:
-            ns = {"App": App, "Gui": Gui, "doc": doc}
+            if reset:
+                self._ns.clear()
+            ns = self._ns
+            # Always refresh the live bindings; user vars from prior calls stay.
+            ns.update({"App": App, "Gui": Gui, "doc": doc})
+            ns.pop("result", None)  # don't let a prior call's result leak through
             with contextlib.redirect_stdout(out):
                 exec(code, ns)
 
@@ -272,15 +299,19 @@ class FreeCADMCPServer:
 
     def handle_get_screenshot(self, width=1024, height=768, view="iso", fit=True,
                               targets=None, transparent=None, temporary=True,
-                              camera=None, views=None):
+                              camera=None, views=None, max_dim=None, wireframe=False):
         """Orient the camera, optionally fit, and return the view as a PNG.
 
         view: one of STANDARD_VIEWS, or "current" to leave the camera as-is.
         fit:  zoom to fit all visible geometry before capturing.
+        max_dim: cap the longest image side (scales width/height down, keeps
+                 aspect) — cheaper images for quick shape checks.
+        wireframe: render edges only (much smaller PNG); restored afterwards.
         """
         if not (Gui.ActiveDocument and Gui.ActiveDocument.ActiveView):
             raise MCPCommandError("NO_ACTIVE_VIEW", self.NO_VIEW, recoverable=True)
         v = Gui.ActiveDocument.ActiveView
+        width, height = _fit_dims(width, height, max_dim)
 
         orient = {
             "iso": v.viewIsometric, "front": v.viewFront, "rear": v.viewRear,
@@ -298,6 +329,7 @@ class FreeCADMCPServer:
         }
         old_camera = v.getCameraOrientation()
         temp_files = []
+        display_state = {}  # objects whose DisplayMode we override for wireframe
 
         def _tempfile():
             # Unique per call: fixed names in the temp dir collided between
@@ -322,6 +354,15 @@ class FreeCADMCPServer:
                 obj.ViewObject.Visibility = True
                 if hasattr(obj.ViewObject, "Transparency"):
                     obj.ViewObject.Transparency = 70
+            if wireframe:
+                for obj in objects:
+                    vo = getattr(obj, "ViewObject", None)
+                    if vo is not None and hasattr(vo, "DisplayMode"):
+                        try:
+                            display_state[obj.Name] = vo.DisplayMode
+                            vo.DisplayMode = "Wireframe"
+                        except Exception:
+                            pass
 
             def orient_camera(requested_view):
                 if camera and camera.get("quaternion"):
@@ -428,6 +469,15 @@ class FreeCADMCPServer:
                     os.unlink(p)
                 except OSError:
                     pass
+            # wireframe is a capture-only override -> always restore it
+            for name, mode in display_state.items():
+                obj = doc.getObject(name) if doc else None
+                vo = getattr(obj, "ViewObject", None) if obj else None
+                if vo is not None:
+                    try:
+                        vo.DisplayMode = mode
+                    except Exception:
+                        pass
             if temporary:
                 for obj in objects:
                     previous = state.get(obj.Name)
@@ -450,6 +500,90 @@ class FreeCADMCPServer:
             except Exception:
                 pass
         return errs
+
+    def handle_transform(self, object=None, translate=None, rotate=None,
+                         center=None, relative=True, copy_to=None):
+        """Move/rotate a named object via its Placement (no execute needed).
+
+        translate: [dx,dy,dz]. rotate: {"axis":[x,y,z], "angle":deg}. center:
+        rotation pivot. relative=True composes a delta onto the current
+        placement; False sets it absolutely. copy_to operates on a named copy.
+        """
+        doc = App.ActiveDocument
+        if not doc:
+            raise MCPCommandError("NO_DOCUMENT", "no active document", recoverable=True)
+        src = doc.getObject(object) if object else None
+        if src is None:
+            raise MCPCommandError("UNKNOWN_OBJECT", f"no object {object!r}", recoverable=True)
+        target = src
+        if copy_to:
+            target = doc.addObject("Part::Feature", copy_to)
+            target.Shape = src.Shape
+            target.Placement = src.Placement
+        base = App.Vector(*(translate or (0, 0, 0)))
+        if rotate:
+            axis = App.Vector(*rotate.get("axis", (0, 0, 1)))
+            rot = App.Rotation(axis, float(rotate.get("angle", 0)))
+        else:
+            rot = App.Rotation()
+        ctr = App.Vector(*(center or (0, 0, 0)))
+        delta = App.Placement(base, rot, ctr)
+        target.Placement = delta.multiply(target.Placement) if relative else delta
+        doc.recompute()
+        pl = target.Placement
+        return {
+            "object": target.Name,
+            "position": [pl.Base.x, pl.Base.y, pl.Base.z],
+            "axis": [pl.Rotation.Axis.x, pl.Rotation.Axis.y, pl.Rotation.Axis.z],
+            "angle_deg": math.degrees(pl.Rotation.Angle),
+        }
+
+    def handle_fillet(self, object=None, edges=None, radius=1.0, chamfer=False,
+                      copy_to=None):
+        """Fillet (round) or chamfer edges of a named object by edge index.
+
+        edges: list of 1-based indices (or "EdgeN" strings) from
+        get_subelements. chamfer=True does a same-size chamfer. copy_to writes
+        the result to a new object; otherwise the object is modified in place
+        (works on Part::Feature solids; a parametric primitive reverts on
+        recompute).
+        """
+        doc = App.ActiveDocument
+        if not doc:
+            raise MCPCommandError("NO_DOCUMENT", "no active document", recoverable=True)
+        src = doc.getObject(object) if object else None
+        if src is None:
+            raise MCPCommandError("UNKNOWN_OBJECT", f"no object {object!r}", recoverable=True)
+        shape = src.Shape
+        n = len(shape.Edges)
+        idx = []
+        for e in (edges or []):
+            if isinstance(e, str):
+                e = e.lower().replace("edge", "").strip()
+            e = int(e)
+            if e < 1 or e > n:
+                raise MCPCommandError("BAD_EDGE", f"edge {e} out of range 1..{n}",
+                                      recoverable=True)
+            idx.append(e)
+        if not idx:
+            raise MCPCommandError("NO_EDGES", "no edges given", recoverable=True)
+        edge_objs = [shape.Edges[i - 1] for i in idx]
+        r = float(radius)
+        new_shape = (shape.makeChamfer(r, edge_objs) if chamfer
+                     else shape.makeFillet(r, edge_objs))
+        target = src
+        if copy_to:
+            target = doc.addObject("Part::Feature", copy_to)
+        target.Shape = new_shape
+        doc.recompute()
+        return {
+            "object": target.Name,
+            "operation": "chamfer" if chamfer else "fillet",
+            "radius": r,
+            "edges": idx,
+            "faces": len(new_shape.Faces),
+            "edges_total": len(new_shape.Edges),
+        }
 
     def handle_list_objects(self):
         """Cheap overview: name/label/type for every object."""
@@ -632,12 +766,21 @@ class FreeCADMCPServer:
         # distToShape -> (distance, [(pntA, pntB), ...], [topo info])
         dist, pairs, _ = oa.Shape.distToShape(ob.Shape)
         p = pairs[0] if pairs else None
+        # Overlap volume: 0 means they only touch/are apart; >0 means they
+        # interfere (penetrate). Lets a caller verify a fit in one call instead
+        # of building a probe solid and computing .common() by hand.
+        try:
+            overlap = float(oa.Shape.common(ob.Shape).Volume)
+        except Exception:
+            overlap = None
         return {
             "from_object": a,
             "to_object": b,
             "distance": float(dist),
             "from_point": [p[0].x, p[0].y, p[0].z] if p else None,
             "to_point": [p[1].x, p[1].y, p[1].z] if p else None,
+            "overlap_volume": overlap,
+            "clash": (overlap is not None and overlap > 1e-6),
         }
 
     def handle_get_selection(self):

@@ -84,12 +84,17 @@ async def _request(command: Dict[str, Any]) -> Any:
 
 
 @mcp.tool()
-async def execute(code: str, return_context: bool = False) -> Any:
+async def execute(code: str, return_context: bool = False, reset: bool = False) -> Any:
     """Execute Python inside the running FreeCAD instance.
 
     Namespace already bound: `App` (FreeCAD), `Gui` (FreeCADGui), `doc` (the
     active document, may be None — `doc = App.ActiveDocument or App.newDocument()`).
     Import `Part` / `Sketcher` / `Draft` yourself as needed.
+
+    Variables persist across calls — define parameters/helpers once in an early
+    call and reference them later instead of re-declaring them (saves tokens and
+    avoids copy-paste drift). `doc` is re-bound each call; `result` is per-call.
+    Pass reset=True to clear all persisted state.
 
     Returning data: assign to `result` or `print()` — both are captured.
     The document is recomputed for you after the call, and the whole call is a
@@ -117,7 +122,7 @@ async def execute(code: str, return_context: bool = False) -> Any:
     """
     return await _request({
         "type": "execute",
-        "params": {"code": code, "return_context": return_context},
+        "params": {"code": code, "return_context": return_context, "reset": reset},
     })
 
 
@@ -175,7 +180,9 @@ async def describe_type(type_id: str) -> Any:
 @mcp.tool()
 async def measure(a: str, b: str = "") -> Any:
     """Measure geometry. With one object: volume, area, center of mass, bbox.
-    With two: the minimum distance between them and the closest points.
+    With two: the minimum distance between them, the closest points, and the
+    overlap volume (overlap_volume>0 / clash=True means they interfere — use
+    this to verify a fit instead of building a probe solid in execute).
 
     Args:
         a: object Name.
@@ -183,6 +190,50 @@ async def measure(a: str, b: str = "") -> Any:
     """
     params = {"a": a, "b": b or None}
     return await _request({"type": "measure", "params": params})
+
+
+@mcp.tool()
+async def transform(
+    object: str, translate: list[float] = None, rotate: dict = None,
+    center: list[float] = None, relative: bool = True, copy_to: str = "",
+) -> Any:
+    """Move/rotate a named object via its Placement — no execute script needed.
+
+    Args:
+        object: object Name to move.
+        translate: [dx, dy, dz] in mm.
+        rotate: {"axis": [x,y,z], "angle": degrees}.
+        center: rotation pivot [x,y,z] (default origin).
+        relative: True composes a delta onto the current placement (a "move
+            by"); False sets the placement absolutely.
+        copy_to: if set, leave the original and apply to a named copy.
+    """
+    return await _request({"type": "transform", "params": {
+        "object": object, "translate": translate, "rotate": rotate,
+        "center": center, "relative": relative, "copy_to": copy_to or None}})
+
+
+@mcp.tool()
+async def fillet(
+    object: str, edges: list[int], radius: float,
+    chamfer: bool = False, copy_to: str = "",
+) -> Any:
+    """Fillet (round) or chamfer edges of a named object by edge index.
+
+    Pairs with get_subelements: pass the 1-based Edge indices it reports.
+
+    Args:
+        object: object Name.
+        edges: 1-based edge indices (or "EdgeN" strings).
+        radius: fillet radius / chamfer size in mm.
+        chamfer: True for a chamfer instead of a round.
+        copy_to: write the result to a new object, keeping the original;
+            otherwise the object is modified in place (Part::Feature solids; a
+            parametric primitive would revert on recompute).
+    """
+    return await _request({"type": "fillet", "params": {
+        "object": object, "edges": edges, "radius": radius,
+        "chamfer": chamfer, "copy_to": copy_to or None}})
 
 
 @mcp.tool()
@@ -224,6 +275,7 @@ async def get_screenshot(
     width: int = 1024, height: int = 768, view: str = "iso", fit: bool = True,
     targets: list[str] = None, transparent: list[str] = None,
     temporary: bool = True, camera: dict = None, views: list[str] = None,
+    max_dim: int = None, wireframe: bool = False,
 ) -> Image:
     """Capture the active FreeCAD 3D view as a PNG so you can see the model.
 
@@ -232,13 +284,17 @@ async def get_screenshot(
         view: camera orientation before capture — one of iso, front, rear,
             top, bottom, left, right, or "current" to leave the camera as-is.
         fit: zoom to fit all visible geometry before capturing (default True).
+        max_dim: cap the longest image side (keeps aspect) for cheaper images
+            on quick shape checks.
+        wireframe: render edges only — a much smaller PNG; restored afterwards.
     """
     inner = await _request({
         "type": "get_screenshot",
         "params": {"width": width, "height": height, "view": view, "fit": fit,
                    "targets": targets or [], "transparent": transparent or [],
                    "temporary": temporary, "camera": camera,
-                   "views": views or []},
+                   "views": views or [], "max_dim": max_dim,
+                   "wireframe": wireframe},
     })
     if not isinstance(inner, dict) or "image_base64" not in inner:
         raise RuntimeError("screenshot failed")
