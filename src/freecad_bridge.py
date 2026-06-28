@@ -134,14 +134,17 @@ async def list_objects() -> Any:
 
 
 @mcp.tool()
-async def get_object(name: str) -> Any:
-    """Full detail for one object: all properties, validity/state, and shape
-    bounding box + topology counts (verts/edges/faces/solids) when present.
+async def get_object(name: str, compact: bool = False) -> Any:
+    """Detail for one object: validity/state and shape bbox + topology counts
+    (verts/edges/faces/solids) when present.
 
     Args:
         name: the object's Name (unique id), as shown by list_objects.
+        compact: omit the full property dump (smaller — when you only need
+            identity + shape summary).
     """
-    return await _request({"type": "get_object", "params": {"name": name}})
+    return await _request({"type": "get_object",
+                           "params": {"name": name, "compact": compact}})
 
 
 @mcp.tool()
@@ -234,6 +237,60 @@ async def fillet(
     return await _request({"type": "fillet", "params": {
         "object": object, "edges": edges, "radius": radius,
         "chamfer": chamfer, "copy_to": copy_to or None}})
+
+
+@mcp.tool()
+async def boolean(
+    op: str, objects: list[str], name: str = "", keep: bool = False,
+) -> Any:
+    """Boolean cut/fuse/common on named objects -> one new object.
+
+    Args:
+        op: "cut" (first minus the rest), "fuse" (union), or "common"
+            (intersection).
+        objects: >=2 object Names.
+        name: result object name (default <first>_<op>).
+        keep: keep the input objects (default removes them).
+    """
+    return await _request({"type": "boolean", "params": {
+        "op": op, "objects": objects, "name": name or None, "keep": keep}})
+
+
+@mcp.tool()
+async def duplicate(
+    object: str, count: int = 1, translate: list[float] = None,
+    rotate: dict = None, center: list[float] = None, name: str = "",
+    combine: str = "",
+) -> Any:
+    """Copy a named object, optionally as a linear/polar array.
+
+    Args:
+        object: object Name to copy.
+        count: number of copies.
+        translate: per-step offset [dx,dy,dz] (linear array).
+        rotate: per-step {"axis":[x,y,z],"angle":deg} about center (polar array).
+        center: rotation pivot [x,y,z].
+        name: base name for the copies.
+        combine: "" -> separate objects; "compound" or "fuse" -> one object.
+    """
+    return await _request({"type": "duplicate", "params": {
+        "object": object, "count": count, "translate": translate,
+        "rotate": rotate, "center": center, "name": name or None,
+        "combine": combine or None}})
+
+
+@mcp.tool()
+async def set_property(object: str, properties: dict) -> Any:
+    """Set data properties on a named object, then recompute. Good for tweaking
+    parametric primitives (e.g. {"Length": 30} on a Part::Box). Scalars,
+    strings, bools and enums work directly; complex types need execute.
+
+    Args:
+        object: object Name.
+        properties: {property_name: value, ...}.
+    """
+    return await _request({"type": "set_property", "params": {
+        "object": object, "properties": properties}})
 
 
 @mcp.tool()

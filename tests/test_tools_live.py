@@ -67,8 +67,45 @@ doc.recompute()
     wf = call("get_screenshot", width=400, height=300, wireframe=True, view="iso")
     assert wf["image_base64"], wf
 
+    # mcp helper prelude (persists in the execute namespace)
+    p = call("execute", code="result = [mcp.add('P', mcp.box(5,5,5)).Name, len(mcp.grid(2,2,8))]")
+    assert p.get("result") == ["P", 4], p
+
+    # boolean fuse of two overlapping boxes -> one solid
+    call("execute", code="""
+import Part, FreeCAD as App
+doc = App.ActiveDocument
+u = doc.addObject('Part::Feature','U'); u.Shape = Part.makeBox(10,10,10)
+v = doc.addObject('Part::Feature','V'); v.Shape = Part.makeBox(10,10,10, App.Vector(5,0,0))
+doc.recompute()
+""")
+    bo = call("boolean", op="fuse", objects=["U", "V"], name="UV")
+    assert bo["object"] == "UV" and bo["solids"] == 1, bo
+    assert abs(bo["volume"] - 1500.0) < 1e-3, bo          # 10x10x10 + 5x10x10 overlap
+
+    # duplicate as a linear array -> 3 separate objects
+    call("execute", code="""
+import Part, FreeCAD as App
+doc = App.ActiveDocument
+a = doc.addObject('Part::Feature','Arr'); a.Shape = Part.makeBox(4,4,4)
+doc.recompute()
+""")
+    du = call("duplicate", object="Arr", count=3, translate=[8, 0, 0])
+    assert du["count"] == 3 and len(du["created"]) == 3, du
+
+    # set_property on a parametric Part::Box, verified via measure bbox
+    call("execute", code="import FreeCAD as App; App.ActiveDocument.addObject('Part::Box','PB'); App.ActiveDocument.recompute()")
+    call("set_property", object="PB", properties={"Length": 30})
+    m = call("measure", a="PB")
+    assert abs(m["bbox_size"][0] - 30.0) < 1e-6, m
+
+    # compact get_object omits the property dump
+    go = call("get_object", name="PB", compact=True)
+    assert "properties" not in go and go["name"] == "PB", go
+
     call("execute", code="import FreeCAD as App; App.closeDocument('ToolsTest')")
-    print("PASS: transform / fillet / screenshot max_dim+wireframe")
+    print("PASS: transform / fillet / screenshot / boolean / duplicate / "
+          "set_property / get_object compact / mcp prelude")
 
 
 if __name__ == "__main__":

@@ -445,6 +445,14 @@ get_screenshot(
 
 The returned image width is the tile width multiplied by the number of views.
 
+For cheaper images on quick shape checks, cap the longest side with `max_dim`
+and/or render edges only with `wireframe=true` (the draw style is restored after
+capture):
+
+```text
+get_screenshot(view="iso", max_dim=400, wireframe=true)
+```
+
 ## Export bundles
 
 ```text
@@ -463,11 +471,51 @@ export_bundle(
 also be emitted per output. Results include paths, byte sizes, and SHA-256
 hashes.
 
+## Direct object tools (no `execute` needed)
+
+By-name mutation tools that avoid writing a script for common edits. They pair
+with the read tools (`list_objects`, `get_object`, `get_subelements`):
+
+- `transform(object, translate=[dx,dy,dz], rotate={"axis":[..],"angle":deg},
+  center, relative=true, copy_to)` — move/rotate via `Placement`;
+  `relative=true` is a "move by", `copy_to` operates on a named copy.
+- `fillet(object, edges, radius, chamfer=false, copy_to)` — round/chamfer edges
+  by the 1-based indices from `get_subelements`.
+- `boolean(op, objects, name, keep=false)` — `cut`/`fuse`/`common` on named
+  objects into one new object.
+- `duplicate(object, count, translate, rotate, center, name, combine)` — copy or
+  linear (`translate`) / polar (`rotate`+`center`) array; `combine` =
+  `"compound"`/`"fuse"` for one object, else separate objects.
+- `set_property(object, properties={...})` — set data props (e.g. a `Part::Box`
+  `Length`) and recompute; ideal for iterating parametric primitives.
+- `measure(a, b)` — also returns `overlap_volume` / `clash`, so a fit check is
+  one call (no probe-solid script).
+- `get_object(name, compact=true)` — identity + shape summary without the full
+  property dump.
+- `get_screenshot(..., max_dim=N, wireframe=true)` — cap the longest side and/or
+  render edges-only for cheaper images.
+
 ## Raw `execute` fallback
 
-The execution namespace already contains `App`, `Gui`, and `doc`. Import other
-modules explicitly. Each call is one undo transaction and recomputes the
-document automatically.
+The execution namespace contains `App`, `Gui`, `doc`, and `mcp` (helpers below).
+Import other modules explicitly. Each call is one undo transaction and recomputes
+automatically.
+
+Variables persist across `execute` calls — define parameters and helpers once,
+then reference them later instead of re-declaring (saves tokens, avoids drift).
+Pass `reset=true` to clear the namespace.
+
+`mcp` provides small generic helpers: `mcp.add(name, shape)` (idempotent
+get-or-create `Part::Feature` + assign `Shape`), `mcp.fuse(shapes)`,
+`mcp.cut(base, *tools)`, `mcp.common(shapes)`, `mcp.grid(nx, ny, pitch, inset)`,
+and `mcp.box`/`mcp.cyl`/`mcp.vec` (= `Part.makeBox`/`makeCylinder`/`App.Vector`).
+
+```python
+# params defined in an earlier call are still here; mcp.add replaces the
+# get-or-create + .Shape boilerplate
+body = mcp.cut(mcp.box(32, 24, 10), mcp.cyl(3, 12, mcp.vec(16, 12, -1)))
+mcp.add("Plate", body)
+```
 
 ```python
 import Part
@@ -515,7 +563,7 @@ pad.Length = 5
 ### Target edges by inspection
 
 Use `get_subelements` to retrieve stable geometric information before applying
-an index-based fillet:
+an index-based fillet (or just call the `fillet` tool, which does this directly):
 
 ```python
 fillet = doc.addObject("Part::Fillet", "Fillet")

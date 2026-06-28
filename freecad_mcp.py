@@ -44,6 +44,15 @@ def _fit_dims(width, height, max_dim):
     return max(1, round(w * scale)), max(1, round(h * scale))
 
 
+def _grid(nx, ny, pitch, inset=None):
+    """Centers of an nx-by-ny grid at `pitch` spacing, first at `inset` (default
+    half-pitch). Returns [(x, y), ...] — handy for stud/hole patterns."""
+    if inset is None:
+        inset = pitch / 2.0
+    return [(inset + i * pitch, inset + j * pitch)
+            for i in range(int(nx)) for j in range(int(ny))]
+
+
 class FreeCADMCPServer:
     MAX_MESSAGE = 64 * 1024 * 1024  # 64 MiB frame guard
     # Actionable errors so an agent that calls a tool before anything exists
@@ -201,6 +210,9 @@ class FreeCADMCPServer:
                 "get_subelements": self.handle_get_subelements,
                 "transform": self.handle_transform,
                 "fillet": self.handle_fillet,
+                "boolean": self.handle_boolean,
+                "duplicate": self.handle_duplicate,
+                "set_property": self.handle_set_property,
             }
             handlers.update(self._component_handlers())
 
@@ -229,6 +241,44 @@ class FreeCADMCPServer:
             traceback.print_exc()
             return error_response("COMMAND_DISPATCH_FAILED", str(e))
 
+    def _mcp_ns(self):
+        """Tiny generic helper namespace seeded into `execute` (cached). Removes
+        the get-or-create + boolean + grid boilerplate; NOT a domain library."""
+        cached = getattr(self, "_mcp_helpers", None)
+        if cached is not None:
+            return cached
+        import Part
+        from types import SimpleNamespace
+
+        def add(name, shape):
+            """Idempotent get-or-create Part::Feature, assign Shape, return it."""
+            doc = App.ActiveDocument or App.newDocument()
+            o = doc.getObject(name) or doc.addObject("Part::Feature", name)
+            o.Shape = shape
+            return o
+
+        def fuse(shapes):
+            shapes = list(shapes)
+            return shapes[0].multiFuse(shapes[1:]) if len(shapes) > 1 else shapes[0]
+
+        def cut(base, *tools):
+            for t in tools:
+                base = base.cut(t)
+            return base
+
+        def common(shapes):
+            shapes = list(shapes)
+            r = shapes[0]
+            for s in shapes[1:]:
+                r = r.common(s)
+            return r
+
+        self._mcp_helpers = SimpleNamespace(
+            add=add, fuse=fuse, cut=cut, common=common, grid=_grid,
+            box=Part.makeBox, cyl=Part.makeCylinder, vec=App.Vector,
+        )
+        return self._mcp_helpers
+
     def handle_execute(self, code, return_context=False, recompute=True, reset=False):
         """Execute Python in the FreeCAD context and report back.
 
@@ -251,6 +301,10 @@ class FreeCADMCPServer:
             ns = self._ns
             # Always refresh the live bindings; user vars from prior calls stay.
             ns.update({"App": App, "Gui": Gui, "doc": doc})
+            try:
+                ns["mcp"] = self._mcp_ns()  # generic helpers (no-op if Part absent)
+            except Exception:
+                pass
             ns.pop("result", None)  # don't let a prior call's result leak through
             with contextlib.redirect_stdout(out):
                 exec(code, ns)
@@ -585,6 +639,128 @@ class FreeCADMCPServer:
             "edges_total": len(new_shape.Edges),
         }
 
+    def handle_boolean(self, op=None, objects=None, name=None, keep=False):
+        """Boolean cut/fuse/common on named objects -> one new Part::Feature.
+
+        op: "cut" (first minus the rest), "fuse" (union), or "common"
+        (intersection). objects: >=2 names. name: result name (default
+        <first>_<op>). keep=False removes the inputs.
+        """
+        doc = App.ActiveDocument
+        if not doc:
+            raise MCPCommandError("NO_DOCUMENT", "no active document", recoverable=True)
+        op = (op or "").lower()
+        if op in ("intersect", "intersection"):
+            op = "common"
+        if op not in ("cut", "fuse", "common"):
+            raise MCPCommandError("BAD_ARGS", "op must be cut/fuse/common",
+                                  recoverable=True)
+        names = list(objects or [])
+        if len(names) < 2:
+            raise MCPCommandError("BAD_ARGS", "need >=2 objects", recoverable=True)
+        objs = []
+        for n in names:
+            o = doc.getObject(n)
+            if o is None:
+                raise MCPCommandError("UNKNOWN_OBJECT", f"no object {n!r}",
+                                      recoverable=True)
+            objs.append(o)
+        shapes = [o.Shape for o in objs]
+        r = shapes[0]
+        if op == "fuse":
+            r = r.multiFuse(shapes[1:])
+        elif op == "cut":
+            for s in shapes[1:]:
+                r = r.cut(s)
+        else:
+            for s in shapes[1:]:
+                r = r.common(s)
+        out_name = name or f"{objs[0].Name}_{op}"
+        target = doc.getObject(out_name) or doc.addObject("Part::Feature", out_name)
+        target.Shape = r
+        if not keep:
+            for o in objs:
+                if o.Name != target.Name:
+                    doc.removeObject(o.Name)
+        doc.recompute()
+        return {"object": target.Name, "operation": op, "inputs": names,
+                "solids": len(r.Solids), "volume": round(r.Volume, 3)}
+
+    def handle_duplicate(self, object=None, count=1, translate=None, rotate=None,
+                         center=None, name=None, combine=None):
+        """Copy a named object, optionally as a linear/polar array.
+
+        count copies, each offset cumulatively by translate [dx,dy,dz] and/or
+        rotate {"axis":[x,y,z],"angle":deg} about center -> linear array (just
+        translate), polar array (rotate+center), or a single copy (count=1).
+        combine: None -> separate objects; "compound" or "fuse" -> one object.
+        """
+        import Part
+        doc = App.ActiveDocument
+        if not doc:
+            raise MCPCommandError("NO_DOCUMENT", "no active document", recoverable=True)
+        src = doc.getObject(object) if object else None
+        if src is None:
+            raise MCPCommandError("UNKNOWN_OBJECT", f"no object {object!r}",
+                                  recoverable=True)
+        count = int(count)
+        if count < 1:
+            raise MCPCommandError("BAD_ARGS", "count must be >= 1", recoverable=True)
+        base = App.Vector(*(translate or (0, 0, 0)))
+        if rotate:
+            rot = App.Rotation(App.Vector(*rotate.get("axis", (0, 0, 1))),
+                               float(rotate.get("angle", 0)))
+        else:
+            rot = App.Rotation()
+        delta = App.Placement(base, rot, App.Vector(*(center or (0, 0, 0))))
+        # fully-placed source geometry (bakes the source's own placement in)
+        g = src.Shape.copy()
+        g.Placement = src.Placement.multiply(g.Placement)
+        placed = []
+        acc = App.Placement()
+        for _ in range(count):
+            acc = delta.multiply(acc)            # delta^i
+            s = g.copy()
+            s.Placement = acc.multiply(g.Placement)
+            placed.append(s)
+        base_name = name or f"{src.Name}_copy"
+        if combine in ("compound", "fuse"):
+            shp = (Part.makeCompound(placed) if combine == "compound"
+                   else (placed[0].multiFuse(placed[1:]) if len(placed) > 1
+                         else placed[0]))
+            o = doc.addObject("Part::Feature", base_name)
+            o.Shape = shp
+            made = [o.Name]
+        else:
+            made = []
+            for i, s in enumerate(placed, 1):
+                o = doc.addObject("Part::Feature", f"{base_name}{i}")
+                o.Shape = s
+                made.append(o.Name)
+        doc.recompute()
+        return {"source": src.Name, "count": count, "created": made}
+
+    def handle_set_property(self, object=None, properties=None):
+        """Set data properties on a named object by name, then recompute. Good
+        for tweaking parametric primitives (e.g. a Part::Box Length). Scalars,
+        strings, bools and enums work directly; complex types need execute."""
+        doc = App.ActiveDocument
+        if not doc:
+            raise MCPCommandError("NO_DOCUMENT", "no active document", recoverable=True)
+        obj = doc.getObject(object) if object else None
+        if obj is None:
+            raise MCPCommandError("UNKNOWN_OBJECT", f"no object {object!r}",
+                                  recoverable=True)
+        applied = []
+        for k, v in (properties or {}).items():
+            try:
+                setattr(obj, k, v)
+                applied.append(k)
+            except Exception as e:
+                raise MCPCommandError("SET_FAILED", f"{k}: {e}", recoverable=True)
+        doc.recompute()
+        return {"object": obj.Name, "applied": applied}
+
     def handle_list_objects(self):
         """Cheap overview: name/label/type for every object."""
         doc = App.ActiveDocument
@@ -595,9 +771,10 @@ class FreeCADMCPServer:
             for o in doc.Objects
         ]}
 
-    def handle_get_object(self, name):
-        """Full property dump for one object: all properties, validity/state,
-        and shape bbox/topology when present."""
+    def handle_get_object(self, name, compact=False):
+        """Object detail: validity/state and shape bbox/topology. By default also
+        dumps every property; pass compact=True to omit the property list (much
+        smaller — use when you only need identity + shape summary)."""
         doc = App.ActiveDocument
         if not doc:
             return {"error": self.NO_DOC}
@@ -605,21 +782,21 @@ class FreeCADMCPServer:
         if obj is None:
             return {"error": f"unknown object: {name}"}
 
-        props = {}
-        for p in obj.PropertiesList:
-            try:
-                props[p] = getattr(obj, p)  # default=str stringifies non-JSON values
-            except Exception as e:
-                props[p] = f"<error: {e}>"
-
         info = {
             "name": obj.Name,
             "label": obj.Label,
             "type": obj.TypeId,
             "state": list(obj.State) if hasattr(obj, "State") else None,
             "valid": obj.isValid() if hasattr(obj, "isValid") else None,
-            "properties": props,
         }
+        if not compact:
+            props = {}
+            for p in obj.PropertiesList:
+                try:
+                    props[p] = getattr(obj, p)  # default=str stringifies non-JSON values
+                except Exception as e:
+                    props[p] = f"<error: {e}>"
+            info["properties"] = props
         if hasattr(obj, "Shape"):
             try:
                 s = obj.Shape

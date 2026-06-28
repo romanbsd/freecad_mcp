@@ -54,6 +54,12 @@ def test_fit_dims_scales_down_keeping_aspect(fcmod):
     assert max(w, h) == 200 and (w, h) == (200, 100)
 
 
+def test_grid_centers(fcmod):
+    assert fcmod._grid(1, 1, 8) == [(4.0, 4.0)]            # default inset = half pitch
+    assert fcmod._grid(2, 2, 8, inset=4) == [(4, 4), (4, 12), (12, 4), (12, 12)]
+    assert len(fcmod._grid(4, 3, 8)) == 12
+
+
 def test_variables_persist_across_calls(server):
     assert server.handle_execute("a = 41")["command_result"] == "success"
     r = server.handle_execute("result = a + 1")
