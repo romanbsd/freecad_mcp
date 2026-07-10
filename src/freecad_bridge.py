@@ -376,12 +376,14 @@ async def create_component(document: str, name: str, label: str = "",
 async def define_component(component_id: str, features: list,
                           rules: list = None, profiles: list = None) -> Any:
     """Define (or replace) the component's build graph — a list of features.
-    Feature types: box, cylinder, cone, prism, transform, cut, union,
-    intersection, array, group. Sizes/positions are expressions over $params
+    Feature types include primitives, booleans, arrays, reusable 2D profiles,
+    face-supported pad/pocket operations, edge treatments, and groups.
+    Sizes/positions are expressions over $params
     (with units), e.g. "$width / 2", "$wall_thickness + 2 mm". Booleans/arrays
     reference other features by id. Each feature may set `role`
     (output/construction/tool/inspection) and `tags`. Read
-    freecad://guide/cookbook for shapes.
+    freecad://guide/cookbook for examples and use describe_feature_type for
+    machine-readable fields.
 
     Optional `rules` (declarative design-rule definitions, each with id/type/
     severity/targets/message) and default `profiles` are stored with the

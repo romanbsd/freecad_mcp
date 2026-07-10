@@ -71,7 +71,110 @@ def _profile_point(point, host):
     return [_quantity_value(point[0], host), _quantity_value(point[1], host)]
 
 
-def _plane_vector(plane, u, v):
+def _vector(value):
+    if isinstance(value, dict):
+        return App.Vector(float(value.get("x", 0)), float(value.get("y", 0)),
+                          float(value.get("z", 0)))
+    return App.Vector(float(value[0]), float(value[1]), float(value[2]))
+
+
+def _unit(vector, message="zero-length vector"):
+    if vector.Length <= 1e-12:
+        raise ValueError(message)
+    return vector / vector.Length
+
+
+def _support_feature_id(support, default=None):
+    if isinstance(support, str):
+        return support
+    if isinstance(support, dict):
+        return support.get("feature") or default
+    return default if support else None
+
+
+def _face_normal(face):
+    if getattr(face.Surface, "TypeId", "") != "Part::GeomPlane":
+        raise ValueError("support face is not planar")
+    u0, u1, v0, v1 = face.ParameterRange
+    return _unit(face.normalAt((u0 + u1) / 2, (v0 + v1) / 2),
+                 "support face has no usable normal")
+
+
+def _face_bounds_center(face):
+    bounds = face.BoundBox
+    return App.Vector(
+        (bounds.XMin + bounds.XMax) / 2,
+        (bounds.YMin + bounds.YMax) / 2,
+        (bounds.ZMin + bounds.ZMax) / 2,
+    )
+
+
+def _select_support_face(support_obj, support_spec):
+    faces = support_obj.Shape.Faces
+    selector = support_spec.get("face") or {}
+    face_index = support_spec.get("face_index", selector.get("index"))
+    if face_index is not None:
+        index = int(face_index)
+        if index < 1 or index > len(faces):
+            raise ValueError("support face_index %d is outside 1..%d" %
+                             (index, len(faces)))
+        return faces[index - 1]
+
+    requested = selector.get("normal")
+    axis_selector = False
+    if requested is None and selector.get("axis"):
+        axis_selector = True
+        axis = selector["axis"].lower()
+        sign = -1 if str(selector.get("side", "max")).lower() == "min" else 1
+        requested = {
+            "x": [sign, 0, 0], "y": [0, sign, 0], "z": [0, 0, sign]
+        }.get(axis)
+        if requested is None:
+            raise ValueError("support face axis must be x, y, or z")
+    if requested is None:
+        raise ValueError("support requires face_index or face.normal/face.axis")
+
+    normal = _unit(_vector(requested), "support face normal cannot be zero")
+    min_dot = float(selector.get("min_dot", 0.999))
+    matches = []
+    for face in faces:
+        try:
+            dot = _face_normal(face).dot(normal)
+        except Exception:
+            continue
+        if dot >= min_dot:
+            matches.append(face)
+    if not matches:
+        raise ValueError("support selector matched no planar face")
+    side = str(selector.get("side", "max")).lower()
+    if side not in ("min", "max"):
+        raise ValueError("support face side must be 'min' or 'max'")
+    choose = max if axis_selector else (min if side == "min" else max)
+    return choose(
+        matches, key=lambda face: _face_bounds_center(face).dot(normal)
+    )
+
+
+def _support_frame(support_obj, support_spec, host=None):
+    face = _select_support_face(support_obj, support_spec)
+    normal = _face_normal(face)
+    requested_u = support_spec.get("x_direction")
+    candidate = _vector(requested_u) if requested_u is not None else App.Vector(1, 0, 0)
+    candidate = candidate - normal * candidate.dot(normal)
+    if candidate.Length <= 1e-9 and requested_u is None:
+        candidate = App.Vector(0, 1, 0) - normal * normal.y
+    u_axis = _unit(candidate, "support x_direction is parallel to its face normal")
+    v_axis = _unit(normal.cross(u_axis))
+    origin = _face_bounds_center(face)
+    origin += u_axis * _quantity_value(support_spec.get("u_offset", 0), host)
+    origin += v_axis * _quantity_value(support_spec.get("v_offset", 0), host)
+    origin += normal * _quantity_value(support_spec.get("offset", 0), host)
+    return {"origin": origin, "u": u_axis, "v": v_axis, "normal": normal}
+
+
+def _plane_vector(plane, u, v, frame=None):
+    if frame is not None:
+        return frame["origin"] + frame["u"] * u + frame["v"] * v
     plane = (plane or "XY").upper()
     if plane in ("XY", "YX"):
         return App.Vector(u, v, 0)
@@ -104,7 +207,7 @@ def _normal_axis_for_plane(plane):
     raise ValueError("unknown profile plane %r" % plane)
 
 
-def _rectangle_face(spec, plane, host):
+def _rectangle_face(spec, plane, host, frame=None):
     import Part
     if spec.get("corner") is not None:
         x0, y0 = _profile_point(spec["corner"], host)
@@ -118,35 +221,37 @@ def _rectangle_face(spec, plane, host):
     else:
         x1, y1 = _profile_point(spec["opposite"], host)
     pts = [
-        _plane_vector(plane, x0, y0), _plane_vector(plane, x1, y0),
-        _plane_vector(plane, x1, y1), _plane_vector(plane, x0, y1),
-        _plane_vector(plane, x0, y0),
+        _plane_vector(plane, x0, y0, frame), _plane_vector(plane, x1, y0, frame),
+        _plane_vector(plane, x1, y1, frame), _plane_vector(plane, x0, y1, frame),
+        _plane_vector(plane, x0, y0, frame),
     ]
     return Part.Face(Part.makePolygon(pts))
 
 
-def _circle_face(spec, plane, host):
+def _circle_face(spec, plane, host, frame=None):
     import Part
     center = _profile_point(spec.get("center", [0, 0]), host)
     radius = _quantity_value(spec.get("radius"), host)
-    normal = _profile_axis(_normal_axis_for_plane(plane), 1)
+    normal = frame["normal"] if frame is not None else \
+        _profile_axis(_normal_axis_for_plane(plane), 1)
     return Part.Face(Part.Wire(Part.makeCircle(
-        radius, _plane_vector(plane, center[0], center[1]), normal
+        radius, _plane_vector(plane, center[0], center[1], frame), normal
     )))
 
 
-def _polygon_face(spec, plane, host):
+def _polygon_face(spec, plane, host, frame=None):
     import Part
     points = spec.get("points") or []
     if len(points) < 3:
         raise ValueError("polygon profile needs at least 3 points; got %d" % len(points))
-    vectors = [_plane_vector(plane, *_profile_point(point, host)) for point in points]
+    vectors = [_plane_vector(plane, *_profile_point(point, host), frame=frame)
+               for point in points]
     if vectors[0].distanceToPoint(vectors[-1]) > 1e-9:
         vectors.append(vectors[0])
     return Part.Face(Part.makePolygon(vectors))
 
 
-def _slot_face(spec, plane, host):
+def _slot_face(spec, plane, host, frame=None):
     import Part
     start = _profile_point(spec["start"], host)
     end = _profile_point(spec["end"], host)
@@ -161,9 +266,9 @@ def _slot_face(spec, plane, host):
             "corner": [start[0] - radius, min(start[1], end[1])],
             "size": [radius * 2, abs(end[1] - start[1])],
         }
-    return _circle_face({"center": start, "radius": radius}, plane, host).fuse(
-        _rectangle_face(rect, plane, host)
-    ).fuse(_circle_face({"center": end, "radius": radius}, plane, host)).removeSplitter()
+    return _circle_face({"center": start, "radius": radius}, plane, host, frame).fuse(
+        _rectangle_face(rect, plane, host, frame)
+    ).fuse(_circle_face({"center": end, "radius": radius}, plane, host, frame)).removeSplitter()
 
 
 def _profile_spec(feat):
@@ -179,22 +284,24 @@ def _profile_spec(feat):
     return spec
 
 
-def _make_profile_shape(spec, host=None):
+def _make_profile_shape(spec, host=None, support_obj=None, support_spec=None):
     import Part
     plane = spec.get("plane", "XY")
+    frame = _support_frame(support_obj, support_spec or {}, host) \
+        if support_obj is not None else None
     if spec.get("points") is not None:
-        return _polygon_face(spec, plane, host)
+        return _polygon_face(spec, plane, host, frame)
     faces = []
     for section in spec.get("sections") or []:
         kind = section.get("type") or section.get("kind")
         if kind == "circle":
-            faces.append(_circle_face(section, plane, host))
+            faces.append(_circle_face(section, plane, host, frame))
         elif kind == "rectangle":
-            faces.append(_rectangle_face(section, plane, host))
+            faces.append(_rectangle_face(section, plane, host, frame))
         elif kind == "polygon":
-            faces.append(_polygon_face(section, plane, host))
+            faces.append(_polygon_face(section, plane, host, frame))
         elif kind == "slot":
-            faces.append(_slot_face(section, plane, host))
+            faces.append(_slot_face(section, plane, host, frame))
         else:
             raise ValueError("unknown profile section type %r" % kind)
     if not faces:
@@ -205,20 +312,44 @@ def _make_profile_shape(spec, host=None):
     return shape.removeSplitter()
 
 
-def _add_profile_properties(obj, feat, host, operation="extrude"):
+def _add_profile_properties(obj, feat, host, operation="extrude", id_map=None,
+                            default_support=None):
+    id_map = id_map or {}
     spec = _profile_spec(feat) or {}
     obj.addProperty("App::PropertyString", "ProfileSpec", "Geometry")
     obj.addProperty("App::PropertyString", "HostName", "Geometry")
+    obj.addProperty("App::PropertyLink", "Profile", "Geometry")
+    obj.addProperty("App::PropertyLink", "Support", "Geometry")
+    obj.addProperty("App::PropertyString", "SupportSpec", "Geometry")
     obj.addProperty("App::PropertyLength", "Length", "Geometry")
     obj.addProperty("App::PropertyEnumeration", "Axis", "Geometry")
     obj.addProperty("App::PropertyEnumeration", "Operation", "Geometry")
+    obj.addProperty("App::PropertyBool", "Reversed", "Geometry")
+    obj.addProperty("App::PropertyBool", "Symmetric", "Geometry")
     obj.ProfileSpec = json.dumps(spec)
     obj.HostName = host.Name
+    profile_id = feat.get("profile")
+    if profile_id:
+        obj.Profile = id_map[profile_id]
+    support = feat.get("support")
+    support_id = _support_feature_id(support, default_support)
+    if support_id:
+        obj.Support = id_map[support_id]
+        support_spec = dict(support) if isinstance(support, dict) else {"feature": support_id}
+        support_spec.setdefault("feature", support_id)
+        obj.SupportSpec = json.dumps(support_spec)
+    elif profile_id and hasattr(obj.Profile, "Support") and obj.Profile.Support:
+        obj.Support = obj.Profile.Support
+        obj.SupportSpec = obj.Profile.SupportSpec
+    else:
+        obj.SupportSpec = "{}"
     obj.Axis = ["x", "y", "z"]
     obj.Operation = ["face", "extrude"]
     plane = spec.get("plane", feat.get("plane", "XY"))
     obj.Axis = (feat.get("axis") or _normal_axis_for_plane(plane)).lower()
     obj.Operation = operation
+    obj.Reversed = bool(feat.get("reversed", False))
+    obj.Symmetric = bool(feat.get("symmetric", False))
     _bind(obj, "Length", feat.get("length") or feat.get("depth") or "1 mm", host.Name)
     obj.Proxy = _ProfileExtrusionProxy()
 
@@ -237,14 +368,28 @@ class _ProfileExtrusionProxy:
     __setstate__ = loads
 
     def execute(self, obj):
-        if hasattr(obj, "ProfileSpec"):
-            face = _make_profile_shape(json.loads(obj.ProfileSpec), _profile_host(obj))
+        host = _profile_host(obj)
+        support = getattr(obj, "Support", None)
+        support_spec = json.loads(getattr(obj, "SupportSpec", "{}") or "{}")
+        if getattr(obj, "Profile", None):
+            face = obj.Profile.Shape.copy()
+        elif hasattr(obj, "ProfileSpec"):
+            face = _make_profile_shape(json.loads(obj.ProfileSpec), host,
+                                       support, support_spec)
         else:
             face = _make_profile_shape({"points": json.loads(obj.ProfilePoints)}, None)
         if getattr(obj, "Operation", "extrude") == "face":
             obj.Shape = face
             return
-        obj.Shape = face.extrude(_profile_axis(obj.Axis, obj.Length.Value))
+        if support is not None:
+            direction = _support_frame(support, support_spec, host)["normal"] * obj.Length.Value
+        else:
+            direction = _profile_axis(obj.Axis, obj.Length.Value)
+        if getattr(obj, "Reversed", False):
+            direction = -direction
+        if getattr(obj, "Symmetric", False):
+            face.translate(-direction * 0.5)
+        obj.Shape = face.extrude(direction)
 
 
 class _EdgeTreatmentProxy:
@@ -585,8 +730,9 @@ def _build_feature(doc, host, feat, id_map):
     elif ftype == "profile_extrude":
         obj = doc.addObject("Part::FeaturePython", feat["id"])
         if (feat.get("sections") is not None or feat.get("profile_spec") is not None
-                or feat.get("plane") is not None):
-            _add_profile_properties(obj, feat, host, "extrude")
+                or feat.get("plane") is not None or feat.get("support") is not None
+                or feat.get("profile") is not None):
+            _add_profile_properties(obj, feat, host, "extrude", id_map)
         else:
             points = _profile_points(feat)  # fail clearly, not as an opaque rollback
             obj.addProperty("App::PropertyString", "ProfilePoints", "Geometry")
@@ -600,27 +746,27 @@ def _build_feature(doc, host, feat, id_map):
         place(obj)
     elif ftype == "profile_2d":
         obj = doc.addObject("Part::FeaturePython", feat["id"])
-        _add_profile_properties(obj, feat, host, "face")
+        _add_profile_properties(obj, feat, host, "face", id_map)
         place(obj)
-    elif ftype == "extrude_cut":
-        obj = doc.addObject("Part::Cut", feat["id"])
-        obj.Base = id_map[feat["base"]]
-        if feat.get("profile"):
-            profile_obj = id_map[feat["profile"]]
-            tool = doc.addObject("Part::Extrusion", "%s_Tool" % feat["id"])
-            tool.Base = profile_obj
-            tool.DirMode = "Custom"
-            tool.Dir = _profile_axis(
-                feat.get("axis") or _normal_axis_for_plane(feat.get("plane", "XY")),
-                _quantity_value(feat.get("length") or feat.get("depth") or "1 mm", host),
-            )
-            tool.Solid = True
+    elif ftype in ("pad", "pocket", "extrude_cut"):
+        base_id = feat.get("base")
+        if ftype in ("pocket", "extrude_cut") and not base_id:
+            raise ValueError("%s requires a base feature" % ftype)
+        tool_name = feat["id"] if not base_id else "%s_Tool" % feat["id"]
+        tool = doc.addObject("Part::FeaturePython", tool_name)
+        _add_profile_properties(
+            tool, feat, host, "extrude", id_map, default_support=base_id
+        )
+        place(tool)
+        if base_id:
+            cls = "Part::Fuse" if ftype == "pad" else "Part::Cut"
+            obj = doc.addObject(cls, feat["id"])
+            obj.Base = id_map[base_id]
+            obj.Tool = tool
+            feat["_consumed"] = [base_id] + \
+                ([feat["profile"]] if feat.get("profile") else [])
         else:
-            tool = doc.addObject("Part::FeaturePython", "%s_Tool" % feat["id"])
-            _add_profile_properties(tool, feat, host, "extrude")
-            place(tool)
-        obj.Tool = tool
-        feat["_consumed"] = [feat["base"]] + ([feat["profile"]] if feat.get("profile") else [])
+            obj = tool
     elif ftype in ("fillet", "chamfer"):
         obj = doc.addObject("Part::FeaturePython", feat["id"])
         obj.addProperty("App::PropertyLink", "Base", "Geometry")
@@ -780,10 +926,18 @@ def op_define_component(component_id, features, rules=None, profiles=None):
     _begin(doc, "define_component")
     try:
         # remove any previously generated features
-        for nm in meta.get("id_map", {}).values():
-            old = doc.getObject(nm)
-            if old is not None:
-                doc.removeObject(old.Name)
+        old_names = meta.get("id_map", {})
+        old_graph = meta.get("build_graph", [])
+        if old_graph:
+            for feature in reversed(old_graph):
+                _remove_generated_feature(
+                    doc, feature, doc.getObject(old_names.get(feature["id"], ""))
+                )
+        else:
+            for name in old_names.values():
+                old = doc.getObject(name)
+                if old is not None:
+                    doc.removeObject(old.Name)
 
         from patterns import expand_patterns
         features = expand_patterns(features)
@@ -952,7 +1106,7 @@ def op_list_feature_types():
         "feature_types": [
             "box", "cylinder", "tube", "cone", "prism", "transform",
             "cut", "union", "intersection", "array", "grid_array",
-            "profile_2d", "profile_extrude", "extrude_cut",
+            "profile_2d", "profile_extrude", "pad", "pocket", "extrude_cut",
             "fillet", "chamfer", "group", "pattern",
         ]
     }
@@ -969,10 +1123,13 @@ FEATURE_SCHEMAS = {
                    "properties": {"spacing_x": {}, "spacing_y": {}}},
     "profile_extrude": {
         "required": ["id", "length"],
-        "one_of": ["points", "sections", "profile_spec"],
+        "one_of": ["profile", "points", "sections", "profile_spec"],
         "properties": {
             "plane": {"enum": ["XY", "XZ", "YZ"], "default": "XY"},
             "axis": {"enum": ["x", "y", "z"], "default": "normal to plane"},
+            "support": {"description": "optional planar-face support selector"},
+            "reversed": {"type": "boolean", "default": False},
+            "symmetric": {"type": "boolean", "default": False},
             "sections": {"items": {"type": "circle|rectangle|polygon|slot"}},
         },
     },
@@ -981,7 +1138,27 @@ FEATURE_SCHEMAS = {
         "one_of": ["points", "sections", "profile_spec"],
         "properties": {
             "plane": {"enum": ["XY", "XZ", "YZ"], "default": "XY"},
+            "support": {"description": "optional planar-face support selector"},
             "sections": {"items": {"type": "circle|rectangle|polygon|slot"}},
+        },
+    },
+    "pad": {
+        "required": ["id", "length"],
+        "one_of": ["profile", "points", "sections", "profile_spec"],
+        "properties": {
+            "base": {"optional": True, "description": "feature to fuse with the pad"},
+            "support": {"description": "optional planar-face support selector"},
+            "reversed": {"type": "boolean", "default": False},
+            "symmetric": {"type": "boolean", "default": False},
+        },
+    },
+    "pocket": {
+        "required": ["id", "base", "length"],
+        "one_of": ["profile", "points", "sections", "profile_spec"],
+        "properties": {
+            "support": {"description": "optional planar-face support selector; feature defaults to base"},
+            "reversed": {"type": "boolean", "default": False},
+            "symmetric": {"type": "boolean", "default": False},
         },
     },
     "extrude_cut": {
@@ -991,6 +1168,7 @@ FEATURE_SCHEMAS = {
             "profile": {"description": "feature id of a profile_2d face"},
             "plane": {"enum": ["XY", "XZ", "YZ"], "default": "XY"},
             "axis": {"enum": ["x", "y", "z"], "default": "normal to plane"},
+            "support": {"description": "optional planar-face support selector; feature defaults to base"},
         },
     },
     "fillet": {"required": ["id", "base", "radius", "edges"]},
@@ -1052,15 +1230,18 @@ def _feature_inputs(feat):
     for k in ("base", "tool", "profile"):
         if isinstance(feat.get(k), str):
             ids.append(feat[k])
+    support_id = _support_feature_id(feat.get("support"))
+    if support_id:
+        ids.append(support_id)
     ids += list(feat.get("shapes") or [])
-    return ids
+    return list(dict.fromkeys(ids))
 
 
 def _consumed(feat):
     """Inputs hidden because a boolean or array owns their visible output."""
     if feat.get("type") not in (
         "cut", "union", "intersection", "array", "grid_array",
-        "fillet", "chamfer", "extrude_cut"
+        "fillet", "chamfer", "pad", "pocket", "extrude_cut"
     ):
         return []
     if feat.get("_consumed") is not None:
@@ -1093,6 +1274,9 @@ def _remove_generated_feature(doc, feature, obj):
         private_children = [
             getattr(obj, "Base", None), getattr(obj, "Tool", None)
         ]
+    elif feature.get("type") in ("pad", "pocket", "extrude_cut") \
+            and feature.get("base"):
+        private_children = [getattr(obj, "Tool", None)]
     doc.removeObject(obj.Name)
     for child in private_children:
         if child is not None and doc.getObject(child.Name) is not None:

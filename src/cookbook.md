@@ -148,7 +148,8 @@ graph intact.
 Core feature types:
 
 - primitives: `box`, `cylinder`, `tube`, `cone`, `prism`;
-- generated solids: `profile_extrude`, `fillet`, `chamfer`;
+- profiles and generated solids: `profile_2d`, `profile_extrude`, `pad`,
+  `pocket`, `fillet`, `chamfer`;
 - relationships: `transform`, `cut`, `union`, `intersection`;
 - repetition: `array`, `grid_array`;
 - organization: `group`;
@@ -185,6 +186,45 @@ Use `list_feature_types` for the server's current list.
 ```
 
 Boolean and array features reference earlier graph nodes by ID.
+
+### Face-supported profiles, pads, and pockets
+
+Profiles can use polygon points or `rectangle`, `circle`, `polygon`, and
+`slot` sections. Attach one to a planar face semantically:
+
+```json
+[
+  {
+    "id": "hole_profile",
+    "type": "profile_2d",
+    "support": {
+      "feature": "panel",
+      "face": {"axis": "z", "side": "max"}
+    },
+    "sections": [
+      {"type": "circle", "center": [0, 0], "radius": "3 mm"}
+    ],
+    "role": "construction"
+  },
+  {
+    "id": "panel_with_hole",
+    "type": "pocket",
+    "base": "panel",
+    "profile": "hole_profile",
+    "length": "$panel_thickness + 2 mm",
+    "reversed": true
+  }
+]
+```
+
+Use `face_index` for an exact 1-based face, or `face.normal` / `face.axis`
+plus `side` for a semantic selector. The profile origin is the selected face's
+bounds center. `u_offset`, `v_offset`, and `offset` move its local frame.
+Face-supported extrusion follows the face normal automatically; set `reversed`
+or `symmetric` as needed. `pad` accepts an optional `base` and fuses its result;
+`pocket` requires a base and cuts it. Both accept inline profile geometry or a
+`profile` feature id. `profile_extrude` and `extrude_cut` remain compatibility
+forms.
 
 ### Profile extrusion and geometric edge selectors
 

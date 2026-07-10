@@ -190,22 +190,47 @@ def test_generic_profile_tools_are_exposed_without_one_off_keyhole(parametric):
     assert "profile_2d" in feature_types
     assert "profile_extrude" in feature_types
     assert "extrude_cut" in feature_types
+    assert "pad" in feature_types
+    assert "pocket" in feature_types
     assert "keyhole_slot" not in feature_types
 
 
 def test_profile_tool_schemas_describe_generic_sections(parametric):
     profile = parametric.op_describe_feature_type("profile_2d")
     cut = parametric.op_describe_feature_type("extrude_cut")
+    pad = parametric.op_describe_feature_type("pad")
+    pocket = parametric.op_describe_feature_type("pocket")
 
     assert profile["schema"]["one_of"] == ["points", "sections", "profile_spec"]
     assert cut["schema"]["required"] == ["id", "base", "length"]
     assert cut["schema"]["one_of"] == ["profile", "points", "sections", "profile_spec"]
+    assert pad["schema"]["required"] == ["id", "length"]
+    assert pocket["schema"]["required"] == ["id", "base", "length"]
+    assert profile["schema"]["properties"]["support"]
 
 
 def test_extrude_cut_depends_on_base_and_optional_profile(parametric):
     assert parametric._feature_inputs({
         "id": "cut", "type": "extrude_cut", "base": "panel", "profile": "hole",
     }) == ["panel", "hole"]
+
+
+def test_face_support_is_a_dependency_without_duplicates(parametric):
+    assert parametric._feature_inputs({
+        "id": "hole", "type": "profile_2d",
+        "support": {"feature": "panel", "face": {"axis": "z", "side": "max"}},
+    }) == ["panel"]
+    assert parametric._feature_inputs({
+        "id": "cut", "type": "pocket", "base": "panel",
+        "support": {"feature": "panel", "face_index": 6},
+    }) == ["panel"]
+
+
+def test_support_feature_id_accepts_shorthand_and_default(parametric):
+    assert parametric._support_feature_id("panel") == "panel"
+    assert parametric._support_feature_id({"feature": "panel"}) == "panel"
+    assert parametric._support_feature_id({"face_index": 6}, "base") == "base"
+    assert parametric._support_feature_id(None, "base") is None
     assert parametric._consumed({
         "id": "cut", "type": "extrude_cut", "base": "panel", "profile": "hole",
     }) == ["panel", "hole"]

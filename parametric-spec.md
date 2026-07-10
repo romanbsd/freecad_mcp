@@ -138,6 +138,53 @@ Adds or replaces the declarative build graph.
 
 Expressions use `$parameter_name`, arithmetic, and FreeCAD-compatible units.
 
+### Profiles, pads, and pockets
+
+Reusable 2D profiles can be placed on a principal plane or attached to a
+planar face. Profile sections support `rectangle`, `circle`, `polygon`, and
+`slot`; overlapping sections are fused into one face.
+
+```json
+{
+  "id": "mounting_hole",
+  "type": "profile_2d",
+  "support": {
+    "feature": "front_wall",
+    "face": {"axis": "y", "side": "min"},
+    "u_offset": "20 mm",
+    "v_offset": "35 mm"
+  },
+  "sections": [
+    {"type": "circle", "center": [0, 0], "radius": "3 mm"}
+  ]
+}
+```
+
+`support.face_index` selects an exact 1-based FreeCAD face when topology is
+stable. `support.face.normal` or `support.face.axis` with `side` (`min` or
+`max`) is more descriptive and survives many dimension changes. Local profile
+coordinates are centered on the selected face's bounds; `u_offset`, `v_offset`, and
+`offset` move that local frame along its two axes and normal.
+
+`pad` extrudes a profile and optionally fuses it with `base`. `pocket` cuts the
+extrusion from `base`. Both accept an inline profile or a `profile` feature id,
+infer the extrusion direction from a face support, and support `reversed` and
+`symmetric` booleans. When a pocket support omits `feature`, its `base` is used.
+
+```json
+{
+  "id": "front_with_hole",
+  "type": "pocket",
+  "base": "front_wall",
+  "profile": "mounting_hole",
+  "length": "$wall_thickness + 2 mm",
+  "reversed": true
+}
+```
+
+`profile_extrude` and `extrude_cut` remain supported as compatibility forms;
+new component definitions should generally use `pad` and `pocket`.
+
 ### `set_component_parameters`
 
 Applies incremental parameter updates and rebuilds only affected features.
