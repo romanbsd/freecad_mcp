@@ -19,7 +19,6 @@ Initial target: simple mechanical and enclosure-style assemblies composed from:
 
 Out of scope for v1:
 
-- Arbitrary Sketcher constraint solving
 - Full PartDesign history editing
 - Multi-document assembly constraints
 - FEM, CAM, or rendering workflows
@@ -169,6 +168,82 @@ Selectors also accept 1-based `index`/`indices`. Geometric predicates include
 `normal`, `parallel_to`, `length`, `radius`, `area`, `volume`, and `point` as
 appropriate for the selected kind. Legacy `face`, `face_index`, and `edges`
 forms remain accepted.
+
+### Named geometry references
+
+`geometry_references` assigns stable names to semantic selector recipes. The
+selector is re-evaluated against current geometry instead of freezing a
+`FaceN` or `EdgeN` index.
+
+```json
+{
+  "geometry_references": [
+    {
+      "id": "panel_top",
+      "feature": "panel",
+      "selector": {
+        "kind": "face",
+        "where": {"axis": "z", "side": "max", "planar": true},
+        "expect": "one"
+      }
+    },
+    {
+      "id": "front_edge",
+      "feature": "panel",
+      "selector": {
+        "kind": "edge",
+        "where": {"parallel_to": "x", "near": [20, 0, 0]},
+        "expect": "one"
+      }
+    }
+  ]
+}
+```
+
+Use `{ "reference": "panel_top" }` wherever a support is accepted and
+`{ "reference": "front_edge" }` as a selector or sketch external geometry.
+`list_geometry_references` returns the registry; `resolve_geometry_reference`
+returns its current object and subelement matches.
+
+### Constrained sketches
+
+`sketch_2d` creates a native editable `Sketcher::SketchObject`. Geometry items
+have stable IDs and support lines, circles, arcs, points, and construction
+geometry. Constraints refer to those IDs:
+
+```json
+{
+  "id": "cut_sketch",
+  "type": "sketch_2d",
+  "role": "construction",
+  "placement": {"support": {"reference": "panel_top"}},
+  "geometry": [
+    {"id": "bottom", "type": "line", "start": [-6, -4], "end": [6, -4]},
+    {"id": "right", "type": "line", "start": [6, -4], "end": [6, 4]}
+  ],
+  "constraints": [
+    {
+      "type": "coincident", "first": "bottom", "first_pos": 2,
+      "second": "right", "second_pos": 1
+    },
+    {"type": "horizontal", "geometry": "bottom"},
+    {"id": "width", "type": "distance", "geometry": "bottom", "value": "$cut_width"}
+  ]
+}
+```
+
+Supported constraints include coincident, horizontal, vertical, parallel,
+perpendicular, equal, concentric, tangent, point-on-object, symmetric, block,
+distance, distance-X/Y, radius, diameter, and angle constraints. Dimensional
+constraint expressions are bound to component parameters and update natively.
+Set `require_fully_constrained` to reject sketches with remaining degrees of
+freedom. Conflicting, redundant, and malformed constraints fail transactionally.
+`get_sketch_status` returns degrees of freedom, solver findings, and the named
+geometry, constraint, and external-geometry maps.
+
+`external_geometry` accepts named edge or vertex references. The resulting
+external IDs can be used by constraints alongside local geometry IDs. Closed
+sketches can be passed directly to profile operations with `profile`.
 
 ### Reusable profiles and profile operations
 

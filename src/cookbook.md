@@ -148,7 +148,7 @@ graph intact.
 Core feature types:
 
 - primitives: `box`, `cylinder`, `tube`, `cone`, `prism`;
-- profiles and generated solids: `profile_2d`, `pad`, `pocket`, `revolve`,
+- profiles and generated solids: `profile_2d`, `sketch_2d`, `pad`, `pocket`, `revolve`,
   `sweep`, `loft`, `fillet`, `chamfer`;
 - relationships: `transform`, `cut`, `union`, `intersection`;
 - repetition: `array`, `grid_array`;
@@ -156,6 +156,74 @@ Core feature types:
 - reusable expansion: `pattern`.
 
 Use `list_feature_types` for the server's current list.
+
+### Named geometry references
+
+Name semantic selectors once at component definition time:
+
+```json
+{
+  "geometry_references": [
+    {
+      "id": "top_face",
+      "feature": "panel",
+      "selector": {
+        "kind": "face",
+        "where": {"axis": "z", "side": "max", "planar": true},
+        "expect": "one"
+      }
+    },
+    {
+      "id": "front_edge",
+      "feature": "panel",
+      "selector": {
+        "kind": "edge",
+        "where": {"parallel_to": "x", "near": [20, 0, 0]},
+        "expect": "one"
+      }
+    }
+  ]
+}
+```
+
+Use `{"reference":"top_face"}` as a support or selector. Call
+`list_geometry_references(resolve=true)` to audit all matches and
+`resolve_geometry_reference` to inspect one current match.
+
+### Native constrained sketches
+
+`sketch_2d` builds an editable `Sketcher::SketchObject`. Give geometry and
+constraints stable IDs, then use the sketch as a profile:
+
+```json
+[
+  {
+    "id": "hole_sketch",
+    "type": "sketch_2d",
+    "role": "construction",
+    "placement": {"support": {"reference": "top_face"}},
+    "geometry": [
+      {"id": "hole", "type": "circle", "center": [0, 0], "radius": "3 mm"}
+    ],
+    "constraints": [
+      {"id": "diameter", "type": "diameter", "geometry": "hole", "value": "$hole_diameter"}
+    ]
+  },
+  {
+    "id": "cut", "type": "pocket", "base": "panel",
+    "profile": "hole_sketch", "length": "$panel_thickness + 2 mm",
+    "reversed": true
+  }
+]
+```
+
+Use dimensional constraints, rather than parameterized seed coordinates, for
+geometry that must update. `require_fully_constrained=true` rejects remaining
+degrees of freedom. Conflicting, redundant, and malformed constraints fail the
+transaction. `external_geometry` accepts named edge or vertex references and
+adds their IDs to the same geometry map used by constraints.
+Use `get_sketch_status(component_id, feature_id)` to inspect degrees of freedom,
+solver findings, and all named maps without raw Python.
 
 ### Tube
 

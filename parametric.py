@@ -13,6 +13,8 @@ They are dispatched by FreeCADMCPServer in freecad_mcp.py.
 """
 import json
 import hashlib
+import math
+import copy
 import os
 import re
 import tempfile
@@ -104,6 +106,12 @@ def _quantity_value(value, host=None):
     if isinstance(value, (int, float)):
         return float(value)
     expr = str(value)
+    if host is not None and hasattr(host, "evalExpression"):
+        try:
+            evaluated = host.evalExpression(_translate(expr, host.Name))
+            return float(getattr(evaluated, "Value", evaluated))
+        except Exception:
+            pass
     if host is not None:
         for name in _TOKEN.findall(expr):
             replacement = getattr(host, name)
@@ -222,6 +230,9 @@ def _select_subelements(shape, selector, kind=None, host=None, expect=None):
     if selected and side in ("min", "max") and direction is not None:
         choose = min if side == "min" else max
         selected = [choose(selected, key=lambda item: _bounds_center(item).dot(direction))]
+    if selected and body.get("near") is not None:
+        point = _vector(body["near"])
+        selected = [min(selected, key=lambda item: _bounds_center(item).distanceToPoint(point))]
 
     expected = expect if expect is not None else selector.get("expect")
     if expected == "one":
@@ -232,8 +243,146 @@ def _select_subelements(shape, selector, kind=None, host=None, expect=None):
     return selected
 
 
+def _geometry_reference_map(references):
+    result = {}
+    for reference in references or []:
+        reference_id = reference.get("id")
+        feature_id = reference.get("feature")
+        if not reference_id or not feature_id:
+            raise ValueError("geometry reference requires id and feature")
+        if reference_id in result:
+            raise ValueError("duplicate geometry reference %r" % reference_id)
+        selector = copy.deepcopy(reference.get("selector") or {})
+        if not selector:
+            raise ValueError("geometry reference %r requires a selector" % reference_id)
+        result[reference_id] = {
+            "id": reference_id, "feature": feature_id, "selector": selector,
+        }
+    return result
+
+
+def _merge_named_selector(value, references):
+    if not isinstance(value, dict) or not value.get("reference"):
+        return value
+    reference_id = value["reference"]
+    if reference_id not in references:
+        raise ValueError("unknown geometry reference %r" % reference_id)
+    resolved = copy.deepcopy(references[reference_id]["selector"])
+    for key, override in value.items():
+        if key == "where" and isinstance(override, dict):
+            where = dict(resolved.get("where") or {})
+            where.update(override)
+            resolved["where"] = where
+        elif key != "reference":
+            resolved[key] = override
+    resolved["reference"] = reference_id
+    return resolved
+
+
+def _merge_named_support(value, references):
+    if not isinstance(value, dict) or not value.get("reference"):
+        return value
+    reference_id = value["reference"]
+    if reference_id not in references:
+        raise ValueError("unknown geometry reference %r" % reference_id)
+    reference = references[reference_id]
+    resolved = {"feature": reference["feature"],
+                "selector": copy.deepcopy(reference["selector"]),
+                "reference": reference_id}
+    for key, override in value.items():
+        if key not in ("reference", "selector"):
+            resolved[key] = override
+    if value.get("selector"):
+        resolved["selector"] = _merge_named_selector(
+            dict(value["selector"], reference=reference_id), references
+        )
+    return resolved
+
+
+def _expand_geometry_references(feat, references):
+    expanded = dict(feat)
+    if expanded.get("selector"):
+        expanded["selector"] = _merge_named_selector(expanded["selector"], references)
+        reference_id = expanded["selector"].get("reference") \
+            if isinstance(expanded["selector"], dict) else None
+        if reference_id and not expanded.get("base"):
+            expanded["base"] = references[reference_id]["feature"]
+    if expanded.get("support"):
+        expanded["support"] = _merge_named_support(expanded["support"], references)
+    placement = dict(expanded.get("placement") or {})
+    if placement.get("support"):
+        placement["support"] = _merge_named_support(placement["support"], references)
+        expanded["placement"] = placement
+    external = []
+    for item in expanded.get("external_geometry") or []:
+        if isinstance(item, str):
+            item = {"reference": item}
+        reference_id = item.get("reference")
+        if reference_id:
+            if reference_id not in references:
+                raise ValueError("unknown geometry reference %r" % reference_id)
+            reference = references[reference_id]
+            external.append({
+                "id": item.get("id") or reference_id,
+                "feature": reference["feature"],
+                "selector": _merge_named_selector(
+                    dict(item.get("selector") or {}, reference=reference_id), references
+                ),
+                "reference": reference_id,
+            })
+        else:
+            external.append(dict(item))
+    if external:
+        expanded["external_geometry"] = external
+    return expanded
+
+
+def _subelement_indices(shape, kind, elements):
+    candidates = list(getattr(shape, _SUBELEMENTS[kind]))
+    indices = []
+    for selected in elements:
+        for index, candidate in enumerate(candidates, 1):
+            same = selected.isSame(candidate) if hasattr(selected, "isSame") else \
+                selected == candidate
+            if same:
+                indices.append(index)
+                break
+    return indices
+
+
+def _resolve_geometry_reference(reference, id_map, host=None):
+    feature_id = reference["feature"]
+    if feature_id not in id_map:
+        raise ValueError("geometry reference %r targets unknown feature %r" %
+                         (reference["id"], feature_id))
+    obj = id_map[feature_id]
+    selector = reference["selector"]
+    kind = (selector.get("kind") or "face").lower().rstrip("s")
+    elements = _select_subelements(obj.Shape, selector, kind, host)
+    if not elements:
+        raise ValueError("geometry reference %r matched no %s" %
+                         (reference["id"], kind))
+    return {
+        "id": reference["id"], "feature": feature_id, "object": obj.Name,
+        "kind": kind, "count": len(elements),
+        "subelements": [kind.title() + str(index)
+                        for index in _subelement_indices(obj.Shape, kind, elements)],
+    }
+
+
+def _resolve_all_geometry_references(meta, id_map, host=None):
+    return [
+        _resolve_geometry_reference(reference, id_map, host)
+        for reference in _geometry_reference_map(
+            meta.get("geometry_references", [])
+        ).values()
+    ]
+
+
 def _select_support_face(support_obj, support_spec):
-    selector = dict(support_spec.get("selector") or support_spec.get("face") or {})
+    selector = copy.deepcopy(
+        support_spec.get("selector") or support_spec.get("face") or {}
+    )
     if support_spec.get("face_index") is not None:
         selector["index"] = support_spec["face_index"]
     selector.setdefault("kind", "face")
@@ -583,6 +732,16 @@ def _shape_wire(shape):
     raise ValueError("shape has no usable wire")
 
 
+def _profile_face_from_shape(shape):
+    import Part
+    if getattr(shape, "ShapeType", "") == "Face":
+        return shape.copy()
+    wires = [wire for wire in getattr(shape, "Wires", []) if wire.isClosed()]
+    if not wires:
+        raise ValueError("profile feature has no closed wire")
+    return Part.makeFace(wires, "Part::FaceMakerBullseye")
+
+
 def _path_wire(obj, host):
     import Part
     if getattr(obj, "Path", None):
@@ -681,6 +840,9 @@ def _add_profile_properties(obj, feat, host, operation="pad", id_map=None,
         support_spec = dict(support) if isinstance(support, dict) else {"feature": support_id}
         support_spec.setdefault("feature", support_id)
         obj.SupportSpec = json.dumps(support_spec)
+    elif profile_id and hasattr(obj.Profile, "McpSupport") and obj.Profile.McpSupport:
+        obj.Support = obj.Profile.McpSupport
+        obj.SupportSpec = obj.Profile.McpSupportSpec
     elif profile_id and hasattr(obj.Profile, "Support") and obj.Profile.Support:
         obj.Support = obj.Profile.Support
         obj.SupportSpec = obj.Profile.SupportSpec
@@ -745,7 +907,7 @@ class _ProfileExtrusionProxy:
             obj.Shape = Part.makeLoft(wires, True, obj.Ruled, obj.Closed)
             return
         if getattr(obj, "Profile", None):
-            face = obj.Profile.Shape.copy()
+            face = _profile_face_from_shape(obj.Profile.Shape)
         elif hasattr(obj, "ProfileSpec"):
             face = _make_profile_shape(spec, host, support, support_spec)
         else:
@@ -1087,6 +1249,208 @@ def _profile_points(feat):
     return points
 
 
+def _sketch_point(point, host):
+    if isinstance(point, dict):
+        values = [point.get("x", 0), point.get("y", 0)]
+    else:
+        values = point
+    return App.Vector(_quantity_value(values[0], host),
+                      _quantity_value(values[1], host), 0)
+
+
+def _build_sketch_geometry(sketch, specs, host):
+    import Part
+    geometry_map = {}
+    for number, spec in enumerate(specs or []):
+        geometry_id = spec.get("id") or "geometry_%d" % number
+        if geometry_id in geometry_map:
+            raise ValueError("duplicate sketch geometry id %r" % geometry_id)
+        kind = (spec.get("type") or "line").lower()
+        if kind == "line":
+            geometry = Part.LineSegment(
+                _sketch_point(spec["start"], host),
+                _sketch_point(spec["end"], host),
+            )
+        elif kind == "circle":
+            geometry = Part.Circle(
+                _sketch_point(spec.get("center", [0, 0]), host),
+                App.Vector(0, 0, 1), _quantity_value(spec["radius"], host),
+            )
+        elif kind == "arc":
+            circle = Part.Circle(
+                _sketch_point(spec.get("center", [0, 0]), host),
+                App.Vector(0, 0, 1), _quantity_value(spec["radius"], host),
+            )
+            geometry = Part.ArcOfCircle(
+                circle,
+                math.radians(_quantity_value(spec.get("start_angle", 0), host)),
+                math.radians(_quantity_value(spec.get("end_angle", 90), host)),
+            )
+        elif kind == "point":
+            geometry = Part.Point(_sketch_point(spec["point"], host))
+        else:
+            raise ValueError("unknown sketch geometry type %r" % kind)
+        index = sketch.addGeometry(geometry, bool(spec.get("construction", False)))
+        geometry_map[geometry_id] = index
+    return geometry_map
+
+
+def _build_sketch_external_geometry(sketch, specs, id_map, host, geometry_map):
+    external_count = 0
+    external_map = {}
+    for spec in specs or []:
+        feature_id = spec.get("feature")
+        if feature_id not in id_map:
+            raise ValueError("sketch external geometry targets unknown feature %r" % feature_id)
+        obj = id_map[feature_id]
+        if hasattr(obj, "getParentGeoFeatureGroup"):
+            parent = obj.getParentGeoFeatureGroup()
+            sketch_parent = sketch.getParentGeoFeatureGroup() \
+                if hasattr(sketch, "getParentGeoFeatureGroup") else None
+            if parent is not None and sketch_parent is not parent:
+                parent.addObject(sketch)
+        selector = spec.get("selector") or {}
+        kind = (selector.get("kind") or "edge").lower().rstrip("s")
+        if kind not in ("edge", "vertex"):
+            raise ValueError("sketch external geometry must select edges or vertices")
+        selected = _select_subelements(obj.Shape, selector, kind, host)
+        indices = _subelement_indices(obj.Shape, kind, selected)
+        if not indices:
+            raise ValueError("sketch external geometry selector matched nothing")
+        base_id = spec.get("id") or spec.get("reference") or "external"
+        for offset, index in enumerate(indices):
+            geometry_id = base_id if len(indices) == 1 else "%s_%d" % (base_id, offset + 1)
+            if geometry_id in geometry_map:
+                raise ValueError("duplicate sketch geometry id %r" % geometry_id)
+            sketch.addExternal(obj.Name, kind.title() + str(index))
+            sketch_index = -3 - external_count
+            external_count += 1
+            geometry_map[geometry_id] = sketch_index
+            external_map[geometry_id] = {
+                "feature": feature_id, "subelement": kind.title() + str(index),
+            }
+    return external_map
+
+
+def _sketch_geometry_index(geometry_map, value):
+    if isinstance(value, int):
+        return value
+    if value not in geometry_map:
+        raise ValueError("unknown sketch geometry %r" % value)
+    return geometry_map[value]
+
+
+def _sketch_constraint(sketch, spec, geometry_map, host):
+    import Sketcher
+    kind = str(spec.get("type") or "").lower()
+    geometry = lambda key="geometry": _sketch_geometry_index(geometry_map, spec[key])
+    first = lambda: _sketch_geometry_index(geometry_map, spec["first"])
+    second = lambda: _sketch_geometry_index(geometry_map, spec["second"])
+    value = spec.get("value")
+    dimensional = False
+    if kind == "coincident":
+        constraint = Sketcher.Constraint(
+            "Coincident", first(), int(spec.get("first_pos", 2)),
+            second(), int(spec.get("second_pos", 1)),
+        )
+    elif kind in ("horizontal", "vertical", "block"):
+        constraint = Sketcher.Constraint(kind.title(), geometry())
+    elif kind in ("parallel", "perpendicular", "equal", "concentric", "tangent"):
+        constraint = Sketcher.Constraint(kind.title(), first(), second())
+    elif kind == "point_on_object":
+        constraint = Sketcher.Constraint(
+            "PointOnObject", first(), int(spec.get("first_pos", 1)), second()
+        )
+    elif kind == "symmetric":
+        constraint = Sketcher.Constraint(
+            "Symmetric", first(), int(spec.get("first_pos", 1)),
+            second(), int(spec.get("second_pos", 1)),
+            geometry("about"), int(spec.get("about_pos", 1)),
+        )
+    elif kind in ("radius", "diameter", "distance"):
+        dimensional = True
+        constraint = Sketcher.Constraint(
+            kind.title(), geometry(), _quantity_value(value, host)
+        )
+    elif kind in ("distance_x", "distance_y"):
+        dimensional = True
+        constraint_name = "DistanceX" if kind == "distance_x" else "DistanceY"
+        if spec.get("second") is not None:
+            constraint = Sketcher.Constraint(
+                constraint_name, first(), int(spec.get("first_pos", 1)),
+                second(), int(spec.get("second_pos", 1)),
+                _quantity_value(value, host),
+            )
+        else:
+            constraint = Sketcher.Constraint(
+                constraint_name, geometry(), int(spec.get("position", 1)),
+                _quantity_value(value, host),
+            )
+    elif kind in ("angle", "angle_between"):
+        dimensional = True
+        angle = math.radians(_quantity_value(value, host))
+        constraint = Sketcher.Constraint(
+            "Angle", geometry(), angle
+        ) if kind == "angle" else Sketcher.Constraint("Angle", first(), second(), angle)
+    else:
+        raise ValueError("unknown sketch constraint type %r" % kind)
+    index = sketch.addConstraint(constraint)
+    if dimensional and isinstance(value, str):
+        sketch.setExpression("Constraints[%d]" % index, _translate(value, host.Name))
+    if spec.get("driving") is False:
+        sketch.setDriving(index, False)
+    if spec.get("id"):
+        sketch.renameConstraint(index, spec["id"])
+    return index
+
+
+def _build_sketch(doc, host, feat, id_map):
+    sketch = doc.addObject("Sketcher::SketchObject", feat["id"])
+    geometry_map = _build_sketch_geometry(sketch, feat.get("geometry"), host)
+    external_map = _build_sketch_external_geometry(
+        sketch, feat.get("external_geometry"), id_map, host, geometry_map
+    )
+    constraint_map = {}
+    for number, spec in enumerate(feat.get("constraints") or []):
+        constraint_id = spec.get("id") or "constraint_%d" % number
+        if constraint_id in constraint_map:
+            raise ValueError("duplicate sketch constraint id %r" % constraint_id)
+        constraint_map[constraint_id] = _sketch_constraint(
+            sketch, spec, geometry_map, host
+        )
+    sketch.addProperty("App::PropertyString", "GeometryMap", "MCP")
+    sketch.addProperty("App::PropertyString", "ConstraintMap", "MCP")
+    sketch.addProperty("App::PropertyString", "ExternalMap", "MCP")
+    sketch.addProperty("App::PropertyString", "HostName", "MCP")
+    sketch.addProperty("App::PropertyLink", "McpSupport", "MCP")
+    sketch.addProperty("App::PropertyString", "McpSupportSpec", "MCP")
+    sketch.GeometryMap = json.dumps(geometry_map)
+    sketch.ConstraintMap = json.dumps(constraint_map)
+    sketch.ExternalMap = json.dumps(external_map)
+    sketch.HostName = host.Name
+    support = feat.get("support")
+    support_id = _support_feature_id(support)
+    if support_id:
+        sketch.McpSupport = id_map[support_id]
+        sketch.McpSupportSpec = json.dumps(support)
+    else:
+        sketch.McpSupportSpec = "{}"
+    _apply_common_placement(sketch, feat, host, id_map)
+    result = sketch.solve()
+    conflicts = list(sketch.ConflictingConstraints)
+    redundant = list(sketch.RedundantConstraints)
+    malformed = list(sketch.MalformedConstraints)
+    if result != 0 or conflicts or redundant or malformed:
+        raise ValueError(
+            "sketch solve failed: result=%s conflicts=%s redundant=%s malformed=%s" %
+            (result, conflicts, redundant, malformed)
+        )
+    if feat.get("require_fully_constrained") and not sketch.FullyConstrained:
+        raise ValueError("sketch %r is under-constrained (%d DoF)" %
+                         (feat["id"], sketch.DoF))
+    return sketch
+
+
 def _apply_profile_placement(obj, feat, host):
     placement_feat = dict(feat)
     placement = dict(placement_feat.get("placement") or {})
@@ -1180,6 +1544,8 @@ def _build_feature(doc, host, feat, id_map, profile_definitions=None):
         obj = _build_profile_operation(
             doc, host, feat, id_map, profile_definitions or {}
         )
+    elif ftype == "sketch_2d":
+        obj = _build_sketch(doc, host, feat, id_map)
     elif ftype in ("fillet", "chamfer"):
         obj = doc.addObject("Part::FeaturePython", feat["id"])
         obj.addProperty("App::PropertyLink", "Base", "Geometry")
@@ -1330,7 +1696,7 @@ def op_create_component(document, name, label=None, parameters=None):
                           "schema": registry, "build_graph": [],
                           "id_map": {}, "variants": {}, "validation": None,
                           "revision": 0, "outputs": [],
-                          "profile_definitions": []})
+                          "profile_definitions": [], "geometry_references": []})
         doc.recompute()
         doc.commitTransaction()
     except Exception:
@@ -1341,12 +1707,15 @@ def op_create_component(document, name, label=None, parameters=None):
 
 
 def op_define_component(component_id, features, rules=None, profiles=None,
-                        profile_definitions=None):
+                        profile_definitions=None, geometry_references=None):
     doc, container, meta = _resolve(component_id)
     host = _host(doc, meta)
     definition_list = profile_definitions if profile_definitions is not None else \
         meta.get("profile_definitions", [])
     definition_map = _profile_definition_map(definition_list)
+    reference_list = geometry_references if geometry_references is not None else \
+        meta.get("geometry_references", [])
+    reference_map = _geometry_reference_map(reference_list)
     _begin(doc, "define_component")
     try:
         # remove any previously generated features
@@ -1365,10 +1734,17 @@ def op_define_component(component_id, features, rules=None, profiles=None,
 
         from patterns import expand_patterns
         features = expand_patterns(features)
+        known_features = {feature["id"] for feature in features}
+        for reference in reference_map.values():
+            if reference["feature"] not in known_features:
+                raise ValueError(
+                    "geometry reference %r targets missing feature %r" %
+                    (reference["id"], reference["feature"])
+                )
         id_map = {}
         graph = []
         for feat in features:
-            feat = dict(feat)
+            feat = _expand_geometry_references(dict(feat), reference_map)
             obj = _build_feature(doc, host, feat, id_map, definition_map)
             id_map[feat["id"]] = obj
             grp = _group(doc, meta, _ROLE_GROUP.get(feat.get("role", "output"), "Features"))
@@ -1396,6 +1772,7 @@ def op_define_component(component_id, features, rules=None, profiles=None,
         meta["build_graph"] = graph
         meta["id_map"] = name_map
         meta["profile_definitions"] = list(profile_definitions or definition_list)
+        meta["geometry_references"] = list(geometry_references or reference_list)
         meta["dependency_index"] = _dependency_index(
             meta["schema"], graph, definition_map
         )
@@ -1408,13 +1785,15 @@ def op_define_component(component_id, features, rules=None, profiles=None,
         if profiles is not None:
             meta["profiles"] = profiles
         _save(container, meta)
+        resolved_references = _resolve_all_geometry_references(meta, id_map, host)
         doc.commitTransaction()
     except Exception:
         _abort(doc)
         raise
 
     return {"features_created": list(name_map.keys()), "object_names": name_map,
-            "profiles_registered": list(definition_map.keys())}
+            "profiles_registered": list(definition_map.keys()),
+            "references_resolved": resolved_references}
 
 
 def _apply_graph_operations(graph, operations, outputs=None):
@@ -1483,7 +1862,60 @@ def op_get_component_graph(component_id, detail="summary"):
         "revision": int(meta.get("revision", 0)),
         "features": features,
         "profile_definitions": list(meta.get("profile_definitions", [])),
+        "geometry_references": list(meta.get("geometry_references", [])),
         "outputs": list(meta.get("outputs", [])),
+    }
+
+
+def op_list_geometry_references(component_id, resolve=False):
+    doc, container, meta = _resolve(component_id)
+    references = _geometry_reference_map(meta.get("geometry_references", []))
+    result = {"component_id": component_id,
+              "references": list(references.values())}
+    if resolve:
+        id_map = {
+            feature_id: doc.getObject(name)
+            for feature_id, name in meta.get("id_map", {}).items()
+        }
+        host = _host(doc, meta)
+        result["resolved"] = [
+            _resolve_geometry_reference(reference, id_map, host)
+            for reference in references.values()
+        ]
+    return result
+
+
+def op_resolve_geometry_reference(component_id, reference_id):
+    doc, container, meta = _resolve(component_id)
+    references = _geometry_reference_map(meta.get("geometry_references", []))
+    if reference_id not in references:
+        raise ValueError("unknown geometry reference %r" % reference_id)
+    id_map = {
+        feature_id: doc.getObject(name)
+        for feature_id, name in meta.get("id_map", {}).items()
+    }
+    return _resolve_geometry_reference(
+        references[reference_id], id_map, _host(doc, meta)
+    )
+
+
+def op_get_sketch_status(component_id, feature_id):
+    doc, container, meta = _resolve(component_id)
+    object_name = meta.get("id_map", {}).get(feature_id)
+    sketch = doc.getObject(object_name) if object_name else None
+    if sketch is None or not sketch.isDerivedFrom("Sketcher::SketchObject"):
+        raise ValueError("feature %r is not a sketch_2d" % feature_id)
+    return {
+        "component_id": component_id, "feature_id": feature_id,
+        "object": sketch.Name, "geometry_count": int(sketch.GeometryCount),
+        "constraint_count": int(sketch.ConstraintCount), "dof": int(sketch.DoF),
+        "fully_constrained": bool(sketch.FullyConstrained),
+        "conflicting": list(sketch.ConflictingConstraints),
+        "redundant": list(sketch.RedundantConstraints),
+        "malformed": list(sketch.MalformedConstraints),
+        "geometry_map": json.loads(sketch.GeometryMap or "{}"),
+        "constraint_map": json.loads(sketch.ConstraintMap or "{}"),
+        "external_map": json.loads(sketch.ExternalMap or "{}"),
     }
 
 
@@ -1497,6 +1929,18 @@ def op_patch_component(component_id, operations, expected_revision=None,
     patch = _apply_graph_operations(
         meta.get("build_graph", []), operations, meta.get("outputs", [])
     )
+    references = _geometry_reference_map(meta.get("geometry_references", []))
+    patch["graph"] = [
+        _expand_geometry_references(feature, references)
+        for feature in patch["graph"]
+    ]
+    known_features = {feature["id"] for feature in patch["graph"]}
+    for reference in references.values():
+        if reference["feature"] not in known_features:
+            raise ValueError(
+                "geometry reference %r targets missing feature %r" %
+                (reference["id"], reference["feature"])
+            )
     if dry_run:
         return {
             "dry_run": True, "revision": revision,
@@ -1535,7 +1979,7 @@ def op_list_feature_types():
         "feature_types": [
             "box", "cylinder", "tube", "cone", "prism", "transform",
             "cut", "union", "intersection", "array", "grid_array",
-            "profile_2d", "profile_extrude", "pad", "pocket", "extrude_cut",
+            "profile_2d", "sketch_2d", "profile_extrude", "pad", "pocket", "extrude_cut",
             "revolve", "sweep", "loft",
             "fillet", "chamfer", "group", "pattern",
         ]
@@ -1546,6 +1990,7 @@ SELECTOR_SCHEMA = {
     "type": "object",
     "properties": {
         "kind": {"enum": ["face", "edge", "vertex", "solid"]},
+        "reference": {"type": "string"},
         "index": {"type": "integer", "minimum": 1},
         "indices": {"type": "array", "items": {"type": "integer", "minimum": 1}},
         "where": {"properties": {
@@ -1555,6 +2000,7 @@ SELECTOR_SCHEMA = {
             "parallel_to": {"enum": ["x", "y", "z"]},
             "length": {}, "radius": {}, "area": {}, "volume": {},
             "point": {"type": "vector3"}, "tolerance": {},
+            "near": {"type": "vector3"},
             "planar": {"type": "boolean"}, "min_dot": {"type": "number"},
         }},
         "expect": {"one_of": ["one", "integer"]},
@@ -1609,6 +2055,19 @@ FEATURE_SCHEMAS = {
             "plane": {"enum": ["XY", "XZ", "YZ"], "default": "XY"},
             "support": {"description": "optional planar-face support selector"},
             "sections": {"items": {"type": "circle|rectangle|polygon|slot"}},
+        },
+    },
+    "sketch_2d": {
+        "required": ["id", "geometry"],
+        "properties": {
+            "geometry": {"items": {"type": "line|circle|arc|point"}},
+            "constraints": {"items": {"type": (
+                "coincident|horizontal|vertical|parallel|perpendicular|equal|"
+                "concentric|tangent|point_on_object|symmetric|block|distance|"
+                "distance_x|distance_y|radius|diameter|angle|angle_between"
+            )}},
+            "external_geometry": {"description": "named edge/vertex references"},
+            "require_fully_constrained": {"type": "boolean", "default": False},
         },
     },
     "pad": {
@@ -1694,7 +2153,7 @@ def op_capabilities():
     from patterns import list_patterns
     import FreeCAD
     return {
-        "api_version": "2.1",
+        "api_version": "2.2",
         "freecad_version": ".".join(FreeCAD.Version()[:3]),
         "feature_types": op_list_feature_types()["feature_types"],
         "patterns": list_patterns(),
@@ -1704,6 +2163,13 @@ def op_capabilities():
         "selector_kinds": list(_SUBELEMENTS.keys()),
         "profile_definitions": True,
         "profile_operations": ["pad", "pocket", "revolve", "sweep", "loft"],
+        "named_geometry_references": True,
+        "sketch_constraints": [
+            "coincident", "horizontal", "vertical", "parallel", "perpendicular",
+            "equal", "concentric", "tangent", "point_on_object", "symmetric",
+            "block", "distance", "distance_x", "distance_y", "radius",
+            "diameter", "angle", "angle_between",
+        ],
     }
 
 
@@ -1729,6 +2195,9 @@ def _feature_inputs(feat):
     for entry in feat.get("loft_profiles") or []:
         if isinstance(entry, dict) and isinstance(entry.get("profile"), str):
             ids.append(entry["profile"])
+    for external in feat.get("external_geometry") or []:
+        if isinstance(external, dict) and isinstance(external.get("feature"), str):
+            ids.append(external["feature"])
     support_id = _support_feature_id(feat.get("support"))
     if support_id:
         ids.append(support_id)
@@ -1856,10 +2325,11 @@ def _rebuild_graph_patch(doc, container, meta, new_graph, impacted):
                 "patch rebuild failed; invalid features: %s" %
                 ", ".join(errors)
             )
+        _resolve_all_geometry_references(meta, id_map, host)
         meta["build_graph"] = new_graph
         meta["id_map"] = {fid: obj.Name for fid, obj in id_map.items()}
         meta["dependency_index"] = _dependency_index(
-            meta["schema"], new_graph,
+        meta["schema"], new_graph,
             _profile_definition_map(meta.get("profile_definitions", [])),
         )
         meta["revision"] = int(meta.get("revision", 0)) + 1
@@ -2026,6 +2496,11 @@ def op_set_component_parameters(component_id, values, rebuild=True, validate=Fal
             affected = _dependents(meta, changed)
             _refresh_common_placements(doc, meta, affected, host)
             doc.recompute()
+            id_map = {
+                feature_id: doc.getObject(name)
+                for feature_id, name in meta.get("id_map", {}).items()
+            }
+            _resolve_all_geometry_references(meta, id_map, host)
             errs = _errors(_component_objects(doc, meta))
             if errs:
                 # Transactional: keep the last valid geometry on a bad rebuild.
@@ -2063,6 +2538,7 @@ def op_get_component(component_id):
     return {"component_id": component_id, "object_name": container.Name,
             "parameters": params, "build_graph": graph,
             "profile_definitions": list(meta.get("profile_definitions", [])),
+            "geometry_references": list(meta.get("geometry_references", [])),
             "revision": int(meta.get("revision", 0)),
             "outputs": list(meta.get("outputs", [])),
             "variants": list(meta.get("variants", {}).keys()),
@@ -2513,6 +2989,7 @@ def op_build_component(document, component, validate=None, exports=None):
         component_id, component.get("features") or [],
         component.get("rules"), component.get("profiles"),
         component.get("profile_definitions"),
+        component.get("geometry_references"),
     )
     result = {
         "component_id": component_id,

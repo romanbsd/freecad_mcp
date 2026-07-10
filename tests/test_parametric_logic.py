@@ -228,6 +228,20 @@ def test_common_feature_schema_uses_one_selector_and_placement_contract(parametr
     ]
     assert described["schema"]["one_of"] == ["selector", "edges"]
 
+    sketch = parametric.op_describe_feature_type("sketch_2d")
+    assert sketch["schema"]["required"] == ["id", "geometry"]
+    assert "coincident" in sketch["schema"]["properties"]["constraints"]["items"]["type"]
+
+
+def test_capabilities_advertise_named_references_and_sketches(parametric, monkeypatch):
+    fake_freecad = types.SimpleNamespace(Version=lambda: ("1", "1", "1"))
+    monkeypatch.setitem(sys.modules, "FreeCAD", fake_freecad)
+    capabilities = parametric.op_capabilities()
+
+    assert capabilities["api_version"] == "2.2"
+    assert capabilities["named_geometry_references"] is True
+    assert "radius" in capabilities["sketch_constraints"]
+
 
 def test_common_feature_normalizer_preserves_legacy_spelling(parametric):
     normalized = parametric._normalize_common_feature({
@@ -257,6 +271,73 @@ def test_bind_sets_numeric_nested_placement_paths(parametric):
     feature = types.SimpleNamespace(Placement=Placement())
     parametric._bind(feature, ".Placement.Base.x", 3, "Params")
     assert feature.Placement.Base.x == 3
+
+
+def test_quantity_value_uses_native_expression_evaluation(parametric):
+    class Host:
+        Name = "Params"
+
+        def evalExpression(self, expression):
+            assert expression == "Params.width / 2"
+            return types.SimpleNamespace(Value=7.0)
+
+    assert parametric._quantity_value("$width / 2", Host()) == 7.0
+
+
+def test_named_geometry_references_expand_without_mutating_registry(parametric):
+    source = [{
+        "id": "top", "feature": "panel",
+        "selector": {"kind": "face", "where": {"axis": "z", "side": "max"}},
+    }]
+    references = parametric._geometry_reference_map(source)
+    expanded = parametric._expand_geometry_references({
+        "id": "sketch", "type": "sketch_2d",
+        "placement": {"support": {"reference": "top"}},
+    }, references)
+
+    support = expanded["placement"]["support"]
+    assert support["feature"] == "panel"
+    assert support["reference"] == "top"
+    support["selector"]["where"]["normal"] = [0, 0, 1]
+    assert "normal" not in references["top"]["selector"]["where"]
+
+    with pytest.raises(ValueError, match="duplicate geometry reference"):
+        parametric._geometry_reference_map(source + source)
+
+
+def test_named_selector_supplies_default_base_and_external_dependency(parametric):
+    references = parametric._geometry_reference_map([{
+        "id": "vertical_edges", "feature": "panel",
+        "selector": {"kind": "edge", "where": {"parallel_to": "z"}},
+    }])
+    fillet = parametric._expand_geometry_references({
+        "id": "rounded", "type": "fillet", "selector": {"reference": "vertical_edges"},
+    }, references)
+    sketch = parametric._expand_geometry_references({
+        "id": "guide", "type": "sketch_2d",
+        "external_geometry": [{"reference": "vertical_edges"}],
+    }, references)
+
+    assert fillet["base"] == "panel"
+    assert parametric._feature_inputs(sketch) == ["panel"]
+
+
+def test_get_sketch_status_returns_solver_and_named_maps(parametric, monkeypatch):
+    sketch = types.SimpleNamespace(
+        Name="Sketch", GeometryCount=2, ConstraintCount=3, DoF=0,
+        FullyConstrained=True, ConflictingConstraints=[], RedundantConstraints=[],
+        MalformedConstraints=[], GeometryMap='{"line": 0}',
+        ConstraintMap='{"width": 2}', ExternalMap='{}',
+        isDerivedFrom=lambda type_id: type_id == "Sketcher::SketchObject",
+    )
+    doc = types.SimpleNamespace(getObject=lambda name: sketch if name == "Sketch" else None)
+    meta = {"id_map": {"profile": "Sketch"}}
+    monkeypatch.setattr(parametric, "_resolve", lambda component_id: (doc, object(), meta))
+
+    status = parametric.op_get_sketch_status("component://Doc/Part", "profile")
+    assert status["fully_constrained"] is True
+    assert status["dof"] == 0
+    assert status["geometry_map"] == {"line": 0}
 
 
 def test_reusable_profiles_resolve_without_graph_objects(parametric):

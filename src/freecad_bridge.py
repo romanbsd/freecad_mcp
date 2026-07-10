@@ -375,10 +375,12 @@ async def create_component(document: str, name: str, label: str = "",
 @mcp.tool()
 async def define_component(component_id: str, features: list,
                           rules: list = None, profiles: list = None,
-                          profile_definitions: list = None) -> Any:
+                          profile_definitions: list = None,
+                          geometry_references: list = None) -> Any:
     """Define (or replace) the component's build graph — a list of features.
     Feature types include primitives, booleans, arrays, reusable 2D profiles,
-    pad/pocket/revolve/sweep/loft operations, edge treatments, and groups.
+    native constrained sketches, pad/pocket/revolve/sweep/loft operations,
+    edge treatments, and groups.
     Sizes/positions are expressions over $params
     (with units), e.g. "$width / 2", "$wall_thickness + 2 mm". Booleans/arrays
     reference other features by id. Shared `placement`, `frame`, `support`,
@@ -390,7 +392,9 @@ async def define_component(component_id: str, features: list,
 
     Optional `profile_definitions` register reusable geometry-only profiles;
     operations reference them with `profile_id` without creating document
-    objects. Optional `rules` (declarative design-rule definitions, each with id/type/
+    objects. Optional `geometry_references` name semantic face/edge/vertex/solid
+    selectors for reuse by supports, operations, and sketches. Optional `rules`
+    (declarative design-rule definitions, each with id/type/
     severity/targets/message) and default `profiles` are stored with the
     component for validate_component. A build that yields invalid geometry is
     rolled back, keeping the prior model.
@@ -398,7 +402,8 @@ async def define_component(component_id: str, features: list,
     return await _request({"type": "define_component", "params": {
         "component_id": component_id, "features": features,
         "rules": rules, "profiles": profiles,
-        "profile_definitions": profile_definitions}})
+        "profile_definitions": profile_definitions,
+        "geometry_references": geometry_references}})
 
 
 @mcp.tool()
@@ -433,6 +438,29 @@ async def get_component_graph(component_id: str, detail: str = "summary") -> Any
     feature definitions and 'summary' for ids, types, roles, and inputs."""
     return await _request({"type": "get_component_graph", "params": {
         "component_id": component_id, "detail": detail}})
+
+
+@mcp.tool()
+async def list_geometry_references(component_id: str,
+                                   resolve: bool = False) -> Any:
+    """List named semantic geometry references, optionally resolving matches."""
+    return await _request({"type": "list_geometry_references", "params": {
+        "component_id": component_id, "resolve": resolve}})
+
+
+@mcp.tool()
+async def resolve_geometry_reference(component_id: str,
+                                     reference_id: str) -> Any:
+    """Resolve one named geometry reference to current object subelements."""
+    return await _request({"type": "resolve_geometry_reference", "params": {
+        "component_id": component_id, "reference_id": reference_id}})
+
+
+@mcp.tool()
+async def get_sketch_status(component_id: str, feature_id: str) -> Any:
+    """Return solver status, DoF, constraint errors, and named sketch maps."""
+    return await _request({"type": "get_sketch_status", "params": {
+        "component_id": component_id, "feature_id": feature_id}})
 
 
 @mcp.tool()
