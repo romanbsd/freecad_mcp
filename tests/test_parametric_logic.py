@@ -192,6 +192,9 @@ def test_generic_profile_tools_are_exposed_without_one_off_keyhole(parametric):
     assert "extrude_cut" in feature_types
     assert "pad" in feature_types
     assert "pocket" in feature_types
+    assert "revolve" in feature_types
+    assert "sweep" in feature_types
+    assert "loft" in feature_types
     assert "keyhole_slot" not in feature_types
 
 
@@ -201,12 +204,105 @@ def test_profile_tool_schemas_describe_generic_sections(parametric):
     pad = parametric.op_describe_feature_type("pad")
     pocket = parametric.op_describe_feature_type("pocket")
 
-    assert profile["schema"]["one_of"] == ["points", "sections", "profile_spec"]
+    assert profile["schema"]["one_of"] == [
+        "profile_id", "points", "sections", "profile_spec"
+    ]
     assert cut["schema"]["required"] == ["id", "base", "length"]
-    assert cut["schema"]["one_of"] == ["profile", "points", "sections", "profile_spec"]
+    assert cut["schema"]["one_of"] == [
+        "profile", "profile_id", "points", "sections", "profile_spec"
+    ]
     assert pad["schema"]["required"] == ["id", "length"]
     assert pocket["schema"]["required"] == ["id", "base", "length"]
     assert profile["schema"]["properties"]["support"]
+    assert cut["schema"]["alias_of"] == "pocket"
+    assert cut["schema"]["deprecated"] is True
+
+
+def test_common_feature_schema_uses_one_selector_and_placement_contract(parametric):
+    described = parametric.op_describe_feature_type("fillet")
+    common = described["common_properties"]
+
+    assert {"support", "placement", "frame", "reversed", "symmetric"} <= set(common)
+    assert common["selector"]["properties"]["kind"]["enum"] == [
+        "face", "edge", "vertex", "solid"
+    ]
+    assert described["schema"]["one_of"] == ["selector", "edges"]
+
+
+def test_common_feature_normalizer_preserves_legacy_spelling(parametric):
+    normalized = parametric._normalize_common_feature({
+        "id": "part", "type": "box", "position": {"x": "2 mm"},
+        "frame": "XY", "reversed": True,
+    })
+
+    assert normalized["placement"]["translation"] == {"x": "2 mm"}
+    assert normalized["placement"]["frame"] == "XY"
+    assert normalized["reversed"] is True
+
+    nested = parametric._normalize_common_feature({
+        "id": "part", "type": "pad",
+        "placement": {"reversed": True, "symmetric": True},
+    })
+    assert nested["reversed"] is True
+    assert nested["symmetric"] is True
+
+
+def test_bind_sets_numeric_nested_placement_paths(parametric):
+    class Vector:
+        x = y = z = 0.0
+
+    class Placement:
+        Base = Vector()
+
+    feature = types.SimpleNamespace(Placement=Placement())
+    parametric._bind(feature, ".Placement.Base.x", 3, "Params")
+    assert feature.Placement.Base.x == 3
+
+
+def test_reusable_profiles_resolve_without_graph_objects(parametric):
+    definitions = parametric._profile_definition_map([{
+        "id": "mount_hole",
+        "sections": [{"type": "circle", "radius": "$radius"}],
+    }])
+
+    assert list(definitions) == ["mount_hole"]
+    resolved = parametric._resolve_profile_spec(
+        {"profile_id": "mount_hole", "plane": "XZ"}, definitions
+    )
+    assert resolved["plane"] == "XZ"
+    assert resolved["sections"][0]["radius"] == "$radius"
+
+    with pytest.raises(ValueError, match="duplicate profile"):
+        parametric._profile_definition_map([
+            {"id": "same", "points": [[0, 0], [1, 0], [1, 1]]},
+            {"id": "same", "points": [[0, 0], [2, 0], [2, 2]]},
+        ])
+
+
+def test_profile_definition_parameters_feed_dependency_index(parametric):
+    definitions = parametric._profile_definition_map([{
+        "id": "mount_hole",
+        "sections": [{"type": "circle", "radius": "$radius"}],
+    }])
+    index = parametric._dependency_index(
+        [{"name": "radius"}],
+        [{"id": "hole", "type": "pad", "profile_id": "mount_hole"}],
+        definitions,
+    )
+
+    assert index["parameter_features"]["radius"] == ["hole"]
+
+
+def test_sweep_and_loft_dependencies_use_graph_references_only(parametric):
+    assert parametric._feature_inputs({
+        "id": "rail", "type": "sweep", "profile_id": "section", "path": "curve",
+    }) == ["curve"]
+    assert parametric._feature_inputs({
+        "id": "transition", "type": "loft",
+        "loft_profiles": [
+            {"profile_id": "small"}, {"profile": "large_feature"},
+        ],
+    }) == ["large_feature"]
 
 
 def test_extrude_cut_depends_on_base_and_optional_profile(parametric):

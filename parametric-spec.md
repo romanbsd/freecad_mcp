@@ -138,7 +138,39 @@ Adds or replaces the declarative build graph.
 
 Expressions use `$parameter_name`, arithmetic, and FreeCAD-compatible units.
 
-### Profiles, pads, and pockets
+### Common placement and selectors
+
+Every feature accepts the same common fields: `placement`, `frame`, `support`,
+`reversed`, and `symmetric`. `position` remains a compatibility spelling for
+`placement.translation`. A placement can contain `translation`, `rotation`, a
+named principal-plane `frame`, or a custom frame with `origin`,
+`x_direction`, and `normal`.
+`support` derives that frame from an earlier feature and a face selector for
+profiles, primitives, and other shape features. `reversed` flips the local
+normal; `symmetric` centers axial features around the frame origin. Native
+feature placements are refreshed after parameter changes.
+
+Faces, edges, vertices, and solids use one selector shape:
+
+```json
+{
+  "kind": "face",
+  "where": {
+    "axis": "z",
+    "side": "max",
+    "planar": true,
+    "tolerance": "0.01 mm"
+  },
+  "expect": "one"
+}
+```
+
+Selectors also accept 1-based `index`/`indices`. Geometric predicates include
+`normal`, `parallel_to`, `length`, `radius`, `area`, `volume`, and `point` as
+appropriate for the selected kind. Legacy `face`, `face_index`, and `edges`
+forms remain accepted.
+
+### Reusable profiles and profile operations
 
 Reusable 2D profiles can be placed on a principal plane or attached to a
 planar face. Profile sections support `rectangle`, `circle`, `polygon`, and
@@ -146,16 +178,34 @@ planar face. Profile sections support `rectangle`, `circle`, `polygon`, and
 
 ```json
 {
-  "id": "mounting_hole",
-  "type": "profile_2d",
-  "support": {
-    "feature": "front_wall",
-    "face": {"axis": "y", "side": "min"},
-    "u_offset": "20 mm",
-    "v_offset": "35 mm"
-  },
-  "sections": [
-    {"type": "circle", "center": [0, 0], "radius": "3 mm"}
+  "profile_definitions": [
+    {
+      "id": "mounting_hole",
+      "sections": [
+        {"type": "circle", "center": [0, 0], "radius": "3 mm"}
+      ]
+    }
+  ],
+  "features": [
+    {
+      "id": "front_with_hole",
+      "type": "pocket",
+      "base": "front_wall",
+      "profile_id": "mounting_hole",
+      "length": "$wall_thickness + 2 mm",
+      "placement": {
+        "support": {
+          "feature": "front_wall",
+          "selector": {
+            "kind": "face",
+            "where": {"axis": "y", "side": "min"}
+          },
+          "u_offset": "20 mm",
+          "v_offset": "35 mm"
+        },
+        "reversed": true
+      }
+    }
   ]
 }
 ```
@@ -167,23 +217,18 @@ coordinates are centered on the selected face's bounds; `u_offset`, `v_offset`, 
 `offset` move that local frame along its two axes and normal.
 
 `pad` extrudes a profile and optionally fuses it with `base`. `pocket` cuts the
-extrusion from `base`. Both accept an inline profile or a `profile` feature id,
+extrusion from `base`. Both accept inline geometry, a visible `profile` feature
+id, or an invisible reusable `profile_id` definition,
 infer the extrusion direction from a face support, and support `reversed` and
 `symmetric` booleans. When a pocket support omits `feature`, its `base` is used.
 
-```json
-{
-  "id": "front_with_hole",
-  "type": "pocket",
-  "base": "front_wall",
-  "profile": "mounting_hole",
-  "length": "$wall_thickness + 2 mm",
-  "reversed": true
-}
-```
+`revolve`, `sweep`, and `loft` use the same profile resolver. A sweep accepts
+`path` or `path_points`; a loft accepts ordered `loft_profiles` entries using
+`profile_id` or `profile`. Any profile operation can combine with `base` using
+`boolean: "fuse" | "cut" | "common"`.
 
-`profile_extrude` and `extrude_cut` remain supported as compatibility forms;
-new component definitions should generally use `pad` and `pocket`.
+`profile_extrude` is a deprecated schema alias of `pad`; `extrude_cut` is a
+deprecated alias of `pocket`. Both remain executable for existing graphs.
 
 ### `set_component_parameters`
 

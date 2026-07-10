@@ -374,25 +374,31 @@ async def create_component(document: str, name: str, label: str = "",
 
 @mcp.tool()
 async def define_component(component_id: str, features: list,
-                          rules: list = None, profiles: list = None) -> Any:
+                          rules: list = None, profiles: list = None,
+                          profile_definitions: list = None) -> Any:
     """Define (or replace) the component's build graph — a list of features.
     Feature types include primitives, booleans, arrays, reusable 2D profiles,
-    face-supported pad/pocket operations, edge treatments, and groups.
+    pad/pocket/revolve/sweep/loft operations, edge treatments, and groups.
     Sizes/positions are expressions over $params
     (with units), e.g. "$width / 2", "$wall_thickness + 2 mm". Booleans/arrays
-    reference other features by id. Each feature may set `role`
+    reference other features by id. Shared `placement`, `frame`, `support`,
+    `reversed`, `symmetric`, and selector fields use one schema across feature
+    types. Each feature may set `role`
     (output/construction/tool/inspection) and `tags`. Read
     freecad://guide/cookbook for examples and use describe_feature_type for
     machine-readable fields.
 
-    Optional `rules` (declarative design-rule definitions, each with id/type/
+    Optional `profile_definitions` register reusable geometry-only profiles;
+    operations reference them with `profile_id` without creating document
+    objects. Optional `rules` (declarative design-rule definitions, each with id/type/
     severity/targets/message) and default `profiles` are stored with the
     component for validate_component. A build that yields invalid geometry is
     rolled back, keeping the prior model.
     """
     return await _request({"type": "define_component", "params": {
         "component_id": component_id, "features": features,
-        "rules": rules, "profiles": profiles}})
+        "rules": rules, "profiles": profiles,
+        "profile_definitions": profile_definitions}})
 
 
 @mcp.tool()

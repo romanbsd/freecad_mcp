@@ -20,12 +20,56 @@ import tempfile
 import FreeCAD as App
 
 _TOKEN = re.compile(r"\$([A-Za-z_]\w*)")
+_SUBELEMENTS = {
+    "face": "Faces", "edge": "Edges", "vertex": "Vertexes", "solid": "Solids",
+}
 
 
-def _edge_matches(edge, selector, tolerance=1e-6):
+def _normalize_common_feature(feat):
+    """Normalize shared feature fields while preserving legacy spellings."""
+    normalized = dict(feat)
+    placement = dict(normalized.get("placement") or {})
+    if normalized.get("position") is not None and not any(
+            key in placement for key in ("translation", "translate")):
+        placement["translation"] = normalized["position"]
+    if normalized.get("type") == "transform" and normalized.get("translate") \
+            and not any(key in placement for key in ("translation", "translate")):
+        placement["translation"] = normalized["translate"]
+    if normalized.get("frame") is not None and "frame" not in placement:
+        placement["frame"] = normalized["frame"]
+    if normalized.get("support") is not None and "support" not in placement:
+        placement["support"] = normalized["support"]
+    for key in ("reversed", "symmetric"):
+        if key not in normalized and key in placement:
+            normalized[key] = bool(placement[key])
+    if placement:
+        normalized["placement"] = placement
+        if placement.get("frame") is not None:
+            normalized.setdefault("frame", placement["frame"])
+        if placement.get("support") is not None:
+            normalized.setdefault("support", placement["support"])
+    return normalized
+
+
+def _selector_body(selector):
+    selector = selector or {}
+    return selector.get("where") or selector
+
+
+def _bounds_center(element):
+    bounds = element.BoundBox
+    return App.Vector(
+        (bounds.XMin + bounds.XMax) / 2,
+        (bounds.YMin + bounds.YMax) / 2,
+        (bounds.ZMin + bounds.ZMax) / 2,
+    )
+
+
+def _edge_matches(edge, selector, tolerance=1e-6, host=None):
+    selector = _selector_body(selector)
     bb = edge.BoundBox
-    if selector.get("parallel_to"):
-        axis = selector["parallel_to"].lower()
+    if selector.get("parallel_to") or selector.get("axis"):
+        axis = (selector.get("parallel_to") or selector.get("axis")).lower()
         lengths = {"x": bb.XLength, "y": bb.YLength, "z": bb.ZLength}
         dominant = max(lengths, key=lengths.get)
         if dominant != axis:
@@ -34,11 +78,16 @@ def _edge_matches(edge, selector, tolerance=1e-6):
                if key != axis):
             return False
     if selector.get("length") is not None:
-        target = App.Units.Quantity(str(selector["length"])).Value
-        edge_tolerance = App.Units.Quantity(
-            str(selector.get("tolerance", tolerance))
-        ).Value
+        target = _quantity_value(selector["length"], host)
+        edge_tolerance = _quantity_value(selector.get("tolerance", tolerance), host)
         if abs(edge.Length - target) > edge_tolerance:
+            return False
+    if selector.get("radius") is not None:
+        radius = getattr(getattr(edge, "Curve", None), "Radius", None)
+        if radius is None:
+            return False
+        edge_tolerance = _quantity_value(selector.get("tolerance", tolerance), host)
+        if abs(radius - _quantity_value(selector["radius"], host)) > edge_tolerance:
             return False
     return True
 
@@ -101,58 +150,103 @@ def _face_normal(face):
 
 
 def _face_bounds_center(face):
-    bounds = face.BoundBox
-    return App.Vector(
-        (bounds.XMin + bounds.XMax) / 2,
-        (bounds.YMin + bounds.YMax) / 2,
-        (bounds.ZMin + bounds.ZMax) / 2,
-    )
+    return _bounds_center(face)
+
+
+def _element_matches(element, kind, selector, host=None):
+    selector = _selector_body(selector)
+    tolerance = _quantity_value(selector.get("tolerance", 1e-6), host)
+    if kind == "edge" and not _edge_matches(element, selector, tolerance, host):
+        return False
+    if kind == "face":
+        if selector.get("planar") is True and \
+                getattr(element.Surface, "TypeId", "") != "Part::GeomPlane":
+            return False
+        requested_normal = selector.get("normal")
+        if requested_normal is None and selector.get("axis"):
+            sign = -1 if selector.get("side", "max") == "min" else 1
+            requested_normal = {
+                "x": [sign, 0, 0], "y": [0, sign, 0],
+                "z": [0, 0, sign],
+            }.get(selector["axis"])
+        if requested_normal is not None:
+            requested = _unit(_vector(requested_normal))
+            try:
+                if _face_normal(element).dot(requested) < float(selector.get("min_dot", 0.999)):
+                    return False
+            except ValueError:
+                return False
+        if selector.get("area") is not None and \
+                abs(element.Area - _quantity_value(selector["area"], host)) > tolerance:
+            return False
+    if kind == "vertex" and selector.get("point") is not None:
+        if element.Point.distanceToPoint(_vector(selector["point"])) > tolerance:
+            return False
+    if kind == "solid" and selector.get("volume") is not None and \
+            abs(element.Volume - _quantity_value(selector["volume"], host)) > tolerance:
+        return False
+    return True
+
+
+def _select_subelements(shape, selector, kind=None, host=None, expect=None):
+    selector = selector or {}
+    kind = (kind or selector.get("kind") or "face").lower().rstrip("s")
+    if kind not in _SUBELEMENTS:
+        raise ValueError("selector kind must be face, edge, vertex, or solid")
+    elements = list(getattr(shape, _SUBELEMENTS[kind]))
+    body = _selector_body(selector)
+    indices = selector.get("indices", body.get("indices"))
+    index = selector.get("index", body.get("index"))
+    if index is not None:
+        indices = [index]
+    if indices is not None:
+        selected = []
+        for raw in indices:
+            number = int(str(raw).replace(kind.title(), ""))
+            if number < 1 or number > len(elements):
+                raise ValueError("%s index %d is outside 1..%d" %
+                                 (kind, number, len(elements)))
+            selected.append(elements[number - 1])
+    else:
+        selected = [element for element in elements
+                    if _element_matches(element, kind, body, host)]
+
+    side = body.get("side")
+    axis = body.get("axis")
+    direction = None
+    if axis in ("x", "y", "z"):
+        direction = {"x": App.Vector(1, 0, 0), "y": App.Vector(0, 1, 0),
+                     "z": App.Vector(0, 0, 1)}[axis]
+    elif body.get("normal") is not None:
+        direction = _unit(_vector(body["normal"]))
+    if selected and side in ("min", "max") and direction is not None:
+        choose = min if side == "min" else max
+        selected = [choose(selected, key=lambda item: _bounds_center(item).dot(direction))]
+
+    expected = expect if expect is not None else selector.get("expect")
+    if expected == "one":
+        expected = 1
+    if isinstance(expected, int) and len(selected) != expected:
+        raise ValueError("%s selector expected %d match(es), got %d" %
+                         (kind, expected, len(selected)))
+    return selected
 
 
 def _select_support_face(support_obj, support_spec):
-    faces = support_obj.Shape.Faces
-    selector = support_spec.get("face") or {}
-    face_index = support_spec.get("face_index", selector.get("index"))
-    if face_index is not None:
-        index = int(face_index)
-        if index < 1 or index > len(faces):
-            raise ValueError("support face_index %d is outside 1..%d" %
-                             (index, len(faces)))
-        return faces[index - 1]
-
-    requested = selector.get("normal")
-    axis_selector = False
-    if requested is None and selector.get("axis"):
-        axis_selector = True
-        axis = selector["axis"].lower()
-        sign = -1 if str(selector.get("side", "max")).lower() == "min" else 1
-        requested = {
+    selector = dict(support_spec.get("selector") or support_spec.get("face") or {})
+    if support_spec.get("face_index") is not None:
+        selector["index"] = support_spec["face_index"]
+    selector.setdefault("kind", "face")
+    selector.setdefault("where", {})
+    body = selector["where"] if selector.get("where") else selector
+    body.setdefault("planar", True)
+    if body.get("axis") and body.get("normal") is None:
+        axis = body["axis"].lower()
+        sign = -1 if body.get("side", "max") == "min" else 1
+        body["normal"] = {
             "x": [sign, 0, 0], "y": [0, sign, 0], "z": [0, 0, sign]
         }.get(axis)
-        if requested is None:
-            raise ValueError("support face axis must be x, y, or z")
-    if requested is None:
-        raise ValueError("support requires face_index or face.normal/face.axis")
-
-    normal = _unit(_vector(requested), "support face normal cannot be zero")
-    min_dot = float(selector.get("min_dot", 0.999))
-    matches = []
-    for face in faces:
-        try:
-            dot = _face_normal(face).dot(normal)
-        except Exception:
-            continue
-        if dot >= min_dot:
-            matches.append(face)
-    if not matches:
-        raise ValueError("support selector matched no planar face")
-    side = str(selector.get("side", "max")).lower()
-    if side not in ("min", "max"):
-        raise ValueError("support face side must be 'min' or 'max'")
-    choose = max if axis_selector else (min if side == "min" else max)
-    return choose(
-        matches, key=lambda face: _face_bounds_center(face).dot(normal)
-    )
+    return _select_subelements(support_obj.Shape, selector, "face", expect=1)[0]
 
 
 def _support_frame(support_obj, support_spec, host=None):
@@ -170,6 +264,111 @@ def _support_frame(support_obj, support_spec, host=None):
     origin += v_axis * _quantity_value(support_spec.get("v_offset", 0), host)
     origin += normal * _quantity_value(support_spec.get("offset", 0), host)
     return {"origin": origin, "u": u_axis, "v": v_axis, "normal": normal}
+
+
+def _static_frame(frame_spec, host=None):
+    if isinstance(frame_spec, str):
+        plane = frame_spec.upper()
+        u_axis = _plane_vector(plane, 1, 0)
+        v_axis = _plane_vector(plane, 0, 1)
+        normal = _unit(u_axis.cross(v_axis))
+        return {"origin": App.Vector(0, 0, 0), "u": u_axis,
+                "v": v_axis, "normal": normal}
+    spec = frame_spec or {}
+    if spec.get("plane"):
+        result = _static_frame(spec["plane"], host)
+    else:
+        normal = _unit(_vector(spec.get("normal", [0, 0, 1])))
+        candidate = _vector(spec.get("x_direction", [1, 0, 0]))
+        u_axis = _unit(candidate - normal * candidate.dot(normal),
+                       "frame x_direction is parallel to its normal")
+        result = {"u": u_axis, "v": _unit(normal.cross(u_axis)),
+                  "normal": normal}
+    origin = spec.get("origin", [0, 0, 0])
+    result["origin"] = App.Vector(*[_quantity_value(value, host) for value in origin])
+    return result
+
+
+def _frame_rotation(frame):
+    matrix = App.Matrix()
+    matrix.A11, matrix.A21, matrix.A31 = frame["u"].x, frame["u"].y, frame["u"].z
+    matrix.A12, matrix.A22, matrix.A32 = frame["v"].x, frame["v"].y, frame["v"].z
+    matrix.A13, matrix.A23, matrix.A33 = \
+        frame["normal"].x, frame["normal"].y, frame["normal"].z
+    return App.Rotation(matrix)
+
+
+def _combined_expression(first, second):
+    values = [value for value in (first, second) if value is not None]
+    if not values:
+        return None
+    if len(values) == 1:
+        return values[0]
+    if all(isinstance(value, (int, float)) for value in values):
+        return sum(values)
+    rendered = ["%s mm" % value if isinstance(value, (int, float)) else value
+                for value in values]
+    return "(%s) + (%s)" % (rendered[0], rendered[1])
+
+
+def _feature_axial_length(feat, host):
+    value = feat.get("length") or feat.get("height")
+    if value is None and feat.get("type") == "box":
+        value = (feat.get("size") or {}).get("z")
+    return _quantity_value(value, host) if value is not None else None
+
+
+def _directional_frame(frame, feat, host):
+    result = dict(frame)
+    if feat.get("reversed"):
+        result["v"] = -result["v"]
+        result["normal"] = -result["normal"]
+    if feat.get("symmetric"):
+        length = _feature_axial_length(feat, host)
+        if length is not None:
+            result["origin"] = result["origin"] - result["normal"] * length / 2
+    return result
+
+
+def _apply_common_placement(obj, feat, host, id_map=None):
+    placement = feat.get("placement") or {}
+    translation = placement.get("translation") or placement.get("translate") or {}
+    support = placement.get("support") or feat.get("support")
+    frame_spec = placement.get("frame") or feat.get("frame")
+    frame_origin = {}
+    support_id = _support_feature_id(support)
+    if support_id:
+        if not id_map or support_id not in id_map:
+            raise ValueError("unknown placement support feature %r" % support_id)
+        support_obj = id_map[support_id]
+        if hasattr(support_obj, "Shape") and support_obj.Shape.isNull():
+            support_obj.Document.recompute()
+        support_spec = dict(support) if isinstance(support, dict) else {
+            "feature": support_id,
+        }
+        frame = _directional_frame(
+            _support_frame(support_obj, support_spec, host), feat, host
+        )
+        obj.Placement.Rotation = _frame_rotation(frame)
+        frame_origin = {
+            "x": frame["origin"].x, "y": frame["origin"].y,
+            "z": frame["origin"].z,
+        }
+    elif frame_spec:
+        frame = _directional_frame(_static_frame(frame_spec, host), feat, host)
+        obj.Placement.Rotation = _frame_rotation(frame)
+        raw_origin = frame_spec.get("origin", [0, 0, 0]) \
+            if isinstance(frame_spec, dict) else [0, 0, 0]
+        frame_origin = dict(zip(("x", "y", "z"), raw_origin))
+    rotation = placement.get("rotation") or placement.get("rotate")
+    if rotation:
+        axis = _vector(rotation.get("axis", [0, 0, 1]))
+        angle = _quantity_value(rotation.get("angle", 0), host)
+        obj.Placement.Rotation = App.Rotation(axis, angle)
+    for axis in ("x", "y", "z"):
+        value = _combined_expression(frame_origin.get(axis), translation.get(axis))
+        if value is not None:
+            _bind(obj, ".Placement.Base.%s" % axis, value, host.Name)
 
 
 def _plane_vector(plane, u, v, frame=None):
@@ -281,14 +480,73 @@ def _profile_spec(feat):
         spec["sections"] = feat.get("sections")
     if feat.get("plane") is not None:
         spec["plane"] = feat.get("plane")
+    if feat.get("frame") is not None:
+        spec["frame"] = feat.get("frame")
     return spec
+
+
+def _profile_definition_map(profile_definitions):
+    definitions = {}
+    for definition in profile_definitions or []:
+        profile_id = definition.get("id")
+        if not profile_id:
+            raise ValueError("profile definition requires a non-empty id")
+        if profile_id in definitions:
+            raise ValueError("duplicate profile definition %r" % profile_id)
+        spec = dict(definition)
+        spec.pop("id", None)
+        resolved = _profile_spec(spec) or {}
+        if resolved.get("points") is None and resolved.get("sections") is None:
+            raise ValueError("profile definition %r has no geometry" % profile_id)
+        definitions[profile_id] = resolved
+    return definitions
+
+
+def _resolve_profile_spec(feat, profile_definitions=None):
+    profile_id = feat.get("profile_id")
+    base = {}
+    if profile_id:
+        definitions = profile_definitions or {}
+        if profile_id not in definitions:
+            raise ValueError("unknown reusable profile %r" % profile_id)
+        base = dict(definitions[profile_id])
+    inline = _profile_spec(feat) or {}
+    base.update(inline)
+    return base
+
+
+def _resolve_loft_entries(entries, profile_definitions, id_map):
+    resolved = []
+    links = []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            entry = {"profile_id": entry}
+        if entry.get("profile"):
+            profile_name = entry["profile"]
+            if profile_name not in id_map:
+                raise ValueError("unknown loft profile feature %r" % profile_name)
+            links.append(id_map[profile_name])
+            resolved.append({"link": len(links) - 1})
+            continue
+        profile_id = entry.get("profile_id")
+        if not profile_id or profile_id not in profile_definitions:
+            raise ValueError("loft entry requires a known profile_id or profile")
+        spec = dict(profile_definitions[profile_id])
+        for key, value in entry.items():
+            if key != "profile_id":
+                spec[key] = value
+        resolved.append({"spec": spec})
+    if len(resolved) < 2:
+        raise ValueError("loft requires at least two profiles")
+    return resolved, links
 
 
 def _make_profile_shape(spec, host=None, support_obj=None, support_spec=None):
     import Part
     plane = spec.get("plane", "XY")
     frame = _support_frame(support_obj, support_spec or {}, host) \
-        if support_obj is not None else None
+        if support_obj is not None else \
+        (_static_frame(spec.get("frame"), host) if spec.get("frame") else None)
     if spec.get("points") is not None:
         return _polygon_face(spec, plane, host, frame)
     faces = []
@@ -312,10 +570,86 @@ def _make_profile_shape(spec, host=None, support_obj=None, support_spec=None):
     return shape.removeSplitter()
 
 
-def _add_profile_properties(obj, feat, host, operation="extrude", id_map=None,
-                            default_support=None):
+def _shape_wire(shape):
+    import Part
+    if getattr(shape, "ShapeType", "") == "Wire":
+        return shape
+    if getattr(shape, "ShapeType", "") == "Face":
+        return shape.OuterWire
+    if getattr(shape, "Wires", None):
+        return shape.Wires[0]
+    if getattr(shape, "Edges", None):
+        return Part.Wire(shape.Edges)
+    raise ValueError("shape has no usable wire")
+
+
+def _path_wire(obj, host):
+    import Part
+    if getattr(obj, "Path", None):
+        return _shape_wire(obj.Path.Shape)
+    spec = json.loads(getattr(obj, "PathSpec", "{}") or "{}")
+    points = spec.get("points") or []
+    if len(points) < 2:
+        raise ValueError("sweep requires path or at least two path_points")
+    vectors = []
+    for point in points:
+        values = [point.get(axis, 0) for axis in ("x", "y", "z")] \
+            if isinstance(point, dict) else point
+        vectors.append(App.Vector(*[_quantity_value(value, host) for value in values]))
+    if spec.get("closed") and vectors[0].distanceToPoint(vectors[-1]) > 1e-9:
+        vectors.append(vectors[0])
+    return Part.Wire(Part.makePolygon(vectors).Edges)
+
+
+def _operation_frame(obj, spec, host):
+    support = getattr(obj, "Support", None)
+    if support is not None:
+        support_spec = json.loads(getattr(obj, "SupportSpec", "{}") or "{}")
+        return _support_frame(support, support_spec, host)
+    if spec.get("frame"):
+        return _static_frame(spec["frame"], host)
+    plane = spec.get("plane", "XY")
+    return _static_frame(plane, host)
+
+
+def _revolve_axis(obj, spec, host):
+    frame = _operation_frame(obj, spec, host)
+    axis = str(getattr(obj, "Axis", "z") or "z").lower()
+    directions = {
+        "x": App.Vector(1, 0, 0), "y": App.Vector(0, 1, 0),
+        "z": App.Vector(0, 0, 1), "u": frame["u"],
+        "v": frame["v"], "normal": frame["normal"],
+    }
+    if axis not in directions:
+        raise ValueError("revolve axis must be x, y, z, u, v, or normal")
+    raw_origin = json.loads(getattr(obj, "AxisOrigin", "[]") or "[]")
+    if raw_origin:
+        origin = App.Vector(*[_quantity_value(value, host) for value in raw_origin])
+    else:
+        origin = frame["origin"]
+    return origin, directions[axis]
+
+
+def _loft_wires(obj, host):
+    entries = json.loads(getattr(obj, "LoftSpec", "[]") or "[]")
+    links = list(getattr(obj, "LoftProfiles", []) or [])
+    wires = []
+    for entry in entries:
+        if "link" in entry:
+            wires.append(_shape_wire(links[int(entry["link"])].Shape))
+        else:
+            face = _make_profile_shape(entry["spec"], host)
+            if len(face.Wires) != 1:
+                raise ValueError("loft profiles with holes are not supported")
+            wires.append(face.OuterWire)
+    return wires
+
+
+def _add_profile_properties(obj, feat, host, operation="pad", id_map=None,
+                            default_support=None, profile_definitions=None):
     id_map = id_map or {}
-    spec = _profile_spec(feat) or {}
+    profile_definitions = profile_definitions or {}
+    spec = _resolve_profile_spec(feat, profile_definitions)
     obj.addProperty("App::PropertyString", "ProfileSpec", "Geometry")
     obj.addProperty("App::PropertyString", "HostName", "Geometry")
     obj.addProperty("App::PropertyLink", "Profile", "Geometry")
@@ -326,6 +660,15 @@ def _add_profile_properties(obj, feat, host, operation="extrude", id_map=None,
     obj.addProperty("App::PropertyEnumeration", "Operation", "Geometry")
     obj.addProperty("App::PropertyBool", "Reversed", "Geometry")
     obj.addProperty("App::PropertyBool", "Symmetric", "Geometry")
+    obj.addProperty("App::PropertyAngle", "Angle", "Geometry")
+    obj.addProperty("App::PropertyString", "AxisOrigin", "Geometry")
+    obj.addProperty("App::PropertyLink", "Path", "Geometry")
+    obj.addProperty("App::PropertyString", "PathSpec", "Geometry")
+    obj.addProperty("App::PropertyLinkList", "LoftProfiles", "Geometry")
+    obj.addProperty("App::PropertyString", "LoftSpec", "Geometry")
+    obj.addProperty("App::PropertyBool", "Frenet", "Geometry")
+    obj.addProperty("App::PropertyBool", "Ruled", "Geometry")
+    obj.addProperty("App::PropertyBool", "Closed", "Geometry")
     obj.ProfileSpec = json.dumps(spec)
     obj.HostName = host.Name
     profile_id = feat.get("profile")
@@ -343,14 +686,35 @@ def _add_profile_properties(obj, feat, host, operation="extrude", id_map=None,
         obj.SupportSpec = obj.Profile.SupportSpec
     else:
         obj.SupportSpec = "{}"
-    obj.Axis = ["x", "y", "z"]
-    obj.Operation = ["face", "extrude"]
+    obj.Axis = ["x", "y", "z", "u", "v", "normal"]
+    obj.Operation = ["face", "pad", "revolve", "sweep", "loft"]
     plane = spec.get("plane", feat.get("plane", "XY"))
-    obj.Axis = (feat.get("axis") or _normal_axis_for_plane(plane)).lower()
+    default_axis = "u" if operation == "revolve" and support_id else \
+        ("x" if operation == "revolve" else _normal_axis_for_plane(plane))
+    obj.Axis = (feat.get("axis") or default_axis).lower()
     obj.Operation = operation
     obj.Reversed = bool(feat.get("reversed", False))
     obj.Symmetric = bool(feat.get("symmetric", False))
     _bind(obj, "Length", feat.get("length") or feat.get("depth") or "1 mm", host.Name)
+    _bind(obj, "Angle", feat.get("angle") or "360 deg", host.Name)
+    obj.AxisOrigin = json.dumps(feat.get("axis_origin") or [])
+    path_id = feat.get("path")
+    if path_id:
+        obj.Path = id_map[path_id]
+    obj.PathSpec = json.dumps({
+        "points": feat.get("path_points") or [],
+        "closed": bool(feat.get("path_closed", False)),
+    })
+    loft_entries, loft_links = ([], [])
+    if operation == "loft":
+        loft_entries, loft_links = _resolve_loft_entries(
+            feat.get("loft_profiles"), profile_definitions, id_map
+        )
+    obj.LoftSpec = json.dumps(loft_entries)
+    obj.LoftProfiles = loft_links
+    obj.Frenet = bool(feat.get("frenet", False))
+    obj.Ruled = bool(feat.get("ruled", False))
+    obj.Closed = bool(feat.get("closed", False))
     obj.Proxy = _ProfileExtrusionProxy()
 
 
@@ -371,15 +735,41 @@ class _ProfileExtrusionProxy:
         host = _profile_host(obj)
         support = getattr(obj, "Support", None)
         support_spec = json.loads(getattr(obj, "SupportSpec", "{}") or "{}")
+        operation = getattr(obj, "Operation", "pad")
+        spec = json.loads(getattr(obj, "ProfileSpec", "{}") or "{}")
+        if operation == "loft":
+            import Part
+            wires = _loft_wires(obj, host)
+            if getattr(obj, "Reversed", False):
+                wires.reverse()
+            obj.Shape = Part.makeLoft(wires, True, obj.Ruled, obj.Closed)
+            return
         if getattr(obj, "Profile", None):
             face = obj.Profile.Shape.copy()
         elif hasattr(obj, "ProfileSpec"):
-            face = _make_profile_shape(json.loads(obj.ProfileSpec), host,
-                                       support, support_spec)
+            face = _make_profile_shape(spec, host, support, support_spec)
         else:
             face = _make_profile_shape({"points": json.loads(obj.ProfilePoints)}, None)
-        if getattr(obj, "Operation", "extrude") == "face":
+        if operation == "face":
             obj.Shape = face
+            return
+        if operation == "revolve":
+            origin, direction = _revolve_axis(obj, spec, host)
+            angle = obj.Angle.Value * (-1 if obj.Reversed else 1)
+            if obj.Symmetric:
+                face.rotate(origin, direction, -angle / 2)
+            obj.Shape = face.revolve(origin, direction, angle)
+            return
+        if operation == "sweep":
+            path = _path_wire(obj, host)
+            if obj.Reversed:
+                path.reverse()
+            solids = [path.makePipeShell([wire], True, obj.Frenet)
+                      for wire in face.Wires]
+            shape = solids[0]
+            for hole in solids[1:]:
+                shape = shape.cut(hole)
+            obj.Shape = shape
             return
         if support is not None:
             direction = _support_frame(support, support_spec, host)["normal"] * obj.Length.Value
@@ -409,9 +799,11 @@ class _EdgeTreatmentProxy:
     __setstate__ = loads
 
     def execute(self, obj):
-        selector = json.loads(obj.EdgeSelector or "{}")
-        edges = [edge for edge in obj.Base.Shape.Edges
-                 if _edge_matches(edge, selector)]
+        raw = getattr(obj, "SelectorSpec", "") or getattr(obj, "EdgeSelector", "{}")
+        selector = json.loads(raw or "{}")
+        edges = _select_subelements(
+            obj.Base.Shape, selector, "edge", _profile_host(obj)
+        )
         if not edges:
             raise ValueError("%s selector matched no edges" % self.mode)
         if self.mode == "fillet":
@@ -483,7 +875,13 @@ def _bind(obj, prop_path, value, host_name):
     if isinstance(value, str):
         obj.setExpression(prop_path, _translate(value, host_name))
     elif value is not None:
-        setattr(obj, prop_path, value)
+        if prop_path.startswith(".Placement.Base."):
+            axis = prop_path.rsplit(".", 1)[-1]
+            base = obj.Placement.Base
+            setattr(base, axis, float(value))
+            obj.Placement.Base = base
+        else:
+            setattr(obj, prop_path, value)
 
 
 def _load(container):
@@ -689,16 +1087,66 @@ def _profile_points(feat):
     return points
 
 
-def _build_feature(doc, host, feat, id_map):
+def _apply_profile_placement(obj, feat, host):
+    placement_feat = dict(feat)
+    placement = dict(placement_feat.get("placement") or {})
+    placement.pop("frame", None)
+    placement.pop("support", None)
+    placement_feat["placement"] = placement
+    placement_feat.pop("frame", None)
+    placement_feat.pop("support", None)
+    _apply_common_placement(obj, placement_feat, host)
+
+
+def _build_profile_operation(doc, host, feat, id_map, profile_definitions):
+    ftype = feat["type"]
+    operation = {
+        "profile_2d": "face", "profile_extrude": "pad",
+        "pad": "pad", "pocket": "pad", "extrude_cut": "pad",
+        "revolve": "revolve", "sweep": "sweep", "loft": "loft",
+    }[ftype]
+    base_id = feat.get("base")
+    if ftype in ("pocket", "extrude_cut") and not base_id:
+        raise ValueError("%s requires a base feature" % ftype)
+    boolean_mode = feat.get("boolean")
+    if ftype == "pad" and base_id:
+        boolean_mode = boolean_mode or "fuse"
+    elif ftype in ("pocket", "extrude_cut"):
+        boolean_mode = "cut"
+    if boolean_mode and not base_id:
+        raise ValueError("profile operation boolean mode requires a base feature")
+    if boolean_mode not in (None, "fuse", "cut", "common"):
+        raise ValueError("profile operation boolean must be fuse, cut, or common")
+
+    tool_name = feat["id"] if not boolean_mode else "%s_Tool" % feat["id"]
+    tool = doc.addObject("Part::FeaturePython", tool_name)
+    _add_profile_properties(
+        tool, feat, host, operation, id_map, default_support=base_id,
+        profile_definitions=profile_definitions,
+    )
+    _apply_profile_placement(tool, feat, host)
+    if not boolean_mode:
+        return tool
+
+    classes = {"fuse": "Part::Fuse", "cut": "Part::Cut", "common": "Part::Common"}
+    obj = doc.addObject(classes[boolean_mode], feat["id"])
+    obj.Base = id_map[base_id]
+    obj.Tool = tool
+    feat["_consumed"] = [base_id] + \
+        ([feat["profile"]] if feat.get("profile") else [])
+    return obj
+
+
+def _build_feature(doc, host, feat, id_map, profile_definitions=None):
     """Create one feature object and bind its expressions. Returns the object."""
+    normalized = _normalize_common_feature(feat)
+    feat.clear()
+    feat.update(normalized)
     ftype = feat["type"]
     hn = host.Name
-    pos = feat.get("position") or {}
 
     def place(obj):
-        for ax in ("x", "y", "z"):
-            if ax in pos:
-                _bind(obj, ".Placement.Base.%s" % ax, pos[ax], hn)
+        _apply_common_placement(obj, feat, host, id_map)
 
     if ftype == "box":
         obj = doc.addObject("Part::Box", feat["id"])
@@ -727,53 +1175,23 @@ def _build_feature(doc, host, feat, id_map):
         place(inner)
         obj = doc.addObject("Part::Cut", feat["id"])
         obj.Base, obj.Tool = outer, inner
-    elif ftype == "profile_extrude":
-        obj = doc.addObject("Part::FeaturePython", feat["id"])
-        if (feat.get("sections") is not None or feat.get("profile_spec") is not None
-                or feat.get("plane") is not None or feat.get("support") is not None
-                or feat.get("profile") is not None):
-            _add_profile_properties(obj, feat, host, "extrude", id_map)
-        else:
-            points = _profile_points(feat)  # fail clearly, not as an opaque rollback
-            obj.addProperty("App::PropertyString", "ProfilePoints", "Geometry")
-            obj.addProperty("App::PropertyLength", "Length", "Geometry")
-            obj.addProperty("App::PropertyEnumeration", "Axis", "Geometry")
-            obj.ProfilePoints = json.dumps(points)
-            obj.Axis = ["x", "y", "z"]
-            obj.Axis = (feat.get("axis") or "z").lower()
-            _bind(obj, "Length", feat.get("length"), hn)
-            obj.Proxy = _ProfileExtrusionProxy()
-        place(obj)
-    elif ftype == "profile_2d":
-        obj = doc.addObject("Part::FeaturePython", feat["id"])
-        _add_profile_properties(obj, feat, host, "face", id_map)
-        place(obj)
-    elif ftype in ("pad", "pocket", "extrude_cut"):
-        base_id = feat.get("base")
-        if ftype in ("pocket", "extrude_cut") and not base_id:
-            raise ValueError("%s requires a base feature" % ftype)
-        tool_name = feat["id"] if not base_id else "%s_Tool" % feat["id"]
-        tool = doc.addObject("Part::FeaturePython", tool_name)
-        _add_profile_properties(
-            tool, feat, host, "extrude", id_map, default_support=base_id
+    elif ftype in ("profile_2d", "profile_extrude", "pad", "pocket",
+                   "extrude_cut", "revolve", "sweep", "loft"):
+        obj = _build_profile_operation(
+            doc, host, feat, id_map, profile_definitions or {}
         )
-        place(tool)
-        if base_id:
-            cls = "Part::Fuse" if ftype == "pad" else "Part::Cut"
-            obj = doc.addObject(cls, feat["id"])
-            obj.Base = id_map[base_id]
-            obj.Tool = tool
-            feat["_consumed"] = [base_id] + \
-                ([feat["profile"]] if feat.get("profile") else [])
-        else:
-            obj = tool
     elif ftype in ("fillet", "chamfer"):
         obj = doc.addObject("Part::FeaturePython", feat["id"])
         obj.addProperty("App::PropertyLink", "Base", "Geometry")
         obj.addProperty("App::PropertyLength", "Size", "Geometry")
-        obj.addProperty("App::PropertyString", "EdgeSelector", "Geometry")
+        obj.addProperty("App::PropertyString", "SelectorSpec", "Geometry")
+        obj.addProperty("App::PropertyString", "HostName", "Geometry")
         obj.Base = id_map[feat["base"]]
-        obj.EdgeSelector = json.dumps(feat.get("edges") or {})
+        selector = feat.get("selector") or feat.get("edges") or {}
+        if "kind" not in selector:
+            selector = dict(selector, kind="edge")
+        obj.SelectorSpec = json.dumps(selector)
+        obj.HostName = host.Name
         _bind(obj, "Size", feat.get("radius") or feat.get("size"), hn)
         obj.Proxy = _EdgeTreatmentProxy(ftype)
     elif ftype == "cone":
@@ -793,9 +1211,7 @@ def _build_feature(doc, host, feat, id_map):
     elif ftype == "transform":
         obj = id_map[feat["base"]]  # mutate the referenced feature's placement
         obj.Placement.Rotation = _axis_rotation(feat.get("axis"))
-        for ax in ("x", "y", "z"):
-            if (feat.get("translate") or {}).get(ax) is not None:
-                _bind(obj, ".Placement.Base.%s" % ax, feat["translate"][ax], hn)
+        place(obj)
         return obj  # not a new object
     elif ftype in ("cut", "union", "intersection"):
         obj = _build_boolean(doc, feat, id_map)
@@ -808,6 +1224,9 @@ def _build_feature(doc, host, feat, id_map):
 
     if feat.get("label"):
         obj.Label = feat["label"]
+    if ftype in ("cut", "union", "intersection", "array", "grid_array",
+                 "fillet", "chamfer"):
+        place(obj)
     _apply_material(obj, feat.get("material"))
     return obj
 
@@ -910,7 +1329,8 @@ def op_create_component(document, name, label=None, parameters=None):
         _save(container, {"host": host.Name, "groups": groups,
                           "schema": registry, "build_graph": [],
                           "id_map": {}, "variants": {}, "validation": None,
-                          "revision": 0, "outputs": []})
+                          "revision": 0, "outputs": [],
+                          "profile_definitions": []})
         doc.recompute()
         doc.commitTransaction()
     except Exception:
@@ -920,9 +1340,13 @@ def op_create_component(document, name, label=None, parameters=None):
             "parameters_created": created}
 
 
-def op_define_component(component_id, features, rules=None, profiles=None):
+def op_define_component(component_id, features, rules=None, profiles=None,
+                        profile_definitions=None):
     doc, container, meta = _resolve(component_id)
     host = _host(doc, meta)
+    definition_list = profile_definitions if profile_definitions is not None else \
+        meta.get("profile_definitions", [])
+    definition_map = _profile_definition_map(definition_list)
     _begin(doc, "define_component")
     try:
         # remove any previously generated features
@@ -945,7 +1369,7 @@ def op_define_component(component_id, features, rules=None, profiles=None):
         graph = []
         for feat in features:
             feat = dict(feat)
-            obj = _build_feature(doc, host, feat, id_map)
+            obj = _build_feature(doc, host, feat, id_map, definition_map)
             id_map[feat["id"]] = obj
             grp = _group(doc, meta, _ROLE_GROUP.get(feat.get("role", "output"), "Features"))
             if obj.Name not in [o.Name for o in grp.Group]:
@@ -971,7 +1395,10 @@ def op_define_component(component_id, features, rules=None, profiles=None):
             raise ValueError("build failed; invalid features: %s" % ", ".join(errs))
         meta["build_graph"] = graph
         meta["id_map"] = name_map
-        meta["dependency_index"] = _dependency_index(meta["schema"], graph)
+        meta["profile_definitions"] = list(profile_definitions or definition_list)
+        meta["dependency_index"] = _dependency_index(
+            meta["schema"], graph, definition_map
+        )
         meta["revision"] = int(meta.get("revision", 0)) + 1
         meta.setdefault("outputs", [
             f["id"] for f in graph if f.get("role", "output") == "output"
@@ -986,7 +1413,8 @@ def op_define_component(component_id, features, rules=None, profiles=None):
         _abort(doc)
         raise
 
-    return {"features_created": list(name_map.keys()), "object_names": name_map}
+    return {"features_created": list(name_map.keys()), "object_names": name_map,
+            "profiles_registered": list(definition_map.keys())}
 
 
 def _apply_graph_operations(graph, operations, outputs=None):
@@ -1054,6 +1482,7 @@ def op_get_component_graph(component_id, detail="summary"):
         "component_id": component_id,
         "revision": int(meta.get("revision", 0)),
         "features": features,
+        "profile_definitions": list(meta.get("profile_definitions", [])),
         "outputs": list(meta.get("outputs", [])),
     }
 
@@ -1107,10 +1536,49 @@ def op_list_feature_types():
             "box", "cylinder", "tube", "cone", "prism", "transform",
             "cut", "union", "intersection", "array", "grid_array",
             "profile_2d", "profile_extrude", "pad", "pocket", "extrude_cut",
+            "revolve", "sweep", "loft",
             "fillet", "chamfer", "group", "pattern",
         ]
     }
 
+
+SELECTOR_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "kind": {"enum": ["face", "edge", "vertex", "solid"]},
+        "index": {"type": "integer", "minimum": 1},
+        "indices": {"type": "array", "items": {"type": "integer", "minimum": 1}},
+        "where": {"properties": {
+            "axis": {"enum": ["x", "y", "z"]},
+            "side": {"enum": ["min", "max"]},
+            "normal": {"type": "vector3"},
+            "parallel_to": {"enum": ["x", "y", "z"]},
+            "length": {}, "radius": {}, "area": {}, "volume": {},
+            "point": {"type": "vector3"}, "tolerance": {},
+            "planar": {"type": "boolean"}, "min_dot": {"type": "number"},
+        }},
+        "expect": {"one_of": ["one", "integer"]},
+    },
+}
+
+COMMON_FEATURE_PROPERTIES = {
+    "role": {"enum": ["output", "construction", "tool", "inspection"]},
+    "label": {"type": "string"},
+    "tags": {"type": "array"},
+    "placement": {"description": "translation, rotation, frame, and support"},
+    "frame": {"description": "principal plane or origin/x_direction/normal frame"},
+    "support": {"description": "feature plus a shared face selector"},
+    "reversed": {"type": "boolean", "default": False},
+    "symmetric": {"type": "boolean", "default": False},
+    "selector": SELECTOR_SCHEMA,
+}
+
+PROFILE_INPUTS = ["profile", "profile_id", "points", "sections", "profile_spec"]
+PROFILE_OPERATION_PROPERTIES = {
+    "profile": {"description": "graph feature id containing a profile face"},
+    "profile_id": {"description": "id from component profile_definitions"},
+    "boolean": {"enum": ["fuse", "cut", "common"]},
+}
 
 FEATURE_SCHEMAS = {
     "box": {"required": ["id", "size"], "properties": {
@@ -1122,8 +1590,9 @@ FEATURE_SCHEMAS = {
     "grid_array": {"required": ["id", "base", "count_x", "count_y"],
                    "properties": {"spacing_x": {}, "spacing_y": {}}},
     "profile_extrude": {
+        "alias_of": "pad", "deprecated": True,
         "required": ["id", "length"],
-        "one_of": ["profile", "points", "sections", "profile_spec"],
+        "one_of": PROFILE_INPUTS,
         "properties": {
             "plane": {"enum": ["XY", "XZ", "YZ"], "default": "XY"},
             "axis": {"enum": ["x", "y", "z"], "default": "normal to plane"},
@@ -1135,7 +1604,7 @@ FEATURE_SCHEMAS = {
     },
     "profile_2d": {
         "required": ["id"],
-        "one_of": ["points", "sections", "profile_spec"],
+        "one_of": ["profile_id", "points", "sections", "profile_spec"],
         "properties": {
             "plane": {"enum": ["XY", "XZ", "YZ"], "default": "XY"},
             "support": {"description": "optional planar-face support selector"},
@@ -1144,8 +1613,9 @@ FEATURE_SCHEMAS = {
     },
     "pad": {
         "required": ["id", "length"],
-        "one_of": ["profile", "points", "sections", "profile_spec"],
+        "one_of": PROFILE_INPUTS,
         "properties": {
+            **PROFILE_OPERATION_PROPERTIES,
             "base": {"optional": True, "description": "feature to fuse with the pad"},
             "support": {"description": "optional planar-face support selector"},
             "reversed": {"type": "boolean", "default": False},
@@ -1154,16 +1624,18 @@ FEATURE_SCHEMAS = {
     },
     "pocket": {
         "required": ["id", "base", "length"],
-        "one_of": ["profile", "points", "sections", "profile_spec"],
+        "one_of": PROFILE_INPUTS,
         "properties": {
+            **PROFILE_OPERATION_PROPERTIES,
             "support": {"description": "optional planar-face support selector; feature defaults to base"},
             "reversed": {"type": "boolean", "default": False},
             "symmetric": {"type": "boolean", "default": False},
         },
     },
     "extrude_cut": {
+        "alias_of": "pocket", "deprecated": True,
         "required": ["id", "base", "length"],
-        "one_of": ["profile", "points", "sections", "profile_spec"],
+        "one_of": PROFILE_INPUTS,
         "properties": {
             "profile": {"description": "feature id of a profile_2d face"},
             "plane": {"enum": ["XY", "XZ", "YZ"], "default": "XY"},
@@ -1171,8 +1643,33 @@ FEATURE_SCHEMAS = {
             "support": {"description": "optional planar-face support selector; feature defaults to base"},
         },
     },
-    "fillet": {"required": ["id", "base", "radius", "edges"]},
-    "chamfer": {"required": ["id", "base", "size", "edges"]},
+    "revolve": {
+        "required": ["id"], "one_of": PROFILE_INPUTS,
+        "properties": {**PROFILE_OPERATION_PROPERTIES,
+            "angle": {"default": "360 deg"},
+            "axis": {"enum": ["x", "y", "z", "u", "v", "normal"]},
+            "axis_origin": {"type": "vector3"}, "base": {"optional": True}},
+    },
+    "sweep": {
+        "required": ["id"], "one_of": PROFILE_INPUTS,
+        "properties": {**PROFILE_OPERATION_PROPERTIES,
+            "path": {"description": "graph feature id containing a wire"},
+            "path_points": {"type": "array", "items": {"type": "vector3"}},
+            "frenet": {"type": "boolean", "default": False},
+            "base": {"optional": True}},
+    },
+    "loft": {
+        "required": ["id", "loft_profiles"],
+        "properties": {**PROFILE_OPERATION_PROPERTIES,
+            "loft_profiles": {"description": "ordered profile/profile_id uses"},
+            "ruled": {"type": "boolean", "default": False},
+            "closed": {"type": "boolean", "default": False},
+            "base": {"optional": True}},
+    },
+    "fillet": {"required": ["id", "base", "radius"],
+                "one_of": ["selector", "edges"]},
+    "chamfer": {"required": ["id", "base", "size"],
+                 "one_of": ["selector", "edges"]},
     "cut": {"required": ["id", "base", "tool"]},
     "union": {"required": ["id", "base", "tool"]},
     "intersection": {"required": ["id", "base", "tool"]},
@@ -1189,11 +1686,7 @@ def op_describe_feature_type(feature_type):
         "schema": FEATURE_SCHEMAS.get(feature_type, {
             "required": ["id"], "description": "See cookbook for fields."
         }),
-        "common_properties": {
-            "role": {"enum": ["output", "construction", "tool", "inspection"]},
-            "label": {"type": "string"},
-            "tags": {"type": "array"},
-        },
+        "common_properties": COMMON_FEATURE_PROPERTIES,
     }
 
 
@@ -1201,13 +1694,16 @@ def op_capabilities():
     from patterns import list_patterns
     import FreeCAD
     return {
-        "api_version": "2.0",
+        "api_version": "2.1",
         "freecad_version": ".".join(FreeCAD.Version()[:3]),
         "feature_types": op_list_feature_types()["feature_types"],
         "patterns": list_patterns(),
         "validation_profiles": ["geometry_baseline", "cnc_plywood", "fdm"],
         "response_format": "native",
         "structural_patch_mode": "dependency_scoped",
+        "selector_kinds": list(_SUBELEMENTS.keys()),
+        "profile_definitions": True,
+        "profile_operations": ["pad", "pocket", "revolve", "sweep", "loft"],
     }
 
 
@@ -1227,9 +1723,12 @@ def op_expand_pattern(feature):
 def _feature_inputs(feat):
     """Feature ids referenced by a graph node."""
     ids = []
-    for k in ("base", "tool", "profile"):
+    for k in ("base", "tool", "profile", "path"):
         if isinstance(feat.get(k), str):
             ids.append(feat[k])
+    for entry in feat.get("loft_profiles") or []:
+        if isinstance(entry, dict) and isinstance(entry.get("profile"), str):
+            ids.append(entry["profile"])
     support_id = _support_feature_id(feat.get("support"))
     if support_id:
         ids.append(support_id)
@@ -1239,13 +1738,22 @@ def _feature_inputs(feat):
 
 def _consumed(feat):
     """Inputs hidden because a boolean or array owns their visible output."""
-    if feat.get("type") not in (
-        "cut", "union", "intersection", "array", "grid_array",
-        "fillet", "chamfer", "pad", "pocket", "extrude_cut"
-    ):
-        return []
     if feat.get("_consumed") is not None:
         return list(feat["_consumed"])
+    if feat.get("type") in (
+            "pad", "pocket", "revolve", "sweep", "loft",
+            "profile_extrude", "extrude_cut"):
+        combines = feat.get("type") in ("pad", "pocket", "extrude_cut") or \
+            bool(feat.get("boolean"))
+        if not feat.get("base") or not combines:
+            return []
+        return [feat["base"]] + ([feat["profile"]] if feat.get("profile") else [])
+    if feat.get("type") not in (
+        "cut", "union", "intersection", "array", "grid_array",
+        "fillet", "chamfer", "pad", "pocket", "revolve", "sweep", "loft",
+        "profile_extrude", "extrude_cut"
+    ):
+        return []
     return _feature_inputs(feat)
 
 
@@ -1274,7 +1782,9 @@ def _remove_generated_feature(doc, feature, obj):
         private_children = [
             getattr(obj, "Base", None), getattr(obj, "Tool", None)
         ]
-    elif feature.get("type") in ("pad", "pocket", "extrude_cut") \
+    elif feature.get("type") in (
+            "pad", "pocket", "revolve", "sweep", "loft",
+            "profile_extrude", "extrude_cut") \
             and feature.get("base"):
         private_children = [getattr(obj, "Tool", None)]
     doc.removeObject(obj.Name)
@@ -1317,7 +1827,10 @@ def _rebuild_graph_patch(doc, container, meta, new_graph, impacted):
             fid = feature["id"]
             if fid not in impacted:
                 continue
-            obj = _build_feature(doc, host, feature, id_map)
+            obj = _build_feature(
+                doc, host, feature, id_map,
+                _profile_definition_map(meta.get("profile_definitions", [])),
+            )
             id_map[fid] = obj
             group_name = _ROLE_GROUP.get(
                 feature.get("role", "output"), "Features"
@@ -1345,7 +1858,10 @@ def _rebuild_graph_patch(doc, container, meta, new_graph, impacted):
             )
         meta["build_graph"] = new_graph
         meta["id_map"] = {fid: obj.Name for fid, obj in id_map.items()}
-        meta["dependency_index"] = _dependency_index(meta["schema"], new_graph)
+        meta["dependency_index"] = _dependency_index(
+            meta["schema"], new_graph,
+            _profile_definition_map(meta.get("profile_definitions", [])),
+        )
         meta["revision"] = int(meta.get("revision", 0)) + 1
         _save(container, meta)
         doc.commitTransaction()
@@ -1355,7 +1871,19 @@ def _rebuild_graph_patch(doc, container, meta, new_graph, impacted):
         raise
 
 
-def _dependency_index(schema, graph):
+def _profile_ids_used(feat):
+    ids = []
+    if feat.get("profile_id"):
+        ids.append(feat["profile_id"])
+    for entry in feat.get("loft_profiles") or []:
+        if isinstance(entry, str):
+            ids.append(entry)
+        elif isinstance(entry, dict) and entry.get("profile_id"):
+            ids.append(entry["profile_id"])
+    return ids
+
+
+def _dependency_index(schema, graph, profile_definitions=None):
     """Precompute reporting dependencies when the build graph is defined."""
     parameter_features = {p["name"]: [] for p in schema}
     downstream = {f["id"]: [] for f in graph}
@@ -1363,7 +1891,11 @@ def _dependency_index(schema, graph):
                for p in schema if p.get("kind") == "derived"}
     for feat in graph:
         fid = feat["id"]
-        for name in set(_TOKEN.findall(json.dumps(feat))):
+        payload = [feat]
+        for profile_id in _profile_ids_used(feat):
+            if profile_id in (profile_definitions or {}):
+                payload.append(profile_definitions[profile_id])
+        for name in set(_TOKEN.findall(json.dumps(payload))):
             parameter_features.setdefault(name, []).append(fid)
         for source in _feature_inputs(feat):
             downstream.setdefault(source, []).append(fid)
@@ -1378,7 +1910,10 @@ def _dependents(meta, changed):
     does)."""
     changed = set(changed)
     graph = meta["build_graph"]
-    index = meta.get("dependency_index") or _dependency_index(meta["schema"], graph)
+    index = meta.get("dependency_index") or _dependency_index(
+        meta["schema"], graph,
+        _profile_definition_map(meta.get("profile_definitions", [])),
+    )
     derived = index["derived"]
     grew = True
     while grew:  # expand changed set through derived params
@@ -1399,6 +1934,34 @@ def _dependents(meta, changed):
                 affected.add(dependent)
                 pending.append(dependent)
     return [f["id"] for f in graph if f["id"] in affected]
+
+
+def _refresh_common_placements(doc, meta, feature_ids, host):
+    profile_types = {
+        "profile_2d", "profile_extrude", "pad", "pocket", "extrude_cut",
+        "revolve", "sweep", "loft",
+    }
+    id_map = {
+        feature_id: doc.getObject(name)
+        for feature_id, name in meta.get("id_map", {}).items()
+    }
+    for feature in meta.get("build_graph", []):
+        if feature["id"] not in feature_ids or feature["type"] in profile_types:
+            continue
+        placement = feature.get("placement") or {}
+        if not (placement.get("frame") or placement.get("support") or
+                feature.get("frame") or feature.get("support")):
+            continue
+        obj = id_map.get(feature["id"])
+        if obj is None:
+            continue
+        targets = [obj]
+        if feature["type"] == "tube":
+            targets = [target for target in (
+                getattr(obj, "Base", None), getattr(obj, "Tool", None)
+            ) if target is not None]
+        for target in targets:
+            _apply_common_placement(target, feature, host, id_map)
 
 
 def _as_number(v):
@@ -1460,6 +2023,9 @@ def op_set_component_parameters(component_id, values, rebuild=True, validate=Fal
             # incremental internally. The "regenerated" list below is computed
             # only for the response — it does not scope this rebuild.
             doc.recompute()
+            affected = _dependents(meta, changed)
+            _refresh_common_placements(doc, meta, affected, host)
+            doc.recompute()
             errs = _errors(_component_objects(doc, meta))
             if errs:
                 # Transactional: keep the last valid geometry on a bad rebuild.
@@ -1496,6 +2062,7 @@ def op_get_component(component_id):
              for f in meta["build_graph"]]
     return {"component_id": component_id, "object_name": container.Name,
             "parameters": params, "build_graph": graph,
+            "profile_definitions": list(meta.get("profile_definitions", [])),
             "revision": int(meta.get("revision", 0)),
             "outputs": list(meta.get("outputs", [])),
             "variants": list(meta.get("variants", {}).keys()),
@@ -1945,6 +2512,7 @@ def op_build_component(document, component, validate=None, exports=None):
     defined = op_define_component(
         component_id, component.get("features") or [],
         component.get("rules"), component.get("profiles"),
+        component.get("profile_definitions"),
     )
     result = {
         "component_id": component_id,
