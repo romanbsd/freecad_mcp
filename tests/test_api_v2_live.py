@@ -51,6 +51,90 @@ def call(command, **params):
     return result
 
 
+def _assert_manufacturing_workflow():
+    call("execute", code=(
+        "import FreeCAD as App\n"
+        "if 'ApiManufacturingLive' in App.listDocuments():\n"
+        "    App.closeDocument('ApiManufacturingLive')"
+    ))
+    created = call(
+        "create_component", document="ApiManufacturingLive", name="ManufacturingPart",
+        parameters=[
+            {"name": "width", "type": "length", "default": "30 mm"},
+            {"name": "hole_d", "type": "length", "default": "4 mm"},
+            {"name": "wall", "type": "length", "default": "1.5 mm"},
+            {"name": "draft_angle", "type": "angle", "default": "5 deg"},
+        ],
+    )
+    component_id = created["component_id"]
+    call(
+        "define_component", component_id=component_id,
+        geometry_references=[
+            {"id": "top", "feature": "panel", "selector": {
+                "kind": "face", "where": {"axis": "z", "side": "max"},
+                "expect": "one",
+            }},
+            {"id": "bottom", "feature": "panel", "selector": {
+                "kind": "face", "where": {"axis": "z", "side": "min"},
+                "expect": "one",
+            }},
+        ],
+        features=[
+            {"id": "panel", "type": "box", "size": {
+                "x": "$width", "y": "20 mm", "z": "8 mm",
+            }},
+            {"id": "replacement", "type": "box", "role": "construction", "size": {
+                "x": "$width", "y": "20 mm", "z": "8 mm",
+            }},
+            {"id": "drilled", "type": "hole", "base": "panel",
+             "diameter": "$hole_d", "through_all": True,
+             "support": {"reference": "top"}, "positions": [[-6, 0], [6, 0]],
+             "head": {"type": "counterbore", "diameter": "7 mm", "depth": "2 mm"},
+             "thread": {"designation": "M4", "class": "6H"}},
+            {"id": "shelled", "type": "shell", "base": "panel",
+             "thickness": "$wall", "selector": {"reference": "top"}},
+            {"id": "offset", "type": "face_offset", "base": "panel",
+             "distance": "2 mm", "selector": {"reference": "top"}},
+            {"id": "ribbed", "type": "rib", "base": "panel",
+             "thickness": "2 mm", "height": "3 mm",
+             "support": {"reference": "top"}, "path_points": [[-8, 0], [8, 0]]},
+            {"id": "drafted", "type": "draft", "base": "panel",
+             "angle": "$draft_angle", "selector": {"kind": "face", "indices": [1, 2, 3, 4]},
+             "neutral_plane": {"reference": "bottom"},
+             "pull_selector": {"kind": "edge", "index": 1}},
+            {"id": "replaced", "type": "replace_face", "base": "panel",
+             "selector": {"reference": "top"}, "replacement": {
+                 "feature": "replacement", "selector": {
+                     "kind": "face", "where": {"axis": "z", "side": "max"},
+                     "expect": "one",
+                 },
+             }},
+        ],
+    )
+    feature_ids = ["drilled", "shelled", "offset", "ribbed", "drafted", "replaced"]
+    before = call("execute", code=(
+        "d=App.getDocument('ApiManufacturingLive')\n"
+        "ids=%r\n"
+        "result={fid:{'valid':d.getObject(fid).Shape.isValid(),"
+        "'volume':d.getObject(fid).Shape.Volume} for fid in ids}"
+    ) % feature_ids)["result"]
+    assert all(item["valid"] and item["volume"] > 0 for item in before.values())
+
+    updated = call("set_component_parameters", component_id=component_id, values={
+        "width": "36 mm", "hole_d": "5 mm", "wall": "2 mm",
+        "draft_angle": "8 deg",
+    })
+    assert set(feature_ids) <= set(updated["regenerated"])
+    after = call("execute", code=(
+        "d=App.getDocument('ApiManufacturingLive')\n"
+        "ids=%r\n"
+        "result={fid:{'valid':d.getObject(fid).Shape.isValid(),"
+        "'volume':d.getObject(fid).Shape.Volume} for fid in ids}"
+    ) % feature_ids)["result"]
+    assert all(item["valid"] for item in after.values())
+    assert all(after[fid]["volume"] != before[fid]["volume"] for fid in feature_ids)
+
+
 def test_v2_component_workflow():
     call(
         "execute",
@@ -72,10 +156,16 @@ def test_v2_component_workflow():
     )
 
     feature_types = call("list_feature_types")["feature_types"]
-    assert {"tube", "grid_array", "pattern", "datum_frame"}.issubset(feature_types)
+    assert {
+        "tube", "grid_array", "pattern", "datum_frame", "hole", "shell",
+        "draft", "rib", "face_offset", "replace_face",
+    }.issubset(feature_types)
     capabilities = call("capabilities")
-    assert capabilities["api_version"] == "2.3"
+    assert capabilities["api_version"] == "2.4"
     assert capabilities["structural_patch_mode"] == "dependency_scoped"
+    assert capabilities["manufacturing_features"] == [
+        "hole", "shell", "draft", "rib", "face_offset", "replace_face",
+    ]
     tube_schema = call("describe_feature_type", feature_type="tube")
     assert "outer_radius" in tube_schema["schema"]["required"]
     with pytest.raises(LiveAPIError) as unknown:
@@ -244,6 +334,7 @@ def test_v2_component_workflow():
     assert fit["contained"] is True
     assert fit["clearance_mm"]["minimum"] == 1.0
     assert fit["blocked_translation"]["+x"] is True
+    _assert_manufacturing_workflow()
 
 
 def test_proxy_survives_save_reload(tmp_path):

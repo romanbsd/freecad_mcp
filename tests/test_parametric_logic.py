@@ -238,10 +238,13 @@ def test_capabilities_advertise_named_references_and_sketches(parametric, monkey
     monkeypatch.setitem(sys.modules, "FreeCAD", fake_freecad)
     capabilities = parametric.op_capabilities()
 
-    assert capabilities["api_version"] == "2.3"
+    assert capabilities["api_version"] == "2.4"
     assert capabilities["named_geometry_references"] is True
     assert capabilities["dynamic_external_geometry"] is True
     assert capabilities["named_datum_frames"] is True
+    assert capabilities["manufacturing_features"] == [
+        "hole", "shell", "draft", "rib", "face_offset", "replace_face",
+    ]
     assert "radius" in capabilities["sketch_constraints"]
 
 
@@ -338,6 +341,46 @@ def test_datum_frames_participate_in_graph_dependencies(parametric):
     assert parametric._feature_inputs(consumer) == ["offset"]
     assert "datum_frame" in parametric.op_list_feature_types()["feature_types"]
     assert parametric.op_describe_feature_type("datum_frame")["schema"]["properties"]["offsets"]
+
+
+def test_manufacturing_features_are_described_and_track_inputs(parametric):
+    feature_types = parametric.op_list_feature_types()["feature_types"]
+    assert {"hole", "shell", "draft", "rib", "face_offset", "replace_face"} \
+        <= set(feature_types)
+    assert parametric.op_describe_feature_type("hole")["schema"]["required"] == [
+        "id", "base", "diameter", "support",
+    ]
+    assert parametric._feature_inputs({
+        "id": "rib", "type": "rib", "base": "body", "path": "spine",
+    }) == ["body", "spine"]
+    assert parametric._feature_inputs({
+        "id": "replaced", "type": "replace_face", "base": "body",
+        "replacement": {"feature": "surface"},
+    }) == ["body", "surface"]
+
+
+def test_manufacturing_nested_selectors_expand_named_references(parametric):
+    references = parametric._geometry_reference_map([
+        {"id": "bottom", "feature": "body", "selector": {
+            "kind": "face", "where": {"axis": "z", "side": "min"},
+        }},
+        {"id": "replacement", "feature": "surface", "selector": {
+            "kind": "face", "index": 1,
+        }},
+    ])
+    draft = parametric._expand_geometry_references({
+        "id": "draft", "type": "draft", "base": "body",
+        "neutral_plane": {"reference": "bottom"},
+    }, references)
+    replaced = parametric._expand_geometry_references({
+        "id": "replace", "type": "replace_face", "base": "body",
+        "replacement": {"reference": "replacement"},
+    }, references)
+
+    assert draft["neutral_plane"]["feature"] == "body"
+    assert draft["neutral_plane"]["selector"]["where"]["axis"] == "z"
+    assert replaced["replacement"]["feature"] == "surface"
+    assert replaced["replacement_selector"]["index"] == 1
 
 
 def test_refresh_sketch_external_geometry_rebuilds_constraints(parametric, monkeypatch):
@@ -637,9 +680,14 @@ def test_edge_treatment_proxy_defaults_mode_on_empty_state(parametric):
 
 
 def test_profile_extrusion_proxy_serialization_is_stable(parametric):
-    proxy = parametric._ProfileExtrusionProxy()
-    assert proxy.__getstate__() is None
-    proxy.__setstate__(proxy.__getstate__())  # must not raise
+    for proxy_type in (
+        parametric._ProfileExtrusionProxy,
+        parametric._ManufacturingFeatureProxy,
+        parametric._LinkedShapeProxy,
+    ):
+        proxy = proxy_type()
+        assert proxy.__getstate__() is None
+        proxy.__setstate__(proxy.__getstate__())  # must not raise
 
 
 def test_fdm_profile_expands_manufacturing_checks(parametric):

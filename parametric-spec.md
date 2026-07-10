@@ -171,6 +171,40 @@ from three points (`origin`, `x_point`, `plane_point`), from a planar-face
 `normal` axes. Rotation accepts a local axis name or a vector. Datum objects
 are hidden construction features but remain inspectable in FreeCAD.
 
+### Manufacturing features
+
+Manufacturing operations are dependency-tracked graph features. Their selectors
+and dimensions are re-evaluated after parameter changes, and each operation
+returns a normal shape feature for later booleans, dress-ups, and exports.
+
+`hole` cuts one or more holes normal to a planar support face. Positions are
+local `[u, v]` coordinates in that face frame. It supports blind and through
+holes, flat or angled drill tips, counterbores, counterdrills, countersinks,
+and thread metadata:
+
+```json
+{
+  "id": "mounting_holes",
+  "type": "hole",
+  "base": "plate",
+  "diameter": "$clearance_diameter",
+  "through_all": true,
+  "support": {"reference": "plate_top"},
+  "positions": [[-12, 0], [12, 0]],
+  "head": {"type": "counterbore", "diameter": "8 mm", "depth": "3 mm"},
+  "thread": {"designation": "M5", "class": "6H"}
+}
+```
+
+Thread data is manufacturing metadata; modeled helical threads are deliberately
+not generated. `shell` removes selected faces and applies an inward or outward
+wall thickness. `face_offset` moves selected faces by a signed distance.
+`draft` tapers selected faces around one neutral face; `pull_selector` may name
+an edge, otherwise a parallel edge is inferred from the neutral-face normal.
+`rib` thickens an open path and fuses it to its base using a support or datum
+frame. `replace_face` substitutes boundary-compatible faces from another graph
+feature and attempts to heal the resulting solid.
+
 Faces, edges, vertices, and solids use one selector shape:
 
 ```json

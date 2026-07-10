@@ -338,6 +338,37 @@ def _expand_geometry_references(feat, references):
             external.append(dict(item))
     if external:
         expanded["external_geometry"] = external
+    for key in ("neutral_plane", "pull_selector"):
+        target = expanded.get(key)
+        if not isinstance(target, dict) or not target.get("reference"):
+            continue
+        reference_id = target["reference"]
+        if reference_id not in references:
+            raise ValueError("unknown geometry reference %r" % reference_id)
+        reference = references[reference_id]
+        expanded[key] = {
+            "feature": reference["feature"],
+            "selector": _merge_named_selector(target, references),
+            "reference": reference_id,
+        }
+    replacement = expanded.get("replacement")
+    if isinstance(replacement, dict) and replacement.get("reference"):
+        reference_id = replacement["reference"]
+        if reference_id not in references:
+            raise ValueError("unknown geometry reference %r" % reference_id)
+        reference = references[reference_id]
+        expanded["replacement"] = {
+            "feature": reference["feature"],
+            "selector": _merge_named_selector(replacement, references),
+            "reference": reference_id,
+        }
+    if isinstance(expanded.get("replacement"), dict):
+        replacement = expanded["replacement"]
+        if replacement.get("selector"):
+            replacement["selector"] = _merge_named_selector(
+                replacement["selector"], references
+            )
+        expanded["replacement_selector"] = replacement.get("selector") or {}
     return expanded
 
 
@@ -1127,6 +1158,372 @@ def _build_datum_frame(doc, host, feat, id_map):
         obj.ViewObject.Visibility = False
     return obj
 
+
+def _manufacturing_frame(obj, spec, host):
+    support = getattr(obj, "Support", None)
+    if support is not None:
+        support_spec = json.loads(getattr(obj, "SupportSpec", "{}") or "{}")
+        return _support_frame(support, support_spec, host)
+    frame_obj = getattr(obj, "Frame", None)
+    if frame_obj is not None:
+        return _frame_from_placement(frame_obj.Placement)
+    return _static_frame(spec.get("frame") or spec.get("plane", "XY"), host)
+
+
+def _selected_faces(shape, selector, host, expect=None):
+    selector = dict(selector or {})
+    selector.setdefault("kind", "face")
+    return _select_subelements(shape, selector, "face", host, expect)
+
+
+def _hole_tool(base_shape, frame, spec, host):
+    import Part
+    radius = _quantity_value(spec["diameter"], host) / 2
+    if radius <= 0:
+        raise ValueError("hole diameter must be positive")
+    through = bool(spec.get("through_all")) or \
+        str(spec.get("depth_type", "")).lower() in ("through", "through_all")
+    diagonal = App.Vector(
+        base_shape.BoundBox.XLength, base_shape.BoundBox.YLength,
+        base_shape.BoundBox.ZLength,
+    ).Length
+    if not through and spec.get("depth") is None:
+        raise ValueError("hole requires depth unless through_all is true")
+    depth = diagonal * 2 + 1 if through else _quantity_value(spec["depth"], host)
+    if depth <= 0:
+        raise ValueError("blind hole depth must be positive")
+    direction = -frame["normal"]
+    tools = []
+    for raw_position in spec.get("positions") or [[0, 0]]:
+        if isinstance(raw_position, dict):
+            u_value, v_value = raw_position.get("u", 0), raw_position.get("v", 0)
+        else:
+            u_value, v_value = raw_position[0], raw_position[1]
+        point = frame["origin"] + \
+            frame["u"] * _quantity_value(u_value, host) + \
+            frame["v"] * _quantity_value(v_value, host)
+        start = point + frame["normal"] * (diagonal if through else 0.01)
+        length = depth if through else depth + 0.01
+        tool = Part.makeCylinder(radius, length, start, direction)
+
+        tip = spec.get("drill_tip") or {}
+        if not through and str(tip.get("type", "flat")).lower() == "angled":
+            angle = math.radians(_quantity_value(tip.get("angle", "118 deg"), host))
+            tip_height = radius / math.tan(angle / 2)
+            tip_start = point + direction * depth
+            tool = tool.fuse(Part.makeCone(radius, 0, tip_height, tip_start, direction))
+
+        cut = spec.get("head") or {}
+        cut_type = str(cut.get("type", "none")).lower()
+        if cut_type in ("counterbore", "counterdrill"):
+            head_radius = _quantity_value(cut["diameter"], host) / 2
+            head_depth = _quantity_value(cut["depth"], host)
+            tool = tool.fuse(Part.makeCylinder(
+                head_radius, head_depth + 0.01,
+                point + frame["normal"] * 0.01, direction,
+            ))
+        elif cut_type == "countersink":
+            head_radius = _quantity_value(cut["diameter"], host) / 2
+            if head_radius <= radius:
+                raise ValueError("countersink diameter must exceed hole diameter")
+            angle = math.radians(_quantity_value(cut.get("angle", "90 deg"), host))
+            head_depth = _quantity_value(cut["depth"], host) \
+                if cut.get("depth") is not None else \
+                (head_radius - radius) / math.tan(angle / 2)
+            tool = tool.fuse(Part.makeCone(
+                head_radius, radius, head_depth,
+                point + frame["normal"] * 0.01, direction,
+            ))
+        elif cut_type not in ("", "none"):
+            raise ValueError("unknown hole head type %r" % cut_type)
+        tools.append(tool)
+    result = tools[0]
+    for tool in tools[1:]:
+        result = result.fuse(tool)
+    return result
+
+
+def _rib_tool(obj, spec, host):
+    import Part
+    frame = _manufacturing_frame(obj, spec, host)
+    path_feature = getattr(obj, "Path", None)
+    vectors = []
+    if path_feature is None:
+        points = spec.get("path_points") or []
+        if len(points) < 2:
+            raise ValueError("rib requires path or at least two path_points")
+        for point in points:
+            values = [point.get("u", 0), point.get("v", 0)] \
+                if isinstance(point, dict) else point
+            vectors.append(_plane_vector(
+                spec.get("plane", "XY"),
+                _quantity_value(values[0], host),
+                _quantity_value(values[1], host), frame,
+            ))
+    else:
+        wire = _shape_wire(path_feature.Shape)
+        if len(wire.Edges) == 1 and len(wire.Vertexes) == 2:
+            vectors = [vertex.Point for vertex in wire.Vertexes]
+    thickness = _quantity_value(spec["thickness"], host)
+    height = _quantity_value(spec["height"], host)
+    if thickness <= 0 or height <= 0:
+        raise ValueError("rib thickness and height must be positive")
+    joins = {"arc": 0, "tangent": 1, "intersection": 2}
+    join = joins.get(str(spec.get("join", "intersection")).lower())
+    if join is None:
+        raise ValueError("rib join must be arc, tangent, or intersection")
+    direction = frame["normal"] * height
+    if spec.get("reversed"):
+        direction = -direction
+    start_shift = -direction * 0.5 if spec.get("symmetric") else App.Vector()
+    if path_feature is not None and not vectors:
+        face = wire.makeOffset2D(
+            thickness / 2, join=join, fill=True, openResult=True
+        )
+        face.translate(start_shift)
+        return face.extrude(direction)
+
+    solids = []
+    for start, end in zip(vectors, vectors[1:]):
+        segment = end - start
+        if segment.Length <= 1e-9:
+            raise ValueError("rib path contains a zero-length segment")
+        side = _unit(frame["normal"].cross(segment)) * thickness / 2
+        corners = [
+            start + side + start_shift, end + side + start_shift,
+            end - side + start_shift, start - side + start_shift,
+        ]
+        corners.append(corners[0])
+        solids.append(Part.Face(Part.makePolygon(corners)).extrude(direction))
+    if join == 0 and len(vectors) > 2:
+        axis = _unit(direction)
+        for point in vectors[1:-1]:
+            solids.append(Part.makeCylinder(
+                thickness / 2, height, point + start_shift, axis
+            ))
+    result = solids[0]
+    for solid in solids[1:]:
+        result = result.fuse(solid)
+    return result.removeSplitter()
+
+
+class _ManufacturingFeatureProxy:
+    def dumps(self):
+        return None
+
+    def loads(self, state):
+        return None
+
+    __getstate__ = dumps
+    __setstate__ = loads
+
+    def execute(self, obj):
+        host = _profile_host(obj)
+        spec = json.loads(obj.ManufacturingSpec or "{}")
+        base_shape = obj.Base.Shape
+        operation = obj.Operation
+        if operation == "hole":
+            frame = _manufacturing_frame(obj, spec, host)
+            shape = base_shape.cut(_hole_tool(base_shape, frame, spec, host))
+        elif operation == "shell":
+            faces = _selected_faces(base_shape, spec.get("selector"), host)
+            thickness = _quantity_value(spec["thickness"], host)
+            if thickness <= 0:
+                raise ValueError("shell thickness must be positive")
+            offset = -thickness if spec.get("inward", True) else thickness
+            shape = base_shape.makeThickness(
+                faces, offset, _quantity_value(spec.get("tolerance", "0.01 mm"), host)
+            )
+        elif operation == "face_offset":
+            faces = _selected_faces(base_shape, spec.get("selector"), host)
+            shape = base_shape.offsetFaces(
+                tuple(faces), _quantity_value(spec["distance"], host)
+            )
+        elif operation == "replace_face":
+            import Part
+            replacement = getattr(obj, "Replacement", None)
+            if replacement is None:
+                raise ValueError("replace_face requires a replacement feature")
+            old_faces = _selected_faces(base_shape, spec.get("selector"), host)
+            new_faces = _selected_faces(
+                replacement.Shape, spec.get("replacement_selector"), host
+            )
+            if len(old_faces) != len(new_faces):
+                raise ValueError("replace_face selectors must match equal face counts")
+            shape = base_shape.replaceShape(list(zip(old_faces, new_faces)))
+            if not shape.isValid() and base_shape.ShapeType == "Solid":
+                healed = Part.makeSolid(Part.makeShell(shape.Faces))
+                if healed.isValid():
+                    shape = healed
+        elif operation == "rib":
+            shape = base_shape.fuse(_rib_tool(obj, spec, host)).removeSplitter()
+        else:
+            raise ValueError("unknown manufacturing operation %r" % operation)
+        if shape.isNull() or not shape.isValid():
+            raise ValueError("%s produced an invalid shape" % operation)
+        obj.Shape = shape
+
+
+class _LinkedShapeProxy:
+    def dumps(self):
+        return None
+
+    def loads(self, state):
+        return None
+
+    __getstate__ = dumps
+    __setstate__ = loads
+
+    def execute(self, obj):
+        if obj.Source is not None:
+            obj.Shape = obj.Source.Shape
+
+
+def _add_manufacturing_links(obj, feat, host, id_map):
+    obj.addProperty("App::PropertyString", "HostName", "Manufacturing")
+    obj.addProperty("App::PropertyString", "ManufacturingSpec", "Manufacturing")
+    obj.addProperty("App::PropertyEnumeration", "Operation", "Manufacturing")
+    obj.addProperty("App::PropertyLink", "Base", "Manufacturing")
+    obj.addProperty("App::PropertyLink", "Support", "Manufacturing")
+    obj.addProperty("App::PropertyString", "SupportSpec", "Manufacturing")
+    obj.addProperty("App::PropertyLink", "Frame", "Manufacturing")
+    obj.addProperty("App::PropertyLink", "Path", "Manufacturing")
+    obj.addProperty("App::PropertyLink", "Replacement", "Manufacturing")
+    obj.addProperty("App::PropertyString", "ThreadSpec", "Manufacturing")
+    obj.HostName = host.Name
+    obj.ManufacturingSpec = json.dumps(feat)
+    obj.Operation = ["hole", "shell", "face_offset", "replace_face", "rib"]
+    obj.Operation = feat["type"]
+    obj.Base = id_map[feat["base"]]
+    support = feat.get("support")
+    support_id = _support_feature_id(support)
+    if support_id:
+        obj.Support = id_map[support_id]
+        obj.SupportSpec = json.dumps(
+            dict(support) if isinstance(support, dict) else {"feature": support_id}
+        )
+    else:
+        obj.SupportSpec = "{}"
+    frame_id = (feat.get("placement") or {}).get("frame_id") or feat.get("frame_id")
+    if frame_id:
+        obj.Frame = id_map[frame_id]
+    if feat.get("path"):
+        obj.Path = id_map[feat["path"]]
+    replacement = feat.get("replacement") or {}
+    replacement_id = replacement.get("feature") if isinstance(replacement, dict) \
+        else replacement
+    if replacement_id:
+        obj.Replacement = id_map[replacement_id]
+    obj.ThreadSpec = json.dumps(feat.get("thread") or {})
+
+
+def _build_manufacturing_feature(doc, host, feat, id_map):
+    if feat.get("base") not in id_map:
+        raise ValueError("%s requires an earlier base feature" % feat["type"])
+    obj = doc.addObject("Part::FeaturePython", feat["id"])
+    _add_manufacturing_links(obj, feat, host, id_map)
+    if obj.Base.Shape.isNull():
+        doc.recompute()
+    obj.Proxy = _ManufacturingFeatureProxy()
+    obj.Proxy.execute(obj)
+    feat["_consumed"] = [feat["base"]]
+    return obj
+
+
+def _target_selector(value):
+    if isinstance(value, dict) and value.get("selector") is not None:
+        return value["selector"]
+    return value or {}
+
+
+def _draft_edge_index(shape, neutral_face, selector, host):
+    if selector:
+        edges = _select_subelements(shape, selector, "edge", host, expect=1)
+        return _subelement_indices(shape, "edge", edges)[0]
+    normal = _face_normal(neutral_face)
+    for index, edge in enumerate(shape.Edges, 1):
+        vertices = edge.Vertexes
+        if len(vertices) != 2:
+            continue
+        direction = vertices[-1].Point - vertices[0].Point
+        if direction.Length > 1e-9 and \
+                abs(_unit(direction).dot(normal)) >= 0.999:
+            return index
+    raise ValueError(
+        "draft could not infer a pull edge parallel to the neutral-face normal"
+    )
+
+
+def _configure_native_draft(body, feat, host):
+    source = body.McpSource
+    draft = body.McpFeature
+    source.Proxy.execute(source)
+    shape = source.Shape
+    selected = _selected_faces(shape, feat.get("selector"), host)
+    face_names = ["Face%d" % index for index in
+                  _subelement_indices(shape, "face", selected)]
+    neutral_target = feat.get("neutral_plane")
+    if not neutral_target:
+        raise ValueError("draft requires neutral_plane")
+    if isinstance(neutral_target, dict) and neutral_target.get("feature") not in \
+            (None, feat.get("base")):
+        raise ValueError("draft neutral_plane must reference its base feature")
+    neutral = _selected_faces(
+        shape, _target_selector(neutral_target), host, expect=1
+    )[0]
+    neutral_index = _subelement_indices(shape, "face", [neutral])[0]
+    pull_target = feat.get("pull_selector") or {}
+    if isinstance(pull_target, dict) and pull_target.get("feature") not in \
+            (None, feat.get("base")):
+        raise ValueError("draft pull_selector must reference its base feature")
+    pull_index = _draft_edge_index(
+        shape, neutral, _target_selector(pull_target), host
+    )
+    draft.Base = (source, face_names)
+    draft.NeutralPlane = (source, ["Face%d" % neutral_index])
+    draft.PullDirection = (source, ["Edge%d" % pull_index])
+    draft.Reversed = bool(feat.get("reversed", False))
+
+
+def _build_draft_feature(doc, host, feat, id_map):
+    if feat.get("base") not in id_map:
+        raise ValueError("draft requires an earlier base feature")
+    body = doc.addObject("PartDesign::Body", "%s_DraftBody" % feat["id"])
+    source = body.newObject("PartDesign::FeaturePython", "%s_DraftSource" % feat["id"])
+    source.addProperty("App::PropertyLink", "Source", "Manufacturing")
+    source.Source = id_map[feat["base"]]
+    source.Proxy = _LinkedShapeProxy()
+    source.Proxy.execute(source)
+    draft = body.newObject("PartDesign::Draft", "%s_DraftFeature" % feat["id"])
+    body.addProperty("App::PropertyLink", "McpSource", "Manufacturing")
+    body.addProperty("App::PropertyLink", "McpFeature", "Manufacturing")
+    body.McpSource, body.McpFeature = source, draft
+    _bind(draft, "Angle", feat["angle"], host.Name)
+    _configure_native_draft(body, feat, host)
+    doc.recompute()
+    if draft.Shape.isNull() or not draft.Shape.isValid() or any(
+            state in ("Error", "Invalid") for state in draft.State):
+        raise ValueError("draft produced an invalid shape")
+
+    obj = doc.addObject("Part::FeaturePython", feat["id"])
+    obj.addProperty("App::PropertyString", "HostName", "Manufacturing")
+    obj.addProperty("App::PropertyString", "ManufacturingSpec", "Manufacturing")
+    obj.addProperty("App::PropertyLink", "BaseSource", "Manufacturing")
+    obj.addProperty("App::PropertyLink", "McpBody", "Manufacturing")
+    obj.addProperty("App::PropertyLink", "Source", "Manufacturing")
+    obj.HostName = host.Name
+    obj.ManufacturingSpec = json.dumps(feat)
+    obj.BaseSource = id_map[feat["base"]]
+    obj.McpBody = body
+    obj.Source = draft
+    obj.Proxy = _LinkedShapeProxy()
+    obj.Proxy.execute(obj)
+    if hasattr(body, "ViewObject"):
+        body.ViewObject.Visibility = False
+    feat["_private_children"] = [body.Name, source.Name, draft.Name]
+    feat["_consumed"] = [feat["base"]]
+    return obj
+
 # spec parameter type -> FreeCAD property type
 TYPE_MAP = {
     "length": "App::PropertyLength",
@@ -1731,6 +2128,10 @@ def _build_feature(doc, host, feat, id_map, profile_definitions=None):
         )
     elif ftype == "sketch_2d":
         obj = _build_sketch(doc, host, feat, id_map)
+    elif ftype == "draft":
+        obj = _build_draft_feature(doc, host, feat, id_map)
+    elif ftype in ("hole", "shell", "rib", "face_offset", "replace_face"):
+        obj = _build_manufacturing_feature(doc, host, feat, id_map)
     elif ftype in ("fillet", "chamfer"):
         obj = doc.addObject("Part::FeaturePython", feat["id"])
         obj.addProperty("App::PropertyLink", "Base", "Geometry")
@@ -2167,6 +2568,7 @@ def op_list_feature_types():
             "cut", "union", "intersection", "array", "grid_array",
             "profile_2d", "sketch_2d", "profile_extrude", "pad", "pocket", "extrude_cut",
             "revolve", "sweep", "loft",
+            "hole", "shell", "draft", "rib", "face_offset", "replace_face",
             "fillet", "chamfer", "group", "pattern",
         ]
     }
@@ -2330,6 +2732,63 @@ FEATURE_SCHEMAS = {
             "closed": {"type": "boolean", "default": False},
             "base": {"optional": True}},
     },
+    "hole": {
+        "required": ["id", "base", "diameter", "support"],
+        "one_of": ["depth", "through_all"],
+        "properties": {
+            "diameter": {}, "depth": {},
+            "through_all": {"type": "boolean", "default": False},
+            "positions": {"items": {"one_of": ["vector2", "u/v object"]}},
+            "support": {"description": "planar entry face selector"},
+            "drill_tip": {"properties": {
+                "type": {"enum": ["flat", "angled"]}, "angle": {},
+            }},
+            "head": {"properties": {
+                "type": {"enum": ["none", "counterbore", "countersink", "counterdrill"]},
+                "diameter": {}, "depth": {}, "angle": {},
+            }},
+            "thread": {"description": "thread designation/class/direction metadata"},
+        },
+    },
+    "shell": {
+        "required": ["id", "base", "thickness", "selector"],
+        "properties": {
+            "thickness": {}, "selector": SELECTOR_SCHEMA,
+            "inward": {"type": "boolean", "default": True},
+            "tolerance": {"default": "0.01 mm"},
+        },
+    },
+    "draft": {
+        "required": ["id", "base", "angle", "selector", "neutral_plane"],
+        "properties": {
+            "angle": {}, "selector": SELECTOR_SCHEMA,
+            "neutral_plane": {"description": "one face selector on base"},
+            "pull_selector": {"description": "optional one edge selector on base"},
+            "reversed": {"type": "boolean", "default": False},
+        },
+    },
+    "rib": {
+        "required": ["id", "base", "thickness", "height"],
+        "one_of": ["path", "path_points"],
+        "properties": {
+            "path": {"description": "feature containing an open planar wire"},
+            "path_points": {"items": {"type": "vector2"}},
+            "thickness": {}, "height": {},
+            "join": {"enum": ["arc", "tangent", "intersection"]},
+            "support": {"description": "optional planar face frame"},
+        },
+    },
+    "face_offset": {
+        "required": ["id", "base", "distance", "selector"],
+        "properties": {"distance": {}, "selector": SELECTOR_SCHEMA},
+    },
+    "replace_face": {
+        "required": ["id", "base", "selector", "replacement"],
+        "properties": {
+            "selector": SELECTOR_SCHEMA,
+            "replacement": {"required": ["feature", "selector"]},
+        },
+    },
     "fillet": {"required": ["id", "base", "radius"],
                 "one_of": ["selector", "edges"]},
     "chamfer": {"required": ["id", "base", "size"],
@@ -2358,7 +2817,7 @@ def op_capabilities():
     from patterns import list_patterns
     import FreeCAD
     return {
-        "api_version": "2.3",
+        "api_version": "2.4",
         "freecad_version": ".".join(FreeCAD.Version()[:3]),
         "feature_types": op_list_feature_types()["feature_types"],
         "patterns": list_patterns(),
@@ -2371,6 +2830,9 @@ def op_capabilities():
         "named_geometry_references": True,
         "dynamic_external_geometry": True,
         "named_datum_frames": True,
+        "manufacturing_features": [
+            "hole", "shell", "draft", "rib", "face_offset", "replace_face",
+        ],
         "sketch_constraints": [
             "coincident", "horizontal", "vertical", "parallel", "perpendicular",
             "equal", "concentric", "tangent", "point_on_object", "symmetric",
@@ -2408,6 +2870,11 @@ def _feature_inputs(feat):
     for external in feat.get("external_geometry") or []:
         if isinstance(external, dict) and isinstance(external.get("feature"), str):
             ids.append(external["feature"])
+    replacement = feat.get("replacement")
+    if isinstance(replacement, str):
+        ids.append(replacement)
+    elif isinstance(replacement, dict) and isinstance(replacement.get("feature"), str):
+        ids.append(replacement["feature"])
     support_id = _support_feature_id(feat.get("support"))
     if support_id:
         ids.append(support_id)
@@ -2459,16 +2926,19 @@ def _remove_generated_feature(doc, feature, obj):
     """Remove one graph object and any private children owned by its type."""
     if obj is None:
         return
-    private_children = []
+    private_children = [
+        doc.getObject(name) for name in feature.get("_private_children", [])
+        if doc.getObject(name) is not None
+    ]
     if feature.get("type") == "tube":
-        private_children = [
+        private_children += [
             getattr(obj, "Base", None), getattr(obj, "Tool", None)
         ]
     elif feature.get("type") in (
             "pad", "pocket", "revolve", "sweep", "loft",
             "profile_extrude", "extrude_cut") \
             and feature.get("base"):
-        private_children = [getattr(obj, "Tool", None)]
+        private_children += [getattr(obj, "Tool", None)]
     doc.removeObject(obj.Name)
     for child in private_children:
         if child is not None and doc.getObject(child.Name) is not None:
@@ -2622,7 +3092,8 @@ def _dependents(meta, changed):
 def _refresh_common_placements(doc, meta, feature_ids, host):
     profile_types = {
         "profile_2d", "profile_extrude", "pad", "pocket", "extrude_cut",
-        "revolve", "sweep", "loft", "datum_frame",
+        "revolve", "sweep", "loft", "datum_frame", "hole", "shell",
+        "draft", "rib", "face_offset", "replace_face",
     }
     id_map = {
         feature_id: doc.getObject(name)
@@ -2657,6 +3128,27 @@ def _refresh_datum_frames(doc, meta, feature_ids):
         if obj is None or getattr(obj, "Proxy", None) is None:
             continue
         obj.Proxy.execute(obj)
+        refreshed.append(feature["id"])
+    return refreshed
+
+
+def _refresh_manufacturing_features(doc, meta, feature_ids, host):
+    manufacturing = {
+        "hole", "shell", "draft", "rib", "face_offset", "replace_face",
+    }
+    refreshed = []
+    for feature in meta.get("build_graph", []):
+        if feature["id"] not in feature_ids or feature.get("type") not in manufacturing:
+            continue
+        obj = doc.getObject(meta.get("id_map", {}).get(feature["id"], ""))
+        if obj is None:
+            continue
+        if feature["type"] == "draft":
+            _configure_native_draft(obj.McpBody, feature, host)
+            doc.recompute()
+            obj.Proxy.execute(obj)
+        elif getattr(obj, "Proxy", None) is not None:
+            obj.Proxy.execute(obj)
         refreshed.append(feature["id"])
     return refreshed
 
@@ -2773,6 +3265,7 @@ def op_set_component_parameters(component_id, values, rebuild=True, validate=Fal
             doc.recompute()
             affected = _dependents(meta, changed)
             _refresh_datum_frames(doc, meta, affected)
+            _refresh_manufacturing_features(doc, meta, affected, host)
             remapped_external = _refresh_sketch_external_geometry(
                 doc, meta, affected, host
             )

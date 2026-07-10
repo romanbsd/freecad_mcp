@@ -379,7 +379,8 @@ async def define_component(component_id: str, features: list,
                           geometry_references: list = None) -> Any:
     """Define (or replace) the component's build graph — a list of features.
     Feature types include primitives, booleans, arrays, reusable 2D profiles,
-    native constrained sketches, reusable datum frames,
+    native constrained sketches, reusable datum frames, generic hole/shell/
+    draft/rib/face-offset/replace-face manufacturing operations,
     pad/pocket/revolve/sweep/loft operations, edge treatments, and groups.
     Sizes/positions are expressions over $params
     (with units), e.g. "$width / 2", "$wall_thickness + 2 mm". Booleans/arrays

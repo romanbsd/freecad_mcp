@@ -182,6 +182,45 @@ three points, a planar face support, or another datum via `base_frame`.
 Use local `u`, `v`, and `normal` offsets. `frame_id` is accepted by primitives,
 sketches, and profile operations.
 
+### Manufacturing operations
+
+Use manufacturing features after a base solid. They consume the base visually,
+preserve it as a dependency, and produce an ordinary downstream shape.
+
+```json
+[
+  {
+    "id": "holes", "type": "hole", "base": "plate",
+    "diameter": "5 mm", "through_all": true,
+    "support": {"reference": "top_face"},
+    "positions": [[-15, 0], [15, 0]],
+    "head": {"type": "countersink", "diameter": "10 mm", "angle": "90 deg"},
+    "thread": {"designation": "M5", "class": "6H"}
+  },
+  {
+    "id": "stiffened", "type": "rib", "base": "plate",
+    "support": {"reference": "top_face"},
+    "path_points": [[-20, 0], [20, 0]],
+    "thickness": "2 mm", "height": "6 mm"
+  }
+]
+```
+
+- `hole`: blind/through holes, multiple local positions, angled drill tips,
+  counterbore/counterdrill/countersink heads, and thread metadata.
+- `shell`: remove selected faces and hollow with `thickness`; `inward` defaults
+  to true.
+- `draft`: taper selected faces by `angle` around `neutral_plane`; optionally
+  provide one edge with `pull_selector`.
+- `rib`: thicken an open `path` or local `path_points` and fuse it to `base`.
+- `face_offset`: move selected faces by signed `distance`.
+- `replace_face`: replace selected faces with an equal number of
+  boundary-compatible faces from `replacement.feature`.
+
+All dimensions accept `$parameter` expressions. Named geometry references work
+for supports and selectors. Thread declarations are metadata only; the feature
+does not generate helical thread geometry.
+
 ### Named geometry references
 
 Name semantic selectors once at component definition time:
