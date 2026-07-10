@@ -43,6 +43,186 @@ def _edge_matches(edge, selector, tolerance=1e-6):
     return True
 
 
+def _profile_host(obj):
+    host_name = getattr(obj, "HostName", "")
+    if not host_name:
+        return None
+    doc = getattr(obj, "Document", None) or App.ActiveDocument
+    return doc.getObject(host_name) if doc is not None else None
+
+
+def _quantity_value(value, host=None):
+    if isinstance(value, (int, float)):
+        return float(value)
+    expr = str(value)
+    if host is not None:
+        for name in _TOKEN.findall(expr):
+            replacement = getattr(host, name)
+            if hasattr(replacement, "Value"):
+                replacement = "%s mm" % replacement.Value
+            expr = expr.replace("$" + name, str(replacement))
+    return App.Units.Quantity(expr).Value
+
+
+def _profile_point(point, host):
+    if isinstance(point, dict):
+        return [_quantity_value(point.get("x", 0), host),
+                _quantity_value(point.get("y", 0), host)]
+    return [_quantity_value(point[0], host), _quantity_value(point[1], host)]
+
+
+def _plane_vector(plane, u, v):
+    plane = (plane or "XY").upper()
+    if plane in ("XY", "YX"):
+        return App.Vector(u, v, 0)
+    if plane in ("XZ", "ZX"):
+        return App.Vector(u, 0, v)
+    if plane in ("YZ", "ZY"):
+        return App.Vector(0, u, v)
+    raise ValueError("unknown profile plane %r" % plane)
+
+
+def _profile_axis(axis, length):
+    axis = (axis or "z").lower()
+    if axis == "x":
+        return App.Vector(length, 0, 0)
+    if axis == "y":
+        return App.Vector(0, length, 0)
+    if axis == "z":
+        return App.Vector(0, 0, length)
+    raise ValueError("unknown extrusion axis %r" % axis)
+
+
+def _normal_axis_for_plane(plane):
+    plane = (plane or "XY").upper()
+    if plane in ("XY", "YX"):
+        return "z"
+    if plane in ("XZ", "ZX"):
+        return "y"
+    if plane in ("YZ", "ZY"):
+        return "x"
+    raise ValueError("unknown profile plane %r" % plane)
+
+
+def _rectangle_face(spec, plane, host):
+    import Part
+    if spec.get("corner") is not None:
+        x0, y0 = _profile_point(spec["corner"], host)
+    else:
+        cx, cy = _profile_point(spec.get("center", [0, 0]), host)
+        sx, sy = _profile_point(spec.get("size", [0, 0]), host)
+        x0, y0 = cx - sx / 2, cy - sy / 2
+    if spec.get("size") is not None:
+        sx, sy = _profile_point(spec["size"], host)
+        x1, y1 = x0 + sx, y0 + sy
+    else:
+        x1, y1 = _profile_point(spec["opposite"], host)
+    pts = [
+        _plane_vector(plane, x0, y0), _plane_vector(plane, x1, y0),
+        _plane_vector(plane, x1, y1), _plane_vector(plane, x0, y1),
+        _plane_vector(plane, x0, y0),
+    ]
+    return Part.Face(Part.makePolygon(pts))
+
+
+def _circle_face(spec, plane, host):
+    import Part
+    center = _profile_point(spec.get("center", [0, 0]), host)
+    radius = _quantity_value(spec.get("radius"), host)
+    normal = _profile_axis(_normal_axis_for_plane(plane), 1)
+    return Part.Face(Part.Wire(Part.makeCircle(
+        radius, _plane_vector(plane, center[0], center[1]), normal
+    )))
+
+
+def _polygon_face(spec, plane, host):
+    import Part
+    points = spec.get("points") or []
+    if len(points) < 3:
+        raise ValueError("polygon profile needs at least 3 points; got %d" % len(points))
+    vectors = [_plane_vector(plane, *_profile_point(point, host)) for point in points]
+    if vectors[0].distanceToPoint(vectors[-1]) > 1e-9:
+        vectors.append(vectors[0])
+    return Part.Face(Part.makePolygon(vectors))
+
+
+def _slot_face(spec, plane, host):
+    import Part
+    start = _profile_point(spec["start"], host)
+    end = _profile_point(spec["end"], host)
+    radius = _quantity_value(spec.get("radius"), host)
+    if abs(start[0] - end[0]) >= abs(start[1] - end[1]):
+        rect = {
+            "corner": [min(start[0], end[0]), start[1] - radius],
+            "size": [abs(end[0] - start[0]), radius * 2],
+        }
+    else:
+        rect = {
+            "corner": [start[0] - radius, min(start[1], end[1])],
+            "size": [radius * 2, abs(end[1] - start[1])],
+        }
+    return _circle_face({"center": start, "radius": radius}, plane, host).fuse(
+        _rectangle_face(rect, plane, host)
+    ).fuse(_circle_face({"center": end, "radius": radius}, plane, host)).removeSplitter()
+
+
+def _profile_spec(feat):
+    if feat.get("profile"):
+        return None
+    spec = dict(feat.get("profile_spec") or {})
+    if feat.get("points") is not None:
+        spec["points"] = feat.get("points")
+    if feat.get("sections") is not None:
+        spec["sections"] = feat.get("sections")
+    if feat.get("plane") is not None:
+        spec["plane"] = feat.get("plane")
+    return spec
+
+
+def _make_profile_shape(spec, host=None):
+    import Part
+    plane = spec.get("plane", "XY")
+    if spec.get("points") is not None:
+        return _polygon_face(spec, plane, host)
+    faces = []
+    for section in spec.get("sections") or []:
+        kind = section.get("type") or section.get("kind")
+        if kind == "circle":
+            faces.append(_circle_face(section, plane, host))
+        elif kind == "rectangle":
+            faces.append(_rectangle_face(section, plane, host))
+        elif kind == "polygon":
+            faces.append(_polygon_face(section, plane, host))
+        elif kind == "slot":
+            faces.append(_slot_face(section, plane, host))
+        else:
+            raise ValueError("unknown profile section type %r" % kind)
+    if not faces:
+        raise ValueError("profile needs points or at least one section")
+    shape = faces[0]
+    for face in faces[1:]:
+        shape = shape.fuse(face)
+    return shape.removeSplitter()
+
+
+def _add_profile_properties(obj, feat, host, operation="extrude"):
+    spec = _profile_spec(feat) or {}
+    obj.addProperty("App::PropertyString", "ProfileSpec", "Geometry")
+    obj.addProperty("App::PropertyString", "HostName", "Geometry")
+    obj.addProperty("App::PropertyLength", "Length", "Geometry")
+    obj.addProperty("App::PropertyEnumeration", "Axis", "Geometry")
+    obj.addProperty("App::PropertyEnumeration", "Operation", "Geometry")
+    obj.ProfileSpec = json.dumps(spec)
+    obj.HostName = host.Name
+    obj.Axis = ["x", "y", "z"]
+    obj.Operation = ["face", "extrude"]
+    plane = spec.get("plane", feat.get("plane", "XY"))
+    obj.Axis = (feat.get("axis") or _normal_axis_for_plane(plane)).lower()
+    obj.Operation = operation
+    _bind(obj, "Length", feat.get("length") or feat.get("depth") or "1 mm", host.Name)
+    obj.Proxy = _ProfileExtrusionProxy()
+
+
 class _ProfileExtrusionProxy:
     # FreeCAD serializes obj.Proxy on save and restores it on load; without
     # these the feature reopens with a dead Proxy and stops recomputing.
@@ -57,18 +237,14 @@ class _ProfileExtrusionProxy:
     __setstate__ = loads
 
     def execute(self, obj):
-        import Part
-        points = json.loads(obj.ProfilePoints)
-        vectors = [App.Vector(float(p[0]), float(p[1]), 0) for p in points]
-        if vectors[0].distanceToPoint(vectors[-1]) > 1e-9:
-            vectors.append(vectors[0])
-        face = Part.Face(Part.makePolygon(vectors))
-        axis = {
-            "x": App.Vector(obj.Length.Value, 0, 0),
-            "y": App.Vector(0, obj.Length.Value, 0),
-            "z": App.Vector(0, 0, obj.Length.Value),
-        }[obj.Axis]
-        obj.Shape = face.extrude(axis)
+        if hasattr(obj, "ProfileSpec"):
+            face = _make_profile_shape(json.loads(obj.ProfileSpec), _profile_host(obj))
+        else:
+            face = _make_profile_shape({"points": json.loads(obj.ProfilePoints)}, None)
+        if getattr(obj, "Operation", "extrude") == "face":
+            obj.Shape = face
+            return
+        obj.Shape = face.extrude(_profile_axis(obj.Axis, obj.Length.Value))
 
 
 class _EdgeTreatmentProxy:
@@ -407,17 +583,44 @@ def _build_feature(doc, host, feat, id_map):
         obj = doc.addObject("Part::Cut", feat["id"])
         obj.Base, obj.Tool = outer, inner
     elif ftype == "profile_extrude":
-        points = _profile_points(feat)  # fail clearly, not as an opaque rollback
         obj = doc.addObject("Part::FeaturePython", feat["id"])
-        obj.addProperty("App::PropertyString", "ProfilePoints", "Geometry")
-        obj.addProperty("App::PropertyLength", "Length", "Geometry")
-        obj.addProperty("App::PropertyEnumeration", "Axis", "Geometry")
-        obj.ProfilePoints = json.dumps(points)
-        obj.Axis = ["x", "y", "z"]
-        obj.Axis = (feat.get("axis") or "z").lower()
-        _bind(obj, "Length", feat.get("length"), hn)
-        obj.Proxy = _ProfileExtrusionProxy()
+        if (feat.get("sections") is not None or feat.get("profile_spec") is not None
+                or feat.get("plane") is not None):
+            _add_profile_properties(obj, feat, host, "extrude")
+        else:
+            points = _profile_points(feat)  # fail clearly, not as an opaque rollback
+            obj.addProperty("App::PropertyString", "ProfilePoints", "Geometry")
+            obj.addProperty("App::PropertyLength", "Length", "Geometry")
+            obj.addProperty("App::PropertyEnumeration", "Axis", "Geometry")
+            obj.ProfilePoints = json.dumps(points)
+            obj.Axis = ["x", "y", "z"]
+            obj.Axis = (feat.get("axis") or "z").lower()
+            _bind(obj, "Length", feat.get("length"), hn)
+            obj.Proxy = _ProfileExtrusionProxy()
         place(obj)
+    elif ftype == "profile_2d":
+        obj = doc.addObject("Part::FeaturePython", feat["id"])
+        _add_profile_properties(obj, feat, host, "face")
+        place(obj)
+    elif ftype == "extrude_cut":
+        obj = doc.addObject("Part::Cut", feat["id"])
+        obj.Base = id_map[feat["base"]]
+        if feat.get("profile"):
+            profile_obj = id_map[feat["profile"]]
+            tool = doc.addObject("Part::Extrusion", "%s_Tool" % feat["id"])
+            tool.Base = profile_obj
+            tool.DirMode = "Custom"
+            tool.Dir = _profile_axis(
+                feat.get("axis") or _normal_axis_for_plane(feat.get("plane", "XY")),
+                _quantity_value(feat.get("length") or feat.get("depth") or "1 mm", host),
+            )
+            tool.Solid = True
+        else:
+            tool = doc.addObject("Part::FeaturePython", "%s_Tool" % feat["id"])
+            _add_profile_properties(tool, feat, host, "extrude")
+            place(tool)
+        obj.Tool = tool
+        feat["_consumed"] = [feat["base"]] + ([feat["profile"]] if feat.get("profile") else [])
     elif ftype in ("fillet", "chamfer"):
         obj = doc.addObject("Part::FeaturePython", feat["id"])
         obj.addProperty("App::PropertyLink", "Base", "Geometry")
@@ -749,7 +952,8 @@ def op_list_feature_types():
         "feature_types": [
             "box", "cylinder", "tube", "cone", "prism", "transform",
             "cut", "union", "intersection", "array", "grid_array",
-            "profile_extrude", "fillet", "chamfer", "group", "pattern",
+            "profile_2d", "profile_extrude", "extrude_cut",
+            "fillet", "chamfer", "group", "pattern",
         ]
     }
 
@@ -764,8 +968,30 @@ FEATURE_SCHEMAS = {
     "grid_array": {"required": ["id", "base", "count_x", "count_y"],
                    "properties": {"spacing_x": {}, "spacing_y": {}}},
     "profile_extrude": {
-        "required": ["id", "points", "length"],
-        "properties": {"axis": {"enum": ["x", "y", "z"], "default": "z"}},
+        "required": ["id", "length"],
+        "one_of": ["points", "sections", "profile_spec"],
+        "properties": {
+            "plane": {"enum": ["XY", "XZ", "YZ"], "default": "XY"},
+            "axis": {"enum": ["x", "y", "z"], "default": "normal to plane"},
+            "sections": {"items": {"type": "circle|rectangle|polygon|slot"}},
+        },
+    },
+    "profile_2d": {
+        "required": ["id"],
+        "one_of": ["points", "sections", "profile_spec"],
+        "properties": {
+            "plane": {"enum": ["XY", "XZ", "YZ"], "default": "XY"},
+            "sections": {"items": {"type": "circle|rectangle|polygon|slot"}},
+        },
+    },
+    "extrude_cut": {
+        "required": ["id", "base", "length"],
+        "one_of": ["profile", "points", "sections", "profile_spec"],
+        "properties": {
+            "profile": {"description": "feature id of a profile_2d face"},
+            "plane": {"enum": ["XY", "XZ", "YZ"], "default": "XY"},
+            "axis": {"enum": ["x", "y", "z"], "default": "normal to plane"},
+        },
     },
     "fillet": {"required": ["id", "base", "radius", "edges"]},
     "chamfer": {"required": ["id", "base", "size", "edges"]},
@@ -823,7 +1049,7 @@ def op_expand_pattern(feature):
 def _feature_inputs(feat):
     """Feature ids referenced by a graph node."""
     ids = []
-    for k in ("base", "tool"):
+    for k in ("base", "tool", "profile"):
         if isinstance(feat.get(k), str):
             ids.append(feat[k])
     ids += list(feat.get("shapes") or [])
@@ -834,9 +1060,11 @@ def _consumed(feat):
     """Inputs hidden because a boolean or array owns their visible output."""
     if feat.get("type") not in (
         "cut", "union", "intersection", "array", "grid_array",
-        "fillet", "chamfer"
+        "fillet", "chamfer", "extrude_cut"
     ):
         return []
+    if feat.get("_consumed") is not None:
+        return list(feat["_consumed"])
     return _feature_inputs(feat)
 
 

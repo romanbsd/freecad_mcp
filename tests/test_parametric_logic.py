@@ -185,6 +185,32 @@ def test_describe_feature_type_returns_machine_readable_requirements(parametric)
     ]
 
 
+def test_generic_profile_tools_are_exposed_without_one_off_keyhole(parametric):
+    feature_types = parametric.op_list_feature_types()["feature_types"]
+    assert "profile_2d" in feature_types
+    assert "profile_extrude" in feature_types
+    assert "extrude_cut" in feature_types
+    assert "keyhole_slot" not in feature_types
+
+
+def test_profile_tool_schemas_describe_generic_sections(parametric):
+    profile = parametric.op_describe_feature_type("profile_2d")
+    cut = parametric.op_describe_feature_type("extrude_cut")
+
+    assert profile["schema"]["one_of"] == ["points", "sections", "profile_spec"]
+    assert cut["schema"]["required"] == ["id", "base", "length"]
+    assert cut["schema"]["one_of"] == ["profile", "points", "sections", "profile_spec"]
+
+
+def test_extrude_cut_depends_on_base_and_optional_profile(parametric):
+    assert parametric._feature_inputs({
+        "id": "cut", "type": "extrude_cut", "base": "panel", "profile": "hole",
+    }) == ["panel", "hole"]
+    assert parametric._consumed({
+        "id": "cut", "type": "extrude_cut", "base": "panel", "profile": "hole",
+    }) == ["panel", "hole"]
+
+
 def test_edge_selector_matches_axis_aligned_edges(parametric):
     class Bounds:
         XLength, YLength, ZLength = 0.0, 0.0, 12.0
