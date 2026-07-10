@@ -1422,7 +1422,7 @@ def _build_manufacturing_feature(doc, host, feat, id_map):
         raise ValueError("%s requires an earlier base feature" % feat["type"])
     obj = doc.addObject("Part::FeaturePython", feat["id"])
     _add_manufacturing_links(obj, feat, host, id_map)
-    if obj.Base.Shape.isNull():
+    if obj.Base.Shape.isNull() or (obj.Support is not None and obj.Support.Shape.isNull()):
         doc.recompute()
     obj.Proxy = _ManufacturingFeatureProxy()
     obj.Proxy.execute(obj)
@@ -2167,8 +2167,10 @@ def _build_feature(doc, host, feat, id_map, profile_definitions=None):
         return obj  # not a new object
     elif ftype in ("cut", "union", "intersection"):
         obj = _build_boolean(doc, feat, id_map)
-    elif ftype in ("array", "grid_array"):
-        obj = _build_array(doc, host, feat, id_map)
+    elif ftype in (
+            "feature_pattern", "array", "grid_array", "linear_pattern",
+            "polar_pattern", "mirror_pattern", "path_pattern"):
+        obj = _build_feature_pattern(doc, host, feat, id_map)
     elif ftype == "group":
         obj = doc.addObject("App::DocumentObjectGroup", feat["id"])
     else:
@@ -2176,8 +2178,7 @@ def _build_feature(doc, host, feat, id_map, profile_definitions=None):
 
     if feat.get("label"):
         obj.Label = feat["label"]
-    if ftype in ("cut", "union", "intersection", "array", "grid_array",
-                 "fillet", "chamfer"):
+    if ftype in ("cut", "union", "intersection", "fillet", "chamfer"):
         place(obj)
     _apply_material(obj, feat.get("material"))
     return obj
@@ -2204,33 +2205,307 @@ def _require_array_count(feat):
     """A missing count silently produced an array of one (Draft's default).
     Require an explicit count so that footgun fails loudly instead."""
     if (feat.get("count") is None and feat.get("count_x") is None
-            and feat.get("count_y") is None):
+            and feat.get("count_y") is None and feat.get("count_u") is None
+            and feat.get("count_v") is None):
         raise ValueError(
             "array %r requires 'count' (or 'count_x'/'count_y')" % feat.get("id")
         )
 
 
-def _build_array(doc, host, feat, id_map):
-    import Draft
-    _require_array_count(feat)
-    base = id_map[feat["base"]]
-    arr = Draft.make_array(base, App.Vector(1, 0, 0), App.Vector(0, 1, 0), 1, 1)
-    arr.Label = feat.get("id", arr.Label)
-    hn = host.Name
-    if feat.get("count_x") is not None or feat.get("count_y") is not None:
-        _bind(arr, "NumberX", feat.get("count_x") or 1, hn)
-        _bind(arr, "NumberY", feat.get("count_y") or 1, hn)
-        if feat.get("spacing_x") is not None:
-            arr.setExpression("IntervalX.x", _translate(feat["spacing_x"], hn))
-        if feat.get("spacing_y") is not None:
-            arr.setExpression("IntervalY.y", _translate(feat["spacing_y"], hn))
+def _normalize_feature_pattern(feat):
+    spec = dict(feat)
+    aliases = {
+        "array": "linear", "grid_array": "grid",
+        "linear_pattern": "linear", "polar_pattern": "polar",
+        "mirror_pattern": "mirror", "path_pattern": "path",
+    }
+    mode = aliases.get(spec.get("type"), spec.get("mode"))
+    if mode not in ("linear", "grid", "polar", "mirror", "path"):
+        raise ValueError("feature_pattern mode must be linear, grid, polar, mirror, or path")
+    spec["mode"] = mode
+    if spec.get("type") == "grid_array":
+        spec.setdefault("count_u", spec.get("count_x"))
+        spec.setdefault("count_v", spec.get("count_y"))
+        spec.setdefault("spacing_u", spec.get("spacing_x"))
+        spec.setdefault("spacing_v", spec.get("spacing_y"))
+        spec.setdefault("direction_u", "x")
+        spec.setdefault("direction_v", "y")
+    return spec
+
+
+def _pattern_count(value, host, name="count"):
+    number = _quantity_value(value, host)
+    rounded = int(round(number))
+    if rounded < 1 or abs(number - rounded) > 1e-9:
+        raise ValueError("pattern %s must be a positive integer" % name)
+    return rounded
+
+
+def _pattern_frame(obj, spec, host):
+    support = getattr(obj, "Support", None)
+    if support is not None:
+        support_spec = json.loads(getattr(obj, "SupportSpec", "{}") or "{}")
+        return _support_frame(support, support_spec, host)
+    frame_obj = getattr(obj, "Frame", None)
+    if frame_obj is not None:
+        return _frame_from_placement(frame_obj.Placement)
+    return _static_frame(spec.get("frame") or "XY", host)
+
+
+def _pattern_direction(value, frame, host):
+    if isinstance(value, str) and value.lower() in (
+            "x", "y", "z", "u", "v", "normal"):
+        directions = {
+            "x": App.Vector(1, 0, 0), "y": App.Vector(0, 1, 0),
+            "z": App.Vector(0, 0, 1), "u": frame["u"],
+            "v": frame["v"], "normal": frame["normal"],
+        }
+        return directions[value.lower()]
+    return _unit(_evaluated_vector(value, host), "pattern direction is zero length")
+
+
+def _pattern_result(copies, fuse):
+    import Part
+    if not copies:
+        raise ValueError("pattern produced no copies")
+    if not fuse:
+        return Part.makeCompound(copies)
+    result = copies[0]
+    for copy_shape in copies[1:]:
+        result = result.fuse(copy_shape)
+    return result.removeSplitter()
+
+
+def _pattern_path(obj, spec, host):
+    import Part
+    if getattr(obj, "Path", None) is not None:
+        return _shape_wire(obj.Path.Shape)
+    points = spec.get("path_points") or []
+    if len(points) < 2:
+        raise ValueError("path pattern requires path or at least two path_points")
+    frame = _pattern_frame(obj, spec, host)
+    vectors = []
+    for point in points:
+        if isinstance(point, dict):
+            if any(axis in point for axis in ("x", "y", "z")):
+                vectors.append(_evaluated_vector(point, host))
+            else:
+                vectors.append(_plane_vector(
+                    "XY", _quantity_value(point.get("u", 0), host),
+                    _quantity_value(point.get("v", 0), host), frame,
+                ))
+        elif len(point) == 2:
+            vectors.append(_plane_vector(
+                "XY", _quantity_value(point[0], host),
+                _quantity_value(point[1], host), frame,
+            ))
+        else:
+            vectors.append(_evaluated_vector(point, host))
+    return Part.makePolygon(vectors)
+
+
+def _sample_wire(wire, distance):
+    remaining = max(0.0, min(float(distance), wire.Length))
+    edges = list(wire.Edges)
+    for edge in edges:
+        if remaining <= edge.Length + 1e-9:
+            parameter = edge.getParameterByLength(min(remaining, edge.Length))
+            return edge.valueAt(parameter), _unit(edge.tangentAt(parameter))
+        remaining -= edge.Length
+    edge = edges[-1]
+    return edge.valueAt(edge.LastParameter), _unit(edge.tangentAt(edge.LastParameter))
+
+
+def _path_distances(wire, spec, host):
+    if spec.get("count") is not None:
+        count = _pattern_count(spec["count"], host)
+        if count == 1:
+            return [0.0]
+        divisor = count if wire.isClosed() else count - 1
+        return [wire.Length * index / divisor for index in range(count)]
+    if spec.get("spacing") is None:
+        raise ValueError("path pattern requires count or spacing")
+    spacing = _quantity_value(spec["spacing"], host)
+    if spacing <= 0:
+        raise ValueError("path pattern spacing must be positive")
+    distances = []
+    current = 0.0
+    while current <= wire.Length + 1e-9:
+        distances.append(min(current, wire.Length))
+        current += spacing
+    if spec.get("include_end", True) and not wire.isClosed() and \
+            distances[-1] < wire.Length - 1e-9:
+        distances.append(wire.Length)
+    return distances
+
+
+class _FeaturePatternProxy:
+    def dumps(self):
+        return None
+
+    def loads(self, state):
+        return None
+
+    __getstate__ = dumps
+    __setstate__ = loads
+
+    def execute(self, obj):
+        host = _profile_host(obj)
+        spec = json.loads(obj.PatternSpec or "{}")
+        mode = spec["mode"]
+        frame = _pattern_frame(obj, spec, host)
+        base_shape = obj.Base.Shape
+        copies = []
+        if mode == "linear":
+            if spec.get("count") is None or spec.get("spacing") is None:
+                raise ValueError("linear pattern requires count and spacing")
+            count = _pattern_count(spec.get("count"), host)
+            spacing = _quantity_value(spec.get("spacing"), host)
+            if spacing <= 0:
+                raise ValueError("linear pattern spacing must be positive")
+            direction = _pattern_direction(
+                spec.get("direction", spec.get("axis", "x")), frame, host
+            )
+            if spec.get("reversed"):
+                direction = -direction
+            origin_index = (count - 1) / 2 if spec.get("symmetric") else 0
+            for index in range(count):
+                copy_shape = base_shape.copy()
+                copy_shape.translate(direction * spacing * (index - origin_index))
+                copies.append(copy_shape)
+        elif mode == "grid":
+            count_spec = spec.get("count") \
+                if isinstance(spec.get("count"), dict) else {}
+            raw_count_u = spec.get("count_u", count_spec.get("u"))
+            raw_count_v = spec.get("count_v", count_spec.get("v"))
+            if raw_count_u is None or raw_count_v is None:
+                raise ValueError("grid pattern requires u/v count values")
+            count_u = _pattern_count(
+                raw_count_u, host, "count_u"
+            )
+            count_v = _pattern_count(
+                raw_count_v, host, "count_v"
+            )
+            spacing = spec.get("spacing") if isinstance(spec.get("spacing"), dict) else {}
+            raw_spacing_u = spec.get("spacing_u", spacing.get("u"))
+            raw_spacing_v = spec.get("spacing_v", spacing.get("v"))
+            if raw_spacing_u is None or raw_spacing_v is None:
+                raise ValueError("grid pattern requires u/v spacing values")
+            spacing_u = _quantity_value(raw_spacing_u, host)
+            spacing_v = _quantity_value(raw_spacing_v, host)
+            if spacing_u <= 0 or spacing_v <= 0:
+                raise ValueError("grid pattern spacing values must be positive")
+            direction_u = _pattern_direction(spec.get("direction_u", "u"), frame, host)
+            direction_v = _pattern_direction(spec.get("direction_v", "v"), frame, host)
+            if spec.get("reversed"):
+                direction_u = -direction_u
+            center_u = (count_u - 1) / 2 if spec.get("symmetric") else 0
+            center_v = (count_v - 1) / 2 if spec.get("symmetric") else 0
+            for u_index in range(count_u):
+                for v_index in range(count_v):
+                    copy_shape = base_shape.copy()
+                    copy_shape.translate(
+                        direction_u * spacing_u * (u_index - center_u) +
+                        direction_v * spacing_v * (v_index - center_v)
+                    )
+                    copies.append(copy_shape)
+        elif mode == "polar":
+            if spec.get("count") is None:
+                raise ValueError("polar pattern requires count")
+            count = _pattern_count(spec.get("count"), host)
+            angle = _quantity_value(spec.get("angle", "360 deg"), host)
+            if spec.get("reversed"):
+                angle = -angle
+            axis = _pattern_direction(spec.get("axis", "normal"), frame, host)
+            center = _evaluated_vector(spec["center"], host) \
+                if spec.get("center") is not None else frame["origin"]
+            full = abs(abs(angle) - 360) <= 1e-9
+            step = angle / (count if full else max(1, count - 1))
+            start = -angle / 2 if spec.get("symmetric") and not full else 0
+            for index in range(count):
+                copy_shape = base_shape.copy()
+                copy_shape.rotate(center, axis, start + step * index)
+                copies.append(copy_shape)
+        elif mode == "mirror":
+            origin = _evaluated_vector(spec["origin"], host) \
+                if spec.get("origin") is not None else frame["origin"]
+            normal = _pattern_direction(spec.get("normal", "normal"), frame, host)
+            if spec.get("keep_original", True):
+                copies.append(base_shape.copy())
+            copies.append(base_shape.mirror(origin, normal))
+        else:
+            wire = _pattern_path(obj, spec, host)
+            distances = _path_distances(wire, spec, host)
+            if spec.get("reversed"):
+                distances = [wire.Length - distance for distance in distances]
+            first_point, first_tangent = _sample_wire(wire, distances[0])
+            anchor = _evaluated_vector(spec["anchor"], host) \
+                if spec.get("anchor") is not None else base_shape.BoundBox.Center
+            tangent_mode = str(spec.get("orientation", "fixed")).lower() == "tangent"
+            for distance in distances:
+                point, tangent = _sample_wire(wire, distance)
+                displacement = point - first_point
+                copy_shape = base_shape.copy()
+                copy_shape.translate(displacement)
+                if tangent_mode:
+                    rotation = App.Rotation(first_tangent, tangent)
+                    copy_shape.rotate(
+                        anchor + displacement, rotation.Axis,
+                        math.degrees(rotation.Angle),
+                    )
+                copies.append(copy_shape)
+        shape = _pattern_result(copies, bool(spec.get("fuse", False)))
+        if shape.isNull() or not shape.isValid():
+            raise ValueError("%s pattern produced an invalid shape" % mode)
+        obj.Shape = shape
+
+
+def _build_feature_pattern(doc, host, feat, id_map):
+    if feat.get("base") not in id_map:
+        raise ValueError("feature_pattern requires an earlier base feature")
+    spec = _normalize_feature_pattern(feat)
+    if spec["mode"] in ("linear", "grid"):
+        _require_array_count(spec)
+    obj = doc.addObject("Part::FeaturePython", feat["id"])
+    obj.addProperty("App::PropertyString", "HostName", "Pattern")
+    obj.addProperty("App::PropertyString", "PatternSpec", "Pattern")
+    obj.addProperty("App::PropertyEnumeration", "Mode", "Pattern")
+    obj.addProperty("App::PropertyLink", "Base", "Pattern")
+    obj.addProperty("App::PropertyLink", "Frame", "Pattern")
+    obj.addProperty("App::PropertyLink", "Support", "Pattern")
+    obj.addProperty("App::PropertyString", "SupportSpec", "Pattern")
+    obj.addProperty("App::PropertyLink", "Path", "Pattern")
+    obj.HostName = host.Name
+    obj.PatternSpec = json.dumps(spec)
+    obj.Mode = ["linear", "grid", "polar", "mirror", "path"]
+    obj.Mode = spec["mode"]
+    obj.Base = id_map[feat["base"]]
+    frame_id = (feat.get("placement") or {}).get("frame_id") or feat.get("frame_id")
+    if frame_id:
+        obj.Frame = id_map[frame_id]
+    support = feat.get("support")
+    support_id = _support_feature_id(support)
+    if support_id:
+        obj.Support = id_map[support_id]
+        obj.SupportSpec = json.dumps(
+            dict(support) if isinstance(support, dict) else {"feature": support_id}
+        )
     else:
-        _bind(arr, "NumberX", feat.get("count"), hn)
-    if feat.get("spacing") is not None:
-        axis = (feat.get("axis") or "x").lower()
-        arr.setExpression("IntervalX.%s" % axis, _translate(feat["spacing"], hn))
+        obj.SupportSpec = "{}"
+    if feat.get("path"):
+        obj.Path = id_map[feat["path"]]
+    if obj.Base.Shape.isNull() or (obj.Support is not None and obj.Support.Shape.isNull()):
+        doc.recompute()
+    obj.Proxy = _FeaturePatternProxy()
+    obj.Proxy.execute(obj)
+    _apply_profile_placement(obj, feat, host)
     feat["_consumed"] = [feat["base"]]
-    return arr
+    return obj
+
+
+def _build_array(doc, host, feat, id_map):
+    """Compatibility entry point for callers that imported the old helper."""
+    return _build_feature_pattern(doc, host, feat, id_map)
 
 
 # --------------------------------------------------------------------------- #
@@ -2565,7 +2840,9 @@ def op_list_feature_types():
     return {
         "feature_types": [
             "box", "cylinder", "tube", "cone", "prism", "datum_frame", "transform",
-            "cut", "union", "intersection", "array", "grid_array",
+            "cut", "union", "intersection", "feature_pattern",
+            "array", "grid_array", "linear_pattern", "polar_pattern",
+            "mirror_pattern", "path_pattern",
             "profile_2d", "sketch_2d", "profile_extrude", "pad", "pocket", "extrude_cut",
             "revolve", "sweep", "loft",
             "hole", "shell", "draft", "rib", "face_offset", "replace_face",
@@ -2615,6 +2892,28 @@ PROFILE_OPERATION_PROPERTIES = {
     "boolean": {"enum": ["fuse", "cut", "common"]},
 }
 
+FEATURE_PATTERN_PROPERTIES = {
+    "base": {"description": "feature id to repeat"},
+    "mode": {"enum": ["linear", "grid", "polar", "mirror", "path"]},
+    "count": {"description": "positive integer or grid u/v object"},
+    "spacing": {"description": "distance or grid u/v object"},
+    "direction": {"description": "x/y/z/u/v/normal or vector3"},
+    "axis": {"description": "x/y/z/u/v/normal or vector3"},
+    "frame_id": {"description": "datum frame for local axes and origin"},
+    "symmetric": {"type": "boolean", "default": False},
+    "fuse": {"type": "boolean", "default": False},
+    "angle": {"default": "360 deg"},
+    "center": {"type": "vector3"},
+    "normal": {"description": "mirror plane normal"},
+    "origin": {"type": "vector3"},
+    "keep_original": {"type": "boolean", "default": True},
+    "path": {"description": "feature containing a wire"},
+    "path_points": {"items": {"one_of": ["vector2", "vector3", "u/v object"]}},
+    "orientation": {"enum": ["fixed", "tangent"], "default": "fixed"},
+    "anchor": {"type": "vector3"},
+    "include_end": {"type": "boolean", "default": True},
+}
+
 FEATURE_SCHEMAS = {
     "datum_frame": {
         "required": ["id"],
@@ -2640,8 +2939,26 @@ FEATURE_SCHEMAS = {
                  "properties": {"axis": {"enum": ["x", "y", "z"]}}},
     "tube": {"required": ["id", "outer_radius", "inner_radius", "height"],
              "properties": {"axis": {"enum": ["x", "y", "z"]}}},
-    "grid_array": {"required": ["id", "base", "count_x", "count_y"],
-                   "properties": {"spacing_x": {}, "spacing_y": {}}},
+    "feature_pattern": {
+        "required": ["id", "base", "mode"],
+        "properties": FEATURE_PATTERN_PROPERTIES,
+    },
+    "array": {
+        "alias_of": "feature_pattern", "deprecated": True,
+        "required": ["id", "base", "count", "spacing"],
+        "properties": FEATURE_PATTERN_PROPERTIES,
+    },
+    "grid_array": {
+        "alias_of": "feature_pattern", "deprecated": True,
+        "required": ["id", "base", "count_x", "count_y"],
+        "properties": {**FEATURE_PATTERN_PROPERTIES,
+                       "spacing_x": {}, "spacing_y": {}},
+    },
+    "linear_pattern": {"alias_of": "feature_pattern", "required": ["id", "base", "count", "spacing"]},
+    "polar_pattern": {"alias_of": "feature_pattern", "required": ["id", "base", "count"]},
+    "mirror_pattern": {"alias_of": "feature_pattern", "required": ["id", "base"]},
+    "path_pattern": {"alias_of": "feature_pattern", "required": ["id", "base"],
+                     "one_of": ["path", "path_points"]},
     "profile_extrude": {
         "alias_of": "pad", "deprecated": True,
         "required": ["id", "length"],
@@ -2817,7 +3134,7 @@ def op_capabilities():
     from patterns import list_patterns
     import FreeCAD
     return {
-        "api_version": "2.4",
+        "api_version": "2.5",
         "freecad_version": ".".join(FreeCAD.Version()[:3]),
         "feature_types": op_list_feature_types()["feature_types"],
         "patterns": list_patterns(),
@@ -2832,6 +3149,11 @@ def op_capabilities():
         "named_datum_frames": True,
         "manufacturing_features": [
             "hole", "shell", "draft", "rib", "face_offset", "replace_face",
+        ],
+        "feature_pattern_modes": ["linear", "grid", "polar", "mirror", "path"],
+        "feature_pattern_aliases": [
+            "array", "grid_array", "linear_pattern", "polar_pattern",
+            "mirror_pattern", "path_pattern",
         ],
         "sketch_constraints": [
             "coincident", "horizontal", "vertical", "parallel", "perpendicular",
@@ -2898,7 +3220,8 @@ def _consumed(feat):
             return []
         return [feat["base"]] + ([feat["profile"]] if feat.get("profile") else [])
     if feat.get("type") not in (
-        "cut", "union", "intersection", "array", "grid_array",
+        "cut", "union", "intersection", "feature_pattern", "array", "grid_array",
+        "linear_pattern", "polar_pattern", "mirror_pattern", "path_pattern",
         "fillet", "chamfer", "pad", "pocket", "revolve", "sweep", "loft",
         "profile_extrude", "extrude_cut"
     ):
@@ -3094,6 +3417,8 @@ def _refresh_common_placements(doc, meta, feature_ids, host):
         "profile_2d", "profile_extrude", "pad", "pocket", "extrude_cut",
         "revolve", "sweep", "loft", "datum_frame", "hole", "shell",
         "draft", "rib", "face_offset", "replace_face",
+        "feature_pattern", "array", "grid_array", "linear_pattern",
+        "polar_pattern", "mirror_pattern", "path_pattern",
     }
     id_map = {
         feature_id: doc.getObject(name)
@@ -3119,36 +3444,33 @@ def _refresh_common_placements(doc, meta, feature_ids, host):
             _apply_common_placement(target, feature, host, id_map)
 
 
-def _refresh_datum_frames(doc, meta, feature_ids):
-    refreshed = []
-    for feature in meta.get("build_graph", []):
-        if feature["id"] not in feature_ids or feature.get("type") != "datum_frame":
-            continue
-        obj = doc.getObject(meta.get("id_map", {}).get(feature["id"], ""))
-        if obj is None or getattr(obj, "Proxy", None) is None:
-            continue
-        obj.Proxy.execute(obj)
-        refreshed.append(feature["id"])
-    return refreshed
-
-
-def _refresh_manufacturing_features(doc, meta, feature_ids, host):
+def _refresh_declarative_features(doc, meta, feature_ids, host):
     manufacturing = {
         "hole", "shell", "draft", "rib", "face_offset", "replace_face",
     }
+    patterns = {
+        "feature_pattern", "array", "grid_array", "linear_pattern",
+        "polar_pattern", "mirror_pattern", "path_pattern",
+    }
     refreshed = []
     for feature in meta.get("build_graph", []):
-        if feature["id"] not in feature_ids or feature.get("type") not in manufacturing:
+        if feature["id"] not in feature_ids:
             continue
         obj = doc.getObject(meta.get("id_map", {}).get(feature["id"], ""))
         if obj is None:
             continue
-        if feature["type"] == "draft":
+        feature_type = feature.get("type")
+        if feature_type == "datum_frame" and getattr(obj, "Proxy", None) is not None:
+            obj.Proxy.execute(obj)
+        elif feature_type == "draft":
             _configure_native_draft(obj.McpBody, feature, host)
             doc.recompute()
             obj.Proxy.execute(obj)
-        elif getattr(obj, "Proxy", None) is not None:
+        elif feature_type in manufacturing | patterns and \
+                getattr(obj, "Proxy", None) is not None:
             obj.Proxy.execute(obj)
+        else:
+            continue
         refreshed.append(feature["id"])
     return refreshed
 
@@ -3264,8 +3586,7 @@ def op_set_component_parameters(component_id, values, rebuild=True, validate=Fal
             # only for the response — it does not scope this rebuild.
             doc.recompute()
             affected = _dependents(meta, changed)
-            _refresh_datum_frames(doc, meta, affected)
-            _refresh_manufacturing_features(doc, meta, affected, host)
+            _refresh_declarative_features(doc, meta, affected, host)
             remapped_external = _refresh_sketch_external_geometry(
                 doc, meta, affected, host
             )

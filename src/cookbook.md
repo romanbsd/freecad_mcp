@@ -151,7 +151,7 @@ Core feature types:
 - profiles and generated solids: `profile_2d`, `sketch_2d`, `pad`, `pocket`, `revolve`,
   `sweep`, `loft`, `fillet`, `chamfer`;
 - relationships: `transform`, `cut`, `union`, `intersection`;
-- repetition: `array`, `grid_array`;
+- repetition: `feature_pattern` plus linear/grid/polar/mirror/path aliases;
 - organization: `group`;
 - reusable expansion: `pattern`.
 
@@ -220,6 +220,38 @@ preserve it as a dependency, and produce an ordinary downstream shape.
 All dimensions accept `$parameter` expressions. Named geometry references work
 for supports and selectors. Thread declarations are metadata only; the feature
 does not generate helical thread geometry.
+
+### Unified feature patterns
+
+Use `feature_pattern` for shape repetition. Every mode accepts `base`, optional
+`frame_id` or planar `support`, plus `reversed`, `symmetric`, and `fuse` fields.
+
+```json
+[
+  {
+    "id": "bolt_circle", "type": "feature_pattern", "mode": "polar",
+    "base": "hole_tool", "count": 6, "angle": "360 deg",
+    "axis": "normal", "frame_id": "flange_frame"
+  },
+  {
+    "id": "clips", "type": "feature_pattern", "mode": "path",
+    "base": "clip", "path": "rim_path", "spacing": "12 mm",
+    "orientation": "tangent", "include_end": false
+  }
+]
+```
+
+- `linear`: `count`, `spacing`, and `direction` or `axis`.
+- `grid`: `count:{u,v}` and `spacing:{u,v}`, optionally custom local directions.
+- `polar`: `count`, total `angle`, `axis`, and optional `center`.
+- `mirror`: plane `origin`/`normal`; `keep_original` defaults to true.
+- `path`: a wire `path` or `path_points`, distributed by `count` or `spacing`;
+  orientation is `fixed` or `tangent`.
+
+The output is a compound unless `fuse=true`. Full polar patterns do not repeat
+the 360-degree endpoint. `array` and `grid_array` are deprecated aliases for
+linear and grid modes; the explicit `*_pattern` aliases select their named mode.
+The macro-expansion feature named `pattern` remains separate.
 
 ### Named geometry references
 

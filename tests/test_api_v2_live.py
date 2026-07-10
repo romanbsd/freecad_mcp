@@ -135,6 +135,62 @@ def _assert_manufacturing_workflow():
     assert all(after[fid]["volume"] != before[fid]["volume"] for fid in feature_ids)
 
 
+def _assert_feature_pattern_workflow():
+    call("execute", code=(
+        "import FreeCAD as App\n"
+        "if 'ApiPatternLive' in App.listDocuments():\n"
+        "    App.closeDocument('ApiPatternLive')"
+    ))
+    created = call(
+        "create_component", document="ApiPatternLive", name="Patterns",
+        parameters=[
+            {"name": "linear_count", "type": "int", "default": 3},
+            {"name": "spacing", "type": "length", "default": "6 mm"},
+            {"name": "path_count", "type": "int", "default": 5},
+        ],
+    )
+    component_id = created["component_id"]
+    call("define_component", component_id=component_id, features=[
+        {"id": "seed", "type": "box", "size": {
+            "x": "4 mm", "y": "3 mm", "z": "2 mm",
+        }, "position": {"x": "5 mm"}},
+        {"id": "frame", "type": "datum_frame", "plane": "XY",
+         "rotation": {"axis": "normal", "angle": "90 deg"}},
+        {"id": "linear", "type": "feature_pattern", "mode": "linear",
+         "base": "seed", "count": "$linear_count", "spacing": "$spacing",
+         "direction": "u", "frame_id": "frame", "symmetric": True},
+        {"id": "grid", "type": "grid_array", "base": "seed",
+         "count_x": 2, "count_y": 3,
+         "spacing_x": "7 mm", "spacing_y": "5 mm"},
+        {"id": "polar", "type": "polar_pattern", "base": "seed",
+         "count": 4, "angle": "360 deg", "axis": "z", "center": [0, 0, 0]},
+        {"id": "mirrored", "type": "mirror_pattern", "base": "seed",
+         "origin": [0, 0, 0], "normal": [1, 0, 0]},
+        {"id": "path", "type": "path_pattern", "base": "seed",
+         "path_points": [[0, 0, 0], [12, 0, 0], [12, 10, 0]],
+         "count": "$path_count", "orientation": "tangent"},
+    ])
+    expected = {"linear": 3, "grid": 6, "polar": 4, "mirrored": 2, "path": 5}
+    before = call("execute", code=(
+        "d=App.getDocument('ApiPatternLive')\n"
+        "expected=%r\n"
+        "result={fid:{'valid':d.getObject(fid).Shape.isValid(),"
+        "'solids':len(d.getObject(fid).Shape.Solids)} for fid in expected}"
+    ) % expected)["result"]
+    assert all(before[fid]["valid"] for fid in expected)
+    assert {fid: before[fid]["solids"] for fid in expected} == expected
+
+    updated = call("set_component_parameters", component_id=component_id, values={
+        "linear_count": 4, "spacing": "8 mm", "path_count": 6,
+    })
+    assert updated["regenerated"] == ["linear", "path"]
+    after = call("execute", code=(
+        "d=App.getDocument('ApiPatternLive')\n"
+        "result={fid:len(d.getObject(fid).Shape.Solids) for fid in ('linear','path')}"
+    ))["result"]
+    assert after == {"linear": 4, "path": 6}
+
+
 def test_v2_component_workflow():
     call(
         "execute",
@@ -158,13 +214,17 @@ def test_v2_component_workflow():
     feature_types = call("list_feature_types")["feature_types"]
     assert {
         "tube", "grid_array", "pattern", "datum_frame", "hole", "shell",
-        "draft", "rib", "face_offset", "replace_face",
+        "draft", "rib", "face_offset", "replace_face", "feature_pattern",
+        "linear_pattern", "polar_pattern", "mirror_pattern", "path_pattern",
     }.issubset(feature_types)
     capabilities = call("capabilities")
-    assert capabilities["api_version"] == "2.4"
+    assert capabilities["api_version"] == "2.5"
     assert capabilities["structural_patch_mode"] == "dependency_scoped"
     assert capabilities["manufacturing_features"] == [
         "hole", "shell", "draft", "rib", "face_offset", "replace_face",
+    ]
+    assert capabilities["feature_pattern_modes"] == [
+        "linear", "grid", "polar", "mirror", "path",
     ]
     tube_schema = call("describe_feature_type", feature_type="tube")
     assert "outer_radius" in tube_schema["schema"]["required"]
@@ -335,13 +395,11 @@ def test_v2_component_workflow():
     assert fit["clearance_mm"]["minimum"] == 1.0
     assert fit["blocked_translation"]["+x"] is True
     _assert_manufacturing_workflow()
+    _assert_feature_pattern_workflow()
 
 
 def test_proxy_survives_save_reload(tmp_path):
-    """C1: a chamfer's mode lives only on its FeaturePython Proxy. Without proxy
-    serialization a reopened document drops it and the feature stops recomputing.
-    Build -> save -> close -> reopen -> change the bound param -> the chamfer must
-    actually rebuild (a larger chamfer removes more material)."""
+    """FeaturePython proxies must survive save/reopen and keep recomputing."""
     doc_name = "ProxyReload"
     # openDocument names the reopened doc after the file's basename, and the
     # component_id embeds the doc name — so the file must be <doc_name>.FCStd
@@ -365,12 +423,16 @@ def test_proxy_survives_save_reload(tmp_path):
                  "size": {"x": "40 mm", "y": "40 mm", "z": "40 mm"}},
                 {"id": "ch", "type": "chamfer", "base": "body",
                  "size": "$cham", "edges": {"parallel_to": "z"}, "role": "output"},
+                {"id": "patterned", "type": "feature_pattern", "mode": "linear",
+                 "base": "body", "count": 2, "spacing": "$cham + 45 mm",
+                 "axis": "x", "role": "inspection"},
             ],
             "outputs": ["ch"],
         },
     )
     component_id = built["component_id"]
     ch_name = built["defined"]["object_names"]["ch"]
+    pattern_name = built["defined"]["object_names"]["patterned"]
 
     def chamfer_volume():
         return call("execute", code=(
@@ -379,6 +441,10 @@ def test_proxy_survives_save_reload(tmp_path):
         ))["result"]
 
     before = chamfer_volume()
+    pattern_before = call("execute", code=(
+        "result = App.getDocument(%r).getObject(%r).Shape.BoundBox.XLength"
+        % (doc_name, pattern_name)
+    ))["result"]
 
     # round-trip through disk: this is where a lost Proxy would surface
     call("execute", code="App.getDocument(%r).saveAs(%r)" % (doc_name, path))
@@ -389,6 +455,11 @@ def test_proxy_survives_save_reload(tmp_path):
     call("set_component_parameters", component_id=component_id,
          values={"cham": "8 mm"}, rebuild=True)
     after = chamfer_volume()
+    pattern_after = call("execute", code=(
+        "result = App.getDocument(%r).getObject(%r).Shape.BoundBox.XLength"
+        % (doc_name, pattern_name)
+    ))["result"]
 
     # a bigger chamfer cuts away more material -> strictly smaller volume
     assert after < before - 1.0, (before, after)
+    assert pattern_after > pattern_before + 4.9, (pattern_before, pattern_after)

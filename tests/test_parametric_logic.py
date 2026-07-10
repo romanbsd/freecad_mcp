@@ -238,12 +238,15 @@ def test_capabilities_advertise_named_references_and_sketches(parametric, monkey
     monkeypatch.setitem(sys.modules, "FreeCAD", fake_freecad)
     capabilities = parametric.op_capabilities()
 
-    assert capabilities["api_version"] == "2.4"
+    assert capabilities["api_version"] == "2.5"
     assert capabilities["named_geometry_references"] is True
     assert capabilities["dynamic_external_geometry"] is True
     assert capabilities["named_datum_frames"] is True
     assert capabilities["manufacturing_features"] == [
         "hole", "shell", "draft", "rib", "face_offset", "replace_face",
+    ]
+    assert capabilities["feature_pattern_modes"] == [
+        "linear", "grid", "polar", "mirror", "path",
     ]
     assert "radius" in capabilities["sketch_constraints"]
 
@@ -357,6 +360,37 @@ def test_manufacturing_features_are_described_and_track_inputs(parametric):
         "id": "replaced", "type": "replace_face", "base": "body",
         "replacement": {"feature": "surface"},
     }) == ["body", "surface"]
+
+
+def test_unified_feature_patterns_normalize_aliases_and_dependencies(parametric):
+    assert parametric._normalize_feature_pattern({
+        "type": "array", "count": 3, "spacing": "5 mm",
+    })["mode"] == "linear"
+    grid = parametric._normalize_feature_pattern({
+        "type": "grid_array", "count_x": 2, "count_y": 4,
+        "spacing_x": "8 mm", "spacing_y": "6 mm",
+    })
+    assert grid["mode"] == "grid"
+    assert (grid["count_u"], grid["count_v"]) == (2, 4)
+    assert (grid["direction_u"], grid["direction_v"]) == ("x", "y")
+    assert parametric._feature_inputs({
+        "id": "along", "type": "feature_pattern", "base": "seed",
+        "mode": "path", "path": "spine", "frame_id": "working_frame",
+    }) == ["seed", "spine", "working_frame"]
+
+
+def test_unified_feature_pattern_schemas_mark_legacy_aliases(parametric):
+    canonical = parametric.op_describe_feature_type("feature_pattern")["schema"]
+    legacy = parametric.op_describe_feature_type("grid_array")["schema"]
+    assert canonical["properties"]["mode"]["enum"] == [
+        "linear", "grid", "polar", "mirror", "path",
+    ]
+    assert legacy["alias_of"] == "feature_pattern"
+    assert legacy["deprecated"] is True
+    assert {
+        "feature_pattern", "linear_pattern", "polar_pattern",
+        "mirror_pattern", "path_pattern",
+    } <= set(parametric.op_list_feature_types()["feature_types"])
 
 
 def test_manufacturing_nested_selectors_expand_named_references(parametric):
@@ -622,6 +656,7 @@ def test_array_requires_explicit_count(parametric):
         parametric._require_array_count({"id": "a", "base": "seed"})
     parametric._require_array_count({"id": "a", "base": "seed", "count": 3})
     parametric._require_array_count({"id": "a", "base": "seed", "count_x": 2})
+    parametric._require_array_count({"id": "a", "base": "seed", "count_u": 2})
 
 
 def test_profile_points_requires_at_least_three(parametric):
@@ -684,6 +719,7 @@ def test_profile_extrusion_proxy_serialization_is_stable(parametric):
         parametric._ProfileExtrusionProxy,
         parametric._ManufacturingFeatureProxy,
         parametric._LinkedShapeProxy,
+        parametric._FeaturePatternProxy,
     ):
         proxy = proxy_type()
         assert proxy.__getstate__() is None

@@ -205,6 +205,44 @@ an edge, otherwise a parallel edge is inferred from the neutral-face normal.
 frame. `replace_face` substitutes boundary-compatible faces from another graph
 feature and attempts to heal the resulting solid.
 
+### Unified feature patterns
+
+`feature_pattern` repeats one graph feature with a common schema. `mode` is one
+of `linear`, `grid`, `polar`, `mirror`, or `path`. Results are compounds by
+default; set `fuse=true` to union touching copies. The original `base` is
+included as the first copy and becomes visually consumed by the pattern.
+
+```json
+{
+  "id": "vent_rows",
+  "type": "feature_pattern",
+  "mode": "grid",
+  "base": "vent",
+  "count": {"u": 4, "v": 3},
+  "spacing": {"u": "$pitch", "v": "$row_spacing"},
+  "frame_id": "panel_frame",
+  "symmetric": true
+}
+```
+
+Linear patterns use `count`, `spacing`, and `direction`. Grid patterns use
+`count` and `spacing` objects with local `u`/`v` values, with optional
+`direction_u` and `direction_v`. Polar patterns use `count`, `angle`, `axis`,
+and an optional `center`; a full 360-degree pattern avoids duplicating its end
+copy. Mirror patterns use a plane `origin` and `normal`, defaulting to the datum
+frame origin and normal, and retain the original unless `keep_original=false`.
+Path patterns accept a wire feature or `path_points`, plus either `count` or
+`spacing`; `orientation=tangent` follows the path direction while `fixed`
+preserves the seed orientation.
+
+`frame_id` or a planar `support` supplies local axes and origins to every mode.
+`reversed` flips the primary linear/grid direction, polar sweep, or path
+traversal. `symmetric` centers linear/grid offsets and partial polar sweeps.
+`array` and `grid_array` remain
+deprecated compatibility aliases; `linear_pattern`, `polar_pattern`,
+`mirror_pattern`, and `path_pattern` are concise mode aliases. The separate
+`pattern` feature still expands reusable domain macros such as LEGO patterns.
+
 Faces, edges, vertices, and solids use one selector shape:
 
 ```json

@@ -381,6 +381,7 @@ async def define_component(component_id: str, features: list,
     Feature types include primitives, booleans, arrays, reusable 2D profiles,
     native constrained sketches, reusable datum frames, generic hole/shell/
     draft/rib/face-offset/replace-face manufacturing operations,
+    unified linear/grid/polar/mirror/path feature patterns,
     pad/pocket/revolve/sweep/loft operations, edge treatments, and groups.
     Sizes/positions are expressions over $params
     (with units), e.g. "$width / 2", "$wall_thickness + 2 mm". Booleans/arrays
