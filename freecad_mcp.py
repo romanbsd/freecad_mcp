@@ -1070,6 +1070,8 @@ class FreeCADMCPServer:
             "list_geometry_references": parametric.op_list_geometry_references,
             "resolve_geometry_reference": parametric.op_resolve_geometry_reference,
             "get_sketch_status": parametric.op_get_sketch_status,
+            "get_assembly_status": parametric.op_get_assembly_status,
+            "refresh_assembly": parametric.op_refresh_assembly,
             "patch_component": parametric.op_patch_component,
             "list_feature_types": parametric.op_list_feature_types,
             "describe_feature_type": parametric.op_describe_feature_type,

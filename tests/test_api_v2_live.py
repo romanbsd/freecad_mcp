@@ -191,6 +191,102 @@ def _assert_feature_pattern_workflow():
     assert after == {"linear": 4, "path": 6}
 
 
+def _assert_assembly_workflow():
+    call("execute", code=(
+        "import FreeCAD as App\n"
+        "for name in ('ApiAssemblySource','ApiAssemblyLive'):\n"
+        "    if name in App.listDocuments(): App.closeDocument(name)"
+    ))
+    source = call(
+        "create_component", document="ApiAssemblySource", name="Bracket",
+        parameters=[{"name": "width", "type": "length", "default": "20 mm"}],
+    )
+    source_id = source["component_id"]
+    call("define_component", component_id=source_id, features=[
+        {"id": "body", "type": "box", "size": {
+            "x": "$width", "y": "10 mm", "z": "4 mm",
+        }},
+        {"id": "left", "type": "datum_frame", "plane": "YZ",
+         "origin": [0, 5, 2]},
+        {"id": "right", "type": "datum_frame", "plane": "YZ",
+         "origin": ["$width", 5, 2]},
+    ])
+    call("create_component_variant", component_id=source_id,
+         name="wide", values={"width": "30 mm"})
+
+    assembly = call(
+        "create_component", document="ApiAssemblyLive", name="Assembly",
+        parameters=[
+            {"name": "gap", "type": "length", "default": "5 mm"},
+            {"name": "instance_width", "type": "length", "default": "24 mm"},
+            {"name": "mate_angle", "type": "angle", "default": "30 deg"},
+        ],
+    )
+    assembly_id = assembly["component_id"]
+    call("define_component", component_id=assembly_id, features=[
+        {"id": "fixed", "type": "component_instance",
+         "component_id": source_id, "output": "body", "position": {"x": "10 mm"}},
+        {"id": "offset_part", "type": "component_instance",
+         "component_id": source_id, "output": "body", "variant": "wide"},
+        {"id": "angle_part", "type": "component_instance",
+         "component_id": source_id, "output": "body",
+         "parameters": {"width": "$instance_width"}},
+        {"id": "rigid_part", "type": "component_instance",
+         "component_id": source_id, "output": "body"},
+        {"id": "coincident_part", "type": "component_instance",
+         "component_id": source_id, "output": "body"},
+        {"id": "offset_mate", "type": "mate", "mode": "offset",
+         "moving": {"instance": "offset_part", "frame": "left"},
+         "target": {"instance": "fixed", "frame": "right"},
+         "offset": {"normal": "$gap"}},
+        {"id": "angle_mate", "type": "mate", "mode": "angle",
+         "moving": {"instance": "angle_part", "frame": "left"},
+         "target": {"instance": "fixed", "frame": "right"},
+         "angle": "$mate_angle"},
+        {"id": "rigid_mate", "type": "mate", "mode": "rigid",
+         "moving": {"instance": "rigid_part", "frame": "left"},
+         "target": {"instance": "fixed", "frame": "right"}},
+        {"id": "coincident_mate", "type": "mate", "mode": "coincident",
+         "moving": {"instance": "coincident_part", "frame": "left"},
+         "target": {"instance": "fixed", "frame": "right"}},
+    ])
+    status = call("get_assembly_status", component_id=assembly_id)
+    assert status["satisfied"] is True
+    assert len(status["instances"]) == 5
+    assert {mate["mode"] for mate in status["mates"]} == {
+        "rigid", "coincident", "offset", "angle",
+    }
+
+    updated = call("set_component_parameters", component_id=assembly_id, values={
+        "gap": "7 mm", "instance_width": "26 mm", "mate_angle": "45 deg",
+    })
+    assert {"angle_part", "offset_mate", "angle_mate"} <= set(updated["regenerated"])
+    call("set_component_parameters", component_id=source_id, values={"width": "22 mm"})
+    refreshed = call("refresh_assembly", component_id=assembly_id)
+    assert refreshed["satisfied"] is True
+    assert len(refreshed["refreshed_instances"]) == 5
+    assert len(refreshed["refreshed_mates"]) == 4
+    inspected = call("execute", code=(
+        "d=App.getDocument('ApiAssemblyLive')\n"
+        "result={'fixed_volume':d.getObject('fixed').Shape.Volume,"
+        "'rigid_x':d.getObject('rigid_part').Placement.Base.x,"
+        "'offset_x':d.getObject('offset_part').Placement.Base.x}"
+    ))["result"]
+    assert abs(inspected["fixed_volume"] - 880.0) < 1e-6
+    assert abs(inspected["rigid_x"] - 32.0) < 1e-6
+    assert abs(inspected["offset_x"] - 39.0) < 1e-6
+
+    path = os.path.join(tempfile.mkdtemp(prefix="freecad_mcp_assembly_"),
+                        "ApiAssemblyLive.FCStd")
+    call("execute", code="App.getDocument('ApiAssemblyLive').saveAs(%r)" % path)
+    call("execute", code="App.closeDocument('ApiAssemblyLive')")
+    call("execute", code="App.openDocument(%r)" % path)
+    reopened = call("get_assembly_status", component_id=assembly_id)
+    assert reopened["satisfied"] is True
+    assert all(instance["last_refresh"] == "ok" for instance in reopened["instances"])
+    assert call("refresh_assembly", component_id=assembly_id)["satisfied"] is True
+
+
 def test_v2_component_workflow():
     call(
         "execute",
@@ -205,6 +301,8 @@ def test_v2_component_workflow():
             "        freecad_mcp.FreeCADMCPServer.handle_get_screenshot,_server)\n"
             "    _server.execute_command=types.MethodType(\n"
             "        freecad_mcp.FreeCADMCPServer.execute_command,_server)\n"
+            "    _server._component_handlers=types.MethodType(\n"
+            "        freecad_mcp.FreeCADMCPServer._component_handlers,_server)\n"
             "freecad_mcp._panel=_panel\n"
             "if 'ApiV2Live' in App.listDocuments():\n"
             "    App.closeDocument('ApiV2Live')"
@@ -216,15 +314,19 @@ def test_v2_component_workflow():
         "tube", "grid_array", "pattern", "datum_frame", "hole", "shell",
         "draft", "rib", "face_offset", "replace_face", "feature_pattern",
         "linear_pattern", "polar_pattern", "mirror_pattern", "path_pattern",
+        "component_instance", "mate",
     }.issubset(feature_types)
     capabilities = call("capabilities")
-    assert capabilities["api_version"] == "2.5"
+    assert capabilities["api_version"] == "2.6"
     assert capabilities["structural_patch_mode"] == "dependency_scoped"
     assert capabilities["manufacturing_features"] == [
         "hole", "shell", "draft", "rib", "face_offset", "replace_face",
     ]
     assert capabilities["feature_pattern_modes"] == [
         "linear", "grid", "polar", "mirror", "path",
+    ]
+    assert capabilities["mate_modes"] == [
+        "rigid", "coincident", "offset", "angle",
     ]
     tube_schema = call("describe_feature_type", feature_type="tube")
     assert "outer_radius" in tube_schema["schema"]["required"]
@@ -396,6 +498,7 @@ def test_v2_component_workflow():
     assert fit["blocked_translation"]["+x"] is True
     _assert_manufacturing_workflow()
     _assert_feature_pattern_workflow()
+    _assert_assembly_workflow()
 
 
 def test_proxy_survives_save_reload(tmp_path):

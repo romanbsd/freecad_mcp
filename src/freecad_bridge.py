@@ -382,6 +382,7 @@ async def define_component(component_id: str, features: list,
     native constrained sketches, reusable datum frames, generic hole/shell/
     draft/rib/face-offset/replace-face manufacturing operations,
     unified linear/grid/polar/mirror/path feature patterns,
+    component instances and deterministic rigid/coincident/offset/angle mates,
     pad/pocket/revolve/sweep/loft operations, edge treatments, and groups.
     Sizes/positions are expressions over $params
     (with units), e.g. "$width / 2", "$wall_thickness + 2 mm". Booleans/arrays
@@ -464,6 +465,22 @@ async def get_sketch_status(component_id: str, feature_id: str) -> Any:
     """Return solver status, DoF, constraint errors, and named sketch maps."""
     return await _request({"type": "get_sketch_status", "params": {
         "component_id": component_id, "feature_id": feature_id}})
+
+
+@mcp.tool()
+async def get_assembly_status(component_id: str) -> Any:
+    """Inspect component instances and deterministic frame mates, including
+    source revisions, placements, residual errors, and satisfaction state."""
+    return await _request({"type": "get_assembly_status", "params": {
+        "component_id": component_id}})
+
+
+@mcp.tool()
+async def refresh_assembly(component_id: str) -> Any:
+    """Refresh instance snapshots from their source components, reapply mates
+    in dependency order, and return the resulting assembly status and bounds."""
+    return await _request({"type": "refresh_assembly", "params": {
+        "component_id": component_id}})
 
 
 @mcp.tool()

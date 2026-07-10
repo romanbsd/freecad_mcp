@@ -2171,6 +2171,10 @@ def _build_feature(doc, host, feat, id_map, profile_definitions=None):
             "feature_pattern", "array", "grid_array", "linear_pattern",
             "polar_pattern", "mirror_pattern", "path_pattern"):
         obj = _build_feature_pattern(doc, host, feat, id_map)
+    elif ftype == "component_instance":
+        obj = _build_component_instance(doc, host, feat, id_map)
+    elif ftype == "mate":
+        obj = _build_mate(doc, host, feat, id_map)
     elif ftype == "group":
         obj = doc.addObject("App::DocumentObjectGroup", feat["id"])
     else:
@@ -2508,6 +2512,365 @@ def _build_array(doc, host, feat, id_map):
     return _build_feature_pattern(doc, host, feat, id_map)
 
 
+def _placement_data(placement):
+    return {
+        "base": [placement.Base.x, placement.Base.y, placement.Base.z],
+        "rotation": list(placement.Rotation.Q),
+    }
+
+
+def _placement_from_data(data):
+    base = data.get("base", [0, 0, 0])
+    rotation = data.get("rotation", [0, 0, 0, 1])
+    return App.Placement(App.Vector(*base), App.Rotation(*rotation))
+
+
+def _instance_output_ids(meta, spec):
+    requested = spec.get("outputs")
+    if requested is None and spec.get("output") is not None:
+        requested = [spec["output"]]
+    if requested is None:
+        requested = list(meta.get("outputs") or [])
+    if not requested:
+        requested = [
+            feature["id"] for feature in meta.get("build_graph", [])
+            if feature.get("role", "output") == "output"
+        ]
+    if not requested:
+        raise ValueError("source component has no output features")
+    missing = [feature_id for feature_id in requested
+               if feature_id not in meta.get("id_map", {})]
+    if missing:
+        raise ValueError("unknown source output feature(s): %s" % ", ".join(missing))
+    return list(requested)
+
+
+def _component_state_signature(meta, host):
+    values = {
+        parameter["name"]: str(getattr(host, parameter["name"]))
+        for parameter in meta.get("schema", [])
+    }
+    payload = {"revision": int(meta.get("revision", 0)), "parameters": values}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+def _instance_overrides(meta, spec):
+    values = {}
+    variant = spec.get("variant")
+    if variant:
+        if variant not in meta.get("variants", {}):
+            raise ValueError("unknown source component variant %r" % variant)
+        values.update(meta["variants"][variant])
+    values.update(spec.get("parameters") or {})
+    types = {parameter["name"]: _prop_type(parameter) for parameter in meta["schema"]}
+    kinds = {parameter["name"]: parameter.get("kind", "input")
+             for parameter in meta["schema"]}
+    unknown = sorted(set(values) - set(types))
+    derived = sorted(name for name in values if kinds.get(name) == "derived")
+    if unknown:
+        raise ValueError("instance overrides unknown parameter(s): %s" % ", ".join(unknown))
+    if derived:
+        raise ValueError("instance overrides derived parameter(s): %s" % ", ".join(derived))
+    return values, types
+
+
+def _capture_instance_payload(component_id, spec, assembly_doc=None,
+                              override_host=None):
+    import Part
+    source_doc, container, meta = _resolve(component_id)
+    host = _host(source_doc, meta)
+    output_ids = _instance_output_ids(meta, spec)
+    values, types = _instance_overrides(meta, spec)
+    if override_host is not None:
+        for name, value in list(values.items()):
+            if isinstance(value, str) and _TOKEN.search(value):
+                evaluated = override_host.evalExpression(
+                    _translate(value, override_host.Name)
+                )
+                values[name] = str(evaluated)
+    transaction = False
+    if values and source_doc is assembly_doc:
+        raise ValueError(
+            "same-document component instances cannot use parameter overrides"
+        )
+    try:
+        if values:
+            _begin(source_doc, "component_instance_overrides")
+            transaction = True
+            for name, value in values.items():
+                _set_value(host, name, types[name], value)
+            source_doc.recompute()
+            affected = _dependents(meta, values.keys())
+            _refresh_declarative_features(source_doc, meta, affected, host)
+            _refresh_common_placements(source_doc, meta, affected, host)
+            _refresh_sketch_external_geometry(source_doc, meta, affected, host)
+            source_doc.recompute()
+            _refresh_mates(source_doc, meta, affected, host)
+            source_doc.recompute()
+        shapes = []
+        for feature_id in output_ids:
+            source = source_doc.getObject(meta["id_map"][feature_id])
+            if source is None or not hasattr(source, "Shape") or source.Shape.isNull():
+                raise ValueError("source output %r has no valid shape" % feature_id)
+            shapes.append(source.Shape.copy())
+        frames = {}
+        for feature in meta.get("build_graph", []):
+            if feature.get("type") != "datum_frame":
+                continue
+            frame = source_doc.getObject(meta["id_map"].get(feature["id"], ""))
+            if frame is not None:
+                frames[feature["id"]] = _placement_data(frame.Placement)
+        return {
+            "shape": Part.makeCompound(shapes), "frames": frames,
+            "outputs": output_ids, "revision": int(meta.get("revision", 0)),
+            "signature": _component_state_signature(meta, host),
+            "label": container.Label,
+        }
+    finally:
+        if transaction:
+            _abort(source_doc)
+            source_doc.recompute()
+
+
+def _refresh_component_instance(obj):
+    import Part
+    spec = json.loads(obj.InstanceSpec or "{}")
+    placement = obj.Placement
+    payload = _capture_instance_payload(
+        obj.SourceComponentId, spec, getattr(obj, "Document", None),
+        _profile_host(obj),
+    )
+    obj.Shape = payload["shape"] if not obj.Suppressed else Part.Shape()
+    obj.Placement = placement
+    obj.SourceFrames = json.dumps(payload["frames"])
+    obj.SourceOutputs = json.dumps(payload["outputs"])
+    obj.SourceRevision = payload["revision"]
+    obj.SourceSignature = payload["signature"]
+    obj.LastRefresh = "ok"
+    return payload
+
+
+class _ComponentInstanceProxy:
+    def dumps(self):
+        return None
+
+    def loads(self, state):
+        return None
+
+    __getstate__ = dumps
+    __setstate__ = loads
+
+    def execute(self, obj):
+        try:
+            _refresh_component_instance(obj)
+        except Exception as error:
+            obj.LastRefresh = str(error)
+            if obj.Shape.isNull():
+                raise
+
+
+def _build_component_instance(doc, host, feat, id_map):
+    component_id = feat.get("component_id") or feat.get("component")
+    if not component_id:
+        raise ValueError("component_instance requires component_id")
+    obj = doc.addObject("Part::FeaturePython", feat["id"])
+    obj.addProperty("App::PropertyString", "HostName", "Assembly")
+    obj.addProperty("App::PropertyString", "InstanceSpec", "Assembly")
+    obj.addProperty("App::PropertyString", "SourceComponentId", "Assembly")
+    obj.addProperty("App::PropertyString", "SourceOutputs", "Assembly")
+    obj.addProperty("App::PropertyString", "SourceFrames", "Assembly")
+    obj.addProperty("App::PropertyInteger", "SourceRevision", "Assembly")
+    obj.addProperty("App::PropertyString", "SourceSignature", "Assembly")
+    obj.addProperty("App::PropertyBool", "Suppressed", "Assembly")
+    obj.addProperty("App::PropertyString", "LastRefresh", "Assembly")
+    obj.HostName = host.Name
+    obj.InstanceSpec = json.dumps(feat)
+    obj.SourceComponentId = component_id
+    obj.Suppressed = bool(feat.get("suppressed", False))
+    obj.Proxy = _ComponentInstanceProxy()
+    obj.Proxy.execute(obj)
+    _apply_common_placement(obj, feat, host, id_map)
+    return obj
+
+
+def _mate_endpoint(value, frame=None):
+    if isinstance(value, str):
+        return {"instance": value, "frame": frame}
+    endpoint = dict(value or {})
+    if frame is not None and endpoint.get("frame") is None:
+        endpoint["frame"] = frame
+    return endpoint
+
+
+def _instance_local_frame(instance, frame_id):
+    if not frame_id:
+        return App.Placement()
+    frames = json.loads(instance.SourceFrames or "{}")
+    if frame_id not in frames:
+        raise ValueError(
+            "instance %r has no source datum frame %r" % (instance.Name, frame_id)
+        )
+    return _placement_from_data(frames[frame_id])
+
+
+def _endpoint_world_frame(endpoint, id_map, require_instance=False):
+    instance_id = endpoint.get("instance")
+    feature_id = endpoint.get("feature")
+    if instance_id:
+        if instance_id not in id_map:
+            raise ValueError("mate references unknown instance %r" % instance_id)
+        instance = id_map[instance_id]
+        if not hasattr(instance, "SourceFrames"):
+            raise ValueError("mate endpoint %r is not a component_instance" % instance_id)
+        local = _instance_local_frame(instance, endpoint.get("frame"))
+        return instance.Placement.multiply(local), instance, local
+    if require_instance:
+        raise ValueError("moving mate endpoint must be a component_instance")
+    if feature_id:
+        if feature_id not in id_map:
+            raise ValueError("mate references unknown feature %r" % feature_id)
+        target = id_map[feature_id]
+        return target.Placement, target, App.Placement()
+    raise ValueError("mate endpoint requires instance or feature")
+
+
+def _mate_desired_frame(target_frame, spec, host):
+    mode = str(spec.get("mode", "rigid")).lower()
+    if mode not in ("rigid", "coincident", "offset", "angle"):
+        raise ValueError("mate mode must be rigid, coincident, offset, or angle")
+    offsets = spec.get("offset") or spec.get("offsets") or {}
+    if isinstance(offsets, (list, tuple)):
+        offsets = dict(zip(("u", "v", "normal"), offsets))
+    local_offset = App.Vector(
+        _quantity_value(offsets.get("u", 0), host),
+        _quantity_value(offsets.get("v", 0), host),
+        _quantity_value(offsets.get("normal", 0), host),
+    )
+    angle = _quantity_value(spec.get("angle", 0), host)
+    rotation = App.Rotation(App.Vector(0, 0, 1), angle)
+    opposed = bool(spec.get("opposed", mode == "coincident"))
+    if opposed:
+        rotation = rotation.multiply(App.Rotation(App.Vector(1, 0, 0), 180))
+    return target_frame.multiply(App.Placement(local_offset, rotation))
+
+
+def _apply_mate(obj, spec, id_map, host):
+    moving_endpoint = _mate_endpoint(spec.get("moving"), spec.get("moving_frame"))
+    target_endpoint = _mate_endpoint(spec.get("target"), spec.get("target_frame"))
+    moving_world, moving, moving_local = _endpoint_world_frame(
+        moving_endpoint, id_map, require_instance=True
+    )
+    target_world, target, _ = _endpoint_world_frame(target_endpoint, id_map)
+    if moving is target:
+        raise ValueError("mate cannot constrain an instance to itself")
+    desired = _mate_desired_frame(target_world, spec, host)
+    moving.Placement = desired.multiply(moving_local.inverse())
+    actual = moving.Placement.multiply(moving_local)
+    error = desired.inverse().multiply(actual)
+    obj.Moving = moving
+    obj.Target = target
+    obj.DesiredPlacement = desired
+    obj.PositionError = error.Base.Length
+    obj.AngleError = math.degrees(abs(error.Rotation.Angle))
+    tolerance = _quantity_value(spec.get("tolerance", "0.001 mm"), host)
+    angle_tolerance = _quantity_value(spec.get("angle_tolerance", "0.001 deg"), host)
+    obj.Satisfied = obj.PositionError <= tolerance and obj.AngleError <= angle_tolerance
+    obj.Status = "satisfied" if obj.Satisfied else "unsatisfied"
+
+
+def _build_mate(doc, host, feat, id_map):
+    feat.setdefault("role", "construction")
+    mode = str(feat.get("mode", "rigid")).lower()
+    allowed_modes = ["rigid", "coincident", "offset", "angle"]
+    if mode not in allowed_modes:
+        raise ValueError(
+            "mate %r mode must be one of %s"
+            % (feat["id"], ", ".join(allowed_modes))
+        )
+    obj = doc.addObject("App::FeaturePython", feat["id"])
+    obj.addProperty("App::PropertyString", "HostName", "Assembly")
+    obj.addProperty("App::PropertyString", "MateSpec", "Assembly")
+    obj.addProperty("App::PropertyEnumeration", "Mode", "Assembly")
+    obj.addProperty("App::PropertyLink", "Moving", "Assembly")
+    obj.addProperty("App::PropertyLink", "Target", "Assembly")
+    obj.addProperty("App::PropertyPlacement", "DesiredPlacement", "Assembly")
+    obj.addProperty("App::PropertyLength", "PositionError", "Assembly")
+    obj.addProperty("App::PropertyAngle", "AngleError", "Assembly")
+    obj.addProperty("App::PropertyBool", "Satisfied", "Assembly")
+    obj.addProperty("App::PropertyString", "Status", "Assembly")
+    obj.HostName = host.Name
+    obj.MateSpec = json.dumps(feat)
+    obj.Mode = allowed_modes
+    obj.Mode = mode
+    _apply_mate(obj, feat, id_map, host)
+    if hasattr(obj, "ViewObject"):
+        obj.ViewObject.Visibility = False
+    return obj
+
+
+def _mate_instance_id(value):
+    if isinstance(value, str):
+        return value
+    return value.get("instance") if isinstance(value, dict) else None
+
+
+def _validate_assembly_graph(features, component_id=None):
+    by_id = {feature["id"]: feature for feature in features}
+    for feature in features:
+        if feature.get("type") == "component_instance":
+            source = feature.get("component_id") or feature.get("component")
+            if source and source == component_id:
+                raise ValueError("component cannot instantiate itself")
+
+    constrained = {}
+    targets = {}
+    for feature in features:
+        if feature.get("type") != "mate":
+            continue
+        mode = str(feature.get("mode", "rigid")).lower()
+        if mode not in ("rigid", "coincident", "offset", "angle"):
+            raise ValueError(
+                "mate %r mode must be rigid, coincident, offset, or angle"
+                % feature["id"]
+            )
+        moving = _mate_instance_id(feature.get("moving"))
+        target = _mate_instance_id(feature.get("target"))
+        if not moving or moving not in by_id or \
+                by_id[moving].get("type") != "component_instance":
+            raise ValueError("mate moving endpoint must name a component_instance")
+        if moving in constrained:
+            raise ValueError(
+                "instance %r is over-constrained by mates %r and %r" %
+                (moving, constrained[moving], feature["id"])
+            )
+        constrained[moving] = feature["id"]
+        if target:
+            if target not in by_id or by_id[target].get("type") != "component_instance":
+                raise ValueError("mate target instance %r is invalid" % target)
+            if target == moving:
+                raise ValueError("mate cannot constrain an instance to itself")
+            targets[moving] = target
+
+    for start in targets:
+        seen = set()
+        current = start
+        while current in targets:
+            if current in seen:
+                raise ValueError("assembly mate dependency cycle at %r" % current)
+            seen.add(current)
+            current = targets[current]
+
+
+def _apply_graph_mates(features, id_map, host):
+    applied = []
+    for feature in features:
+        if feature.get("type") != "mate":
+            continue
+        _apply_mate(id_map[feature["id"]], feature, id_map, host)
+        applied.append(feature["id"])
+    return applied
+
+
 # --------------------------------------------------------------------------- #
 # operations
 # --------------------------------------------------------------------------- #
@@ -2595,6 +2958,11 @@ def op_define_component(component_id, features, rules=None, profiles=None,
 
         from patterns import expand_patterns
         features = expand_patterns(features)
+        features = [
+            _expand_geometry_references(dict(feature), reference_map)
+            for feature in features
+        ]
+        _validate_assembly_graph(features, component_id)
         known_features = {feature["id"] for feature in features}
         for reference in reference_map.values():
             if reference["feature"] not in known_features:
@@ -2605,7 +2973,6 @@ def op_define_component(component_id, features, rules=None, profiles=None,
         id_map = {}
         graph = []
         for feat in features:
-            feat = _expand_geometry_references(dict(feat), reference_map)
             obj = _build_feature(doc, host, feat, id_map, definition_map)
             id_map[feat["id"]] = obj
             grp = _group(doc, meta, _ROLE_GROUP.get(feat.get("role", "output"), "Features"))
@@ -2625,6 +2992,8 @@ def op_define_component(component_id, features, rules=None, profiles=None,
                         grp.removeObject(o)
 
         name_map = {fid: o.Name for fid, o in id_map.items()}
+        doc.recompute()
+        _apply_graph_mates(graph, id_map, host)
         doc.recompute()
         errs = _errors(_component_objects(doc, meta, id_map.values()))
         if errs:
@@ -2781,6 +3150,80 @@ def op_get_sketch_status(component_id, feature_id):
     }
 
 
+def op_get_assembly_status(component_id):
+    doc, container, meta = _resolve(component_id)
+    instances, mates = [], []
+    for feature in meta.get("build_graph", []):
+        obj = doc.getObject(meta.get("id_map", {}).get(feature["id"], ""))
+        if obj is None:
+            continue
+        if feature.get("type") == "component_instance":
+            instances.append({
+                "id": feature["id"], "object": obj.Name,
+                "source_component_id": obj.SourceComponentId,
+                "source_outputs": json.loads(obj.SourceOutputs or "[]"),
+                "source_revision": int(obj.SourceRevision),
+                "source_signature": obj.SourceSignature,
+                "variant": feature.get("variant"),
+                "parameters": dict(feature.get("parameters") or {}),
+                "suppressed": bool(obj.Suppressed),
+                "last_refresh": obj.LastRefresh,
+                "placement": _placement_data(obj.Placement),
+            })
+        elif feature.get("type") == "mate":
+            mates.append({
+                "id": feature["id"], "object": obj.Name,
+                "mode": str(obj.Mode), "moving": obj.Moving.Name,
+                "target": obj.Target.Name, "satisfied": bool(obj.Satisfied),
+                "status": obj.Status,
+                "position_error": float(obj.PositionError.Value),
+                "angle_error": float(obj.AngleError.Value),
+            })
+    return {
+        "component_id": component_id, "instances": instances, "mates": mates,
+        "satisfied": all(mate["satisfied"] for mate in mates),
+    }
+
+
+def op_refresh_assembly(component_id):
+    doc, container, meta = _resolve(component_id)
+    host = _host(doc, meta)
+    ids = [feature["id"] for feature in meta.get("build_graph", [])]
+    _begin(doc, "refresh_assembly")
+    try:
+        refreshed_instances = []
+        id_map = {
+            feature_id: doc.getObject(name)
+            for feature_id, name in meta.get("id_map", {}).items()
+        }
+        for feature in meta.get("build_graph", []):
+            if feature.get("type") != "component_instance":
+                continue
+            instance = id_map[feature["id"]]
+            _refresh_component_instance(instance)
+            refreshed_instances.append(feature["id"])
+        _refresh_common_placements(doc, meta, ids, host)
+        doc.recompute()
+        refreshed_mates = _refresh_mates(doc, meta, ids, host)
+        doc.recompute()
+        errors = _errors(_component_objects(doc, meta))
+        if errors:
+            raise ValueError(
+                "assembly refresh failed; invalid features: %s" % ", ".join(errors)
+            )
+        doc.commitTransaction()
+    except Exception:
+        _abort(doc)
+        raise
+    status = op_get_assembly_status(component_id)
+    status.update({
+        "refreshed_instances": refreshed_instances,
+        "refreshed_mates": refreshed_mates,
+        "bbox": _merge_bbox(_feature_solids(doc, meta)),
+    })
+    return status
+
+
 def op_patch_component(component_id, operations, expected_revision=None,
                        validate=False, dry_run=False):
     doc, container, meta = _resolve(component_id)
@@ -2796,6 +3239,7 @@ def op_patch_component(component_id, operations, expected_revision=None,
         _expand_geometry_references(feature, references)
         for feature in patch["graph"]
     ]
+    _validate_assembly_graph(patch["graph"], component_id)
     known_features = {feature["id"] for feature in patch["graph"]}
     for reference in references.values():
         if reference["feature"] not in known_features:
@@ -2846,6 +3290,7 @@ def op_list_feature_types():
             "profile_2d", "sketch_2d", "profile_extrude", "pad", "pocket", "extrude_cut",
             "revolve", "sweep", "loft",
             "hole", "shell", "draft", "rib", "face_offset", "replace_face",
+            "component_instance", "mate",
             "fillet", "chamfer", "group", "pattern",
         ]
     }
@@ -2959,6 +3404,32 @@ FEATURE_SCHEMAS = {
     "mirror_pattern": {"alias_of": "feature_pattern", "required": ["id", "base"]},
     "path_pattern": {"alias_of": "feature_pattern", "required": ["id", "base"],
                      "one_of": ["path", "path_points"]},
+    "component_instance": {
+        "required": ["id", "component_id"],
+        "properties": {
+            "component_id": {"description": "source component:// id"},
+            "output": {"description": "one source output feature id"},
+            "outputs": {"items": {"type": "string"}},
+            "variant": {"description": "named source component variant"},
+            "parameters": {"description": "per-instance source parameter overrides"},
+            "suppressed": {"type": "boolean", "default": False},
+        },
+    },
+    "mate": {
+        "required": ["id", "moving", "target"],
+        "properties": {
+            "mode": {"enum": ["rigid", "coincident", "offset", "angle"]},
+            "moving": {"description": "instance endpoint with optional source frame"},
+            "target": {"description": "instance endpoint or local feature endpoint"},
+            "moving_frame": {"type": "string"},
+            "target_frame": {"type": "string"},
+            "offset": {"properties": {"u": {}, "v": {}, "normal": {}}},
+            "angle": {},
+            "opposed": {"type": "boolean", "default": "true for coincident"},
+            "tolerance": {"default": "0.001 mm"},
+            "angle_tolerance": {"default": "0.001 deg"},
+        },
+    },
     "profile_extrude": {
         "alias_of": "pad", "deprecated": True,
         "required": ["id", "length"],
@@ -3134,7 +3605,7 @@ def op_capabilities():
     from patterns import list_patterns
     import FreeCAD
     return {
-        "api_version": "2.5",
+        "api_version": "2.6",
         "freecad_version": ".".join(FreeCAD.Version()[:3]),
         "feature_types": op_list_feature_types()["feature_types"],
         "patterns": list_patterns(),
@@ -3155,6 +3626,9 @@ def op_capabilities():
             "array", "grid_array", "linear_pattern", "polar_pattern",
             "mirror_pattern", "path_pattern",
         ],
+        "assembly_instances": True,
+        "mate_modes": ["rigid", "coincident", "offset", "angle"],
+        "assembly_solver": "deterministic_single_mate",
         "sketch_constraints": [
             "coincident", "horizontal", "vertical", "parallel", "perpendicular",
             "equal", "concentric", "tangent", "point_on_object", "symmetric",
@@ -3197,6 +3671,13 @@ def _feature_inputs(feat):
         ids.append(replacement)
     elif isinstance(replacement, dict) and isinstance(replacement.get("feature"), str):
         ids.append(replacement["feature"])
+    if feat.get("type") == "mate":
+        moving = _mate_endpoint(feat.get("moving"), feat.get("moving_frame"))
+        target = _mate_endpoint(feat.get("target"), feat.get("target_frame"))
+        for endpoint in (moving, target):
+            reference = endpoint.get("instance") or endpoint.get("feature")
+            if reference:
+                ids.append(reference)
     support_id = _support_feature_id(feat.get("support"))
     if support_id:
         ids.append(support_id)
@@ -3324,6 +3805,8 @@ def _rebuild_graph_patch(doc, container, meta, new_graph, impacted):
                     if obj in group.Group:
                         group.removeObject(obj)
 
+        doc.recompute()
+        _apply_graph_mates(new_graph, id_map, host)
         doc.recompute()
         errors = _errors(_component_objects(doc, meta, id_map.values()))
         if errors:
@@ -3462,6 +3945,8 @@ def _refresh_declarative_features(doc, meta, feature_ids, host):
         feature_type = feature.get("type")
         if feature_type == "datum_frame" and getattr(obj, "Proxy", None) is not None:
             obj.Proxy.execute(obj)
+        elif feature_type == "component_instance":
+            _refresh_component_instance(obj)
         elif feature_type == "draft":
             _configure_native_draft(obj.McpBody, feature, host)
             doc.recompute()
@@ -3472,6 +3957,22 @@ def _refresh_declarative_features(doc, meta, feature_ids, host):
         else:
             continue
         refreshed.append(feature["id"])
+    return refreshed
+
+
+def _refresh_mates(doc, meta, feature_ids, host):
+    id_map = {
+        feature_id: doc.getObject(name)
+        for feature_id, name in meta.get("id_map", {}).items()
+    }
+    refreshed = []
+    for feature in meta.get("build_graph", []):
+        if feature["id"] not in feature_ids or feature.get("type") != "mate":
+            continue
+        obj = id_map.get(feature["id"])
+        if obj is not None:
+            _apply_mate(obj, feature, id_map, host)
+            refreshed.append(feature["id"])
     return refreshed
 
 
@@ -3591,6 +4092,8 @@ def op_set_component_parameters(component_id, values, rebuild=True, validate=Fal
                 doc, meta, affected, host
             )
             _refresh_common_placements(doc, meta, affected, host)
+            doc.recompute()
+            _refresh_mates(doc, meta, affected, host)
             doc.recompute()
             id_map = {
                 feature_id: doc.getObject(name)

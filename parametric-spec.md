@@ -243,6 +243,58 @@ deprecated compatibility aliases; `linear_pattern`, `polar_pattern`,
 `mirror_pattern`, and `path_pattern` are concise mode aliases. The separate
 `pattern` feature still expands reusable domain macros such as LEGO patterns.
 
+### Component instances and mates
+
+`component_instance` places one or more outputs from an existing component into
+an assembly graph. Instances are persistent shape snapshots rather than
+`App::Link` objects, so they work with unsaved source documents and remain
+self-contained when the assembly is reopened.
+
+```json
+{
+  "id": "left_bracket",
+  "type": "component_instance",
+  "component_id": "component://BracketParts/WallBracket",
+  "output": "body",
+  "variant": "heavy_duty",
+  "parameters": {"depth": "$bracket_depth"},
+  "position": {"x": "40 mm"}
+}
+```
+
+Use `output` or `outputs` to select source graph outputs. A named source
+`variant` and per-instance `parameters` are evaluated transactionally while the
+snapshot is captured; the source component is restored immediately. Overrides
+may reference assembly parameters. Same-document instances are supported, but
+same-document parameter overrides are rejected because FreeCAD cannot nest the
+required source transaction.
+
+`mate` deterministically places one moving instance frame onto a target instance
+frame or local assembly feature:
+
+```json
+{
+  "id": "attach_bracket",
+  "type": "mate",
+  "mode": "offset",
+  "moving": {"instance": "left_bracket", "frame": "wall_mount"},
+  "target": {"instance": "cabinet", "frame": "left_socket"},
+  "offset": {"u": "0 mm", "v": "0 mm", "normal": "$clearance"}
+}
+```
+
+Modes are `rigid`, `coincident`, `offset`, and `angle`. Coincident mates oppose
+frame normals by default; set `opposed=false` to preserve orientation. Offsets
+use target-frame `u`, `v`, and `normal` axes. `angle` rotates around the target
+normal. One mate may position each moving instance; duplicate constraints,
+self-mates, and dependency cycles are rejected instead of invoking a general
+constraint solver.
+
+`get_assembly_status` reports instance source revisions/signatures, placements,
+mate residuals, and satisfaction. `refresh_assembly` recaptures source outputs
+and datum frames, reapplies placements and mates in graph order, and returns the
+updated status and assembly bounds.
+
 Faces, edges, vertices, and solids use one selector shape:
 
 ```json

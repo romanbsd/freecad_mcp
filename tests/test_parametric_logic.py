@@ -238,7 +238,7 @@ def test_capabilities_advertise_named_references_and_sketches(parametric, monkey
     monkeypatch.setitem(sys.modules, "FreeCAD", fake_freecad)
     capabilities = parametric.op_capabilities()
 
-    assert capabilities["api_version"] == "2.5"
+    assert capabilities["api_version"] == "2.6"
     assert capabilities["named_geometry_references"] is True
     assert capabilities["dynamic_external_geometry"] is True
     assert capabilities["named_datum_frames"] is True
@@ -247,6 +247,10 @@ def test_capabilities_advertise_named_references_and_sketches(parametric, monkey
     ]
     assert capabilities["feature_pattern_modes"] == [
         "linear", "grid", "polar", "mirror", "path",
+    ]
+    assert capabilities["assembly_instances"] is True
+    assert capabilities["mate_modes"] == [
+        "rigid", "coincident", "offset", "angle",
     ]
     assert "radius" in capabilities["sketch_constraints"]
 
@@ -391,6 +395,50 @@ def test_unified_feature_pattern_schemas_mark_legacy_aliases(parametric):
         "feature_pattern", "linear_pattern", "polar_pattern",
         "mirror_pattern", "path_pattern",
     } <= set(parametric.op_list_feature_types()["feature_types"])
+
+
+def test_assembly_features_are_described_and_track_dependencies(parametric):
+    feature_types = set(parametric.op_list_feature_types()["feature_types"])
+    assert {"component_instance", "mate"} <= feature_types
+    instance_schema = parametric.op_describe_feature_type("component_instance")["schema"]
+    mate_schema = parametric.op_describe_feature_type("mate")["schema"]
+    assert instance_schema["required"] == ["id", "component_id"]
+    assert mate_schema["properties"]["mode"]["enum"] == [
+        "rigid", "coincident", "offset", "angle",
+    ]
+    assert parametric._feature_inputs({
+        "id": "locate", "type": "mate",
+        "moving": {"instance": "moving", "frame": "mount"},
+        "target": {"feature": "assembly_origin"},
+    }) == ["moving", "assembly_origin"]
+
+
+def test_assembly_graph_rejects_overconstraints_and_cycles(parametric):
+    instances = [
+        {"id": "a", "type": "component_instance", "component_id": "component://D/A"},
+        {"id": "b", "type": "component_instance", "component_id": "component://D/B"},
+    ]
+    with pytest.raises(ValueError, match="over-constrained"):
+        parametric._validate_assembly_graph(instances + [
+            {"id": "m1", "type": "mate", "moving": "a", "target": "b"},
+            {"id": "m2", "type": "mate", "moving": "a", "target": "b"},
+        ])
+    with pytest.raises(ValueError, match="dependency cycle"):
+        parametric._validate_assembly_graph(instances + [
+            {"id": "m1", "type": "mate", "moving": "a", "target": "b"},
+            {"id": "m2", "type": "mate", "moving": "b", "target": "a"},
+        ])
+    with pytest.raises(ValueError, match="mode must be"):
+        parametric._validate_assembly_graph(instances + [
+            {"id": "m1", "type": "mate", "mode": "tangent",
+             "moving": "a", "target": "b"},
+        ])
+    with pytest.raises(ValueError, match="instantiate itself"):
+        parametric._validate_assembly_graph(
+            [{"id": "a", "type": "component_instance",
+              "component_id": "component://D/A"}],
+            "component://D/A",
+        )
 
 
 def test_manufacturing_nested_selectors_expand_named_references(parametric):
@@ -720,6 +768,7 @@ def test_profile_extrusion_proxy_serialization_is_stable(parametric):
         parametric._ManufacturingFeatureProxy,
         parametric._LinkedShapeProxy,
         parametric._FeaturePatternProxy,
+        parametric._ComponentInstanceProxy,
     ):
         proxy = proxy_type()
         assert proxy.__getstate__() is None

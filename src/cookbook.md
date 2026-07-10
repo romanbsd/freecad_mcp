@@ -152,6 +152,7 @@ Core feature types:
   `sweep`, `loft`, `fillet`, `chamfer`;
 - relationships: `transform`, `cut`, `union`, `intersection`;
 - repetition: `feature_pattern` plus linear/grid/polar/mirror/path aliases;
+- assembly: `component_instance`, `mate`;
 - organization: `group`;
 - reusable expansion: `pattern`.
 
@@ -252,6 +253,42 @@ The output is a compound unless `fuse=true`. Full polar patterns do not repeat
 the 360-degree endpoint. `array` and `grid_array` are deprecated aliases for
 linear and grid modes; the explicit `*_pattern` aliases select their named mode.
 The macro-expansion feature named `pattern` remains separate.
+
+### Assembly instances and mates
+
+Create reusable assembly parts with `component_instance`, then locate them by
+matching source datum frames:
+
+```json
+[
+  {
+    "id": "fixed", "type": "component_instance",
+    "component_id": "component://Parts/Bracket", "output": "body"
+  },
+  {
+    "id": "moving", "type": "component_instance",
+    "component_id": "component://Parts/Bracket", "output": "body",
+    "variant": "wide", "parameters": {"height": "$instance_height"}
+  },
+  {
+    "id": "locate", "type": "mate", "mode": "offset",
+    "moving": {"instance": "moving", "frame": "left_mount"},
+    "target": {"instance": "fixed", "frame": "right_mount"},
+    "offset": {"normal": "$gap"}
+  }
+]
+```
+
+- `rigid` aligns frame origins and axes.
+- `coincident` aligns origins and opposes normals unless `opposed=false`.
+- `offset` adds local target-frame `u`, `v`, and `normal` displacement.
+- `angle` rotates around the target-frame normal.
+
+Each moving instance may have one mate. Cycles and duplicate positional mates
+fail before geometry is changed. Instances snapshot source geometry and datum
+frames, so assemblies work before source documents are saved and survive FCStd
+reopen. Call `refresh_assembly` after changing a source component; use
+`get_assembly_status` to inspect source signatures and mate residuals.
 
 ### Named geometry references
 
