@@ -238,8 +238,10 @@ def test_capabilities_advertise_named_references_and_sketches(parametric, monkey
     monkeypatch.setitem(sys.modules, "FreeCAD", fake_freecad)
     capabilities = parametric.op_capabilities()
 
-    assert capabilities["api_version"] == "2.2"
+    assert capabilities["api_version"] == "2.3"
     assert capabilities["named_geometry_references"] is True
+    assert capabilities["dynamic_external_geometry"] is True
+    assert capabilities["named_datum_frames"] is True
     assert "radius" in capabilities["sketch_constraints"]
 
 
@@ -320,6 +322,87 @@ def test_named_selector_supplies_default_base_and_external_dependency(parametric
 
     assert fillet["base"] == "panel"
     assert parametric._feature_inputs(sketch) == ["panel"]
+
+
+def test_datum_frames_participate_in_graph_dependencies(parametric):
+    datum = {
+        "id": "offset", "type": "datum_frame", "base_frame": "root",
+        "support": {"feature": "panel"},
+    }
+    consumer = {
+        "id": "boss", "type": "cylinder",
+        "placement": {"frame_id": "offset"},
+    }
+
+    assert parametric._feature_inputs(datum) == ["root", "panel"]
+    assert parametric._feature_inputs(consumer) == ["offset"]
+    assert "datum_frame" in parametric.op_list_feature_types()["feature_types"]
+    assert parametric.op_describe_feature_type("datum_frame")["schema"]["properties"]["offsets"]
+
+
+def test_refresh_sketch_external_geometry_rebuilds_constraints(parametric, monkeypatch):
+    source = types.SimpleNamespace(Name="Panel")
+
+    class Sketch:
+        Name = "Guide"
+        GeometryMap = '{"line": 0, "edge": -3}'
+        ExternalMap = '{"edge": {"feature": "panel", "subelement": "Edge1"}}'
+        ExternalSpec = "[]"
+        ExternalGeometry = [object()]
+
+        def __init__(self):
+            self.constraints = [object(), object()]
+            self.added = []
+
+        @property
+        def ConstraintCount(self):
+            return len(self.constraints)
+
+        def delConstraint(self, index):
+            self.constraints.pop(index)
+
+        def delExternal(self, index):
+            self.ExternalGeometry.pop(index)
+
+        def addExternal(self, object_name, subelement):
+            self.ExternalGeometry.append((object_name, subelement))
+            self.added.append((object_name, subelement))
+
+    sketch = Sketch()
+    doc = types.SimpleNamespace(
+        getObject=lambda name: {"Panel": source, "Guide": sketch}.get(name)
+    )
+    meta = {
+        "id_map": {"panel": "Panel", "guide": "Guide"},
+        "build_graph": [{
+            "id": "guide", "type": "sketch_2d",
+            "external_geometry": [{"id": "edge", "feature": "panel"}],
+            "constraints": [{"id": "on_edge", "type": "point_on_object"}],
+        }],
+    }
+    monkeypatch.setattr(parametric, "_resolve_sketch_external_geometry", lambda *args: [{
+        "id": "edge", "feature": "panel", "object": source,
+        "subelement": "Edge4",
+    }])
+    captured = {}
+
+    def rebuild(_sketch, specs, geometry_map, host):
+        captured["geometry_map"] = dict(geometry_map)
+        _sketch.constraints.append(object())
+        return {"on_edge": 0}
+
+    monkeypatch.setattr(parametric, "_build_sketch_constraints", rebuild)
+    monkeypatch.setattr(parametric, "_check_sketch_solver", lambda *args: None)
+
+    remapped = parametric._refresh_sketch_external_geometry(
+        doc, meta, ["guide"], object()
+    )
+
+    assert remapped == ["guide"]
+    assert sketch.added == [("Panel", "Edge4")]
+    assert captured["geometry_map"] == {"line": 0, "edge": -3}
+    assert sketch.ConstraintMap == '{"on_edge": 0}'
+    assert '"Edge4"' in sketch.ExternalMap
 
 
 def test_get_sketch_status_returns_solver_and_named_maps(parametric, monkeypatch):

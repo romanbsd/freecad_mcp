@@ -147,7 +147,7 @@ graph intact.
 
 Core feature types:
 
-- primitives: `box`, `cylinder`, `tube`, `cone`, `prism`;
+- primitives and references: `box`, `cylinder`, `tube`, `cone`, `prism`, `datum_frame`;
 - profiles and generated solids: `profile_2d`, `sketch_2d`, `pad`, `pocket`, `revolve`,
   `sweep`, `loft`, `fillet`, `chamfer`;
 - relationships: `transform`, `cut`, `union`, `intersection`;
@@ -156,6 +156,31 @@ Core feature types:
 - reusable expansion: `pattern`.
 
 Use `list_feature_types` for the server's current list.
+
+### Reusable datum frames
+
+Use a `datum_frame` when several features share a working plane or local
+coordinate system:
+
+```json
+[
+  {
+    "id": "mount_frame", "type": "datum_frame",
+    "support": {"reference": "top_face"},
+    "offsets": {"normal": "$clearance"},
+    "rotation": {"axis": "normal", "angle": "30 deg"}
+  },
+  {
+    "id": "boss", "type": "cylinder", "radius": "3 mm",
+    "height": "8 mm", "frame_id": "mount_frame"
+  }
+]
+```
+
+Frames may derive from a principal plane, custom normal and x direction,
+three points, a planar face support, or another datum via `base_frame`.
+Use local `u`, `v`, and `normal` offsets. `frame_id` is accepted by primitives,
+sketches, and profile operations.
 
 ### Named geometry references
 
@@ -222,6 +247,9 @@ geometry that must update. `require_fully_constrained=true` rejects remaining
 degrees of freedom. Conflicting, redundant, and malformed constraints fail the
 transaction. `external_geometry` accepts named edge or vertex references and
 adds their IDs to the same geometry map used by constraints.
+Those selectors are resolved again after parameter changes. If the matched
+topological index changes, links and declarative constraints are rebuilt
+transactionally; `remapped_external_geometry` reports the affected sketches.
 Use `get_sketch_status(component_id, feature_id)` to inspect degrees of freedom,
 solver findings, and all named maps without raw Python.
 

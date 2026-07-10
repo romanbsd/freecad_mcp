@@ -39,6 +39,8 @@ def _normalize_common_feature(feat):
         placement["translation"] = normalized["translate"]
     if normalized.get("frame") is not None and "frame" not in placement:
         placement["frame"] = normalized["frame"]
+    if normalized.get("frame_id") is not None and "frame_id" not in placement:
+        placement["frame_id"] = normalized["frame_id"]
     if normalized.get("support") is not None and "support" not in placement:
         placement["support"] = normalized["support"]
     for key in ("reversed", "symmetric"):
@@ -48,6 +50,8 @@ def _normalize_common_feature(feat):
         normalized["placement"] = placement
         if placement.get("frame") is not None:
             normalized.setdefault("frame", placement["frame"])
+        if placement.get("frame_id") is not None:
+            normalized.setdefault("frame_id", placement["frame_id"])
         if placement.get("support") is not None:
             normalized.setdefault("support", placement["support"])
     return normalized
@@ -438,6 +442,64 @@ def _static_frame(frame_spec, host=None):
     return result
 
 
+def _frame_from_placement(placement):
+    rotation = placement.Rotation
+    return {
+        "origin": App.Vector(placement.Base),
+        "u": rotation.multVec(App.Vector(1, 0, 0)),
+        "v": rotation.multVec(App.Vector(0, 1, 0)),
+        "normal": rotation.multVec(App.Vector(0, 0, 1)),
+    }
+
+
+def _evaluated_vector(values, host=None):
+    if isinstance(values, dict):
+        values = [values.get(axis, 0) for axis in ("x", "y", "z")]
+    return App.Vector(*[_quantity_value(value, host) for value in values])
+
+
+def _datum_frame(feat, host, base_frame=None, support_obj=None, support_spec=None):
+    if base_frame is not None:
+        frame = dict(base_frame)
+    elif support_obj is not None:
+        frame = _support_frame(support_obj, support_spec or {}, host)
+    elif feat.get("x_point") is not None and feat.get("plane_point") is not None:
+        origin = _evaluated_vector(feat.get("origin", [0, 0, 0]), host)
+        u_axis = _unit(_evaluated_vector(feat["x_point"], host) - origin,
+                       "datum x_point equals origin")
+        plane_vector = _evaluated_vector(feat["plane_point"], host) - origin
+        normal = _unit(u_axis.cross(plane_vector),
+                       "datum points are collinear")
+        frame = {"origin": origin, "u": u_axis,
+                 "v": _unit(normal.cross(u_axis)), "normal": normal}
+    else:
+        frame = _static_frame({
+            key: feat[key] for key in ("plane", "origin", "normal", "x_direction")
+            if key in feat
+        }, host)
+
+    offsets = feat.get("offsets") or {}
+    frame["origin"] += frame["u"] * _quantity_value(offsets.get("u", 0), host)
+    frame["origin"] += frame["v"] * _quantity_value(offsets.get("v", 0), host)
+    frame["origin"] += frame["normal"] * _quantity_value(
+        offsets.get("normal", feat.get("offset", 0)), host
+    )
+    rotation = feat.get("rotation") or {}
+    if rotation:
+        axis_value = rotation.get("axis", "normal")
+        axes = {"u": frame["u"], "v": frame["v"], "normal": frame["normal"]}
+        if isinstance(axis_value, str):
+            if axis_value not in axes:
+                raise ValueError("datum rotation axis must be u, v, normal, or a vector")
+            axis = axes[axis_value]
+        else:
+            axis = _vector(axis_value)
+        rotate = App.Rotation(axis, _quantity_value(rotation.get("angle", 0), host))
+        for key in ("u", "v", "normal"):
+            frame[key] = rotate.multVec(frame[key])
+    return frame
+
+
 def _frame_rotation(frame):
     matrix = App.Matrix()
     matrix.A11, matrix.A21, matrix.A31 = frame["u"].x, frame["u"].y, frame["u"].z
@@ -484,6 +546,7 @@ def _apply_common_placement(obj, feat, host, id_map=None):
     translation = placement.get("translation") or placement.get("translate") or {}
     support = placement.get("support") or feat.get("support")
     frame_spec = placement.get("frame") or feat.get("frame")
+    frame_id = placement.get("frame_id") or feat.get("frame_id")
     frame_origin = {}
     support_id = _support_feature_id(support)
     if support_id:
@@ -497,6 +560,17 @@ def _apply_common_placement(obj, feat, host, id_map=None):
         }
         frame = _directional_frame(
             _support_frame(support_obj, support_spec, host), feat, host
+        )
+        obj.Placement.Rotation = _frame_rotation(frame)
+        frame_origin = {
+            "x": frame["origin"].x, "y": frame["origin"].y,
+            "z": frame["origin"].z,
+        }
+    elif frame_id:
+        if not id_map or frame_id not in id_map:
+            raise ValueError("unknown placement frame feature %r" % frame_id)
+        frame = _directional_frame(
+            _frame_from_placement(id_map[frame_id].Placement), feat, host
         )
         obj.Placement.Rotation = _frame_rotation(frame)
         frame_origin = {
@@ -690,12 +764,14 @@ def _resolve_loft_entries(entries, profile_definitions, id_map):
     return resolved, links
 
 
-def _make_profile_shape(spec, host=None, support_obj=None, support_spec=None):
+def _make_profile_shape(spec, host=None, support_obj=None, support_spec=None,
+                        frame_obj=None):
     import Part
     plane = spec.get("plane", "XY")
     frame = _support_frame(support_obj, support_spec or {}, host) \
         if support_obj is not None else \
-        (_static_frame(spec.get("frame"), host) if spec.get("frame") else None)
+        (_frame_from_placement(frame_obj.Placement) if frame_obj is not None else
+         (_static_frame(spec.get("frame"), host) if spec.get("frame") else None))
     if spec.get("points") is not None:
         return _polygon_face(spec, plane, host, frame)
     faces = []
@@ -765,6 +841,9 @@ def _operation_frame(obj, spec, host):
     if support is not None:
         support_spec = json.loads(getattr(obj, "SupportSpec", "{}") or "{}")
         return _support_frame(support, support_spec, host)
+    frame_obj = getattr(obj, "Frame", None)
+    if frame_obj is not None:
+        return _frame_from_placement(frame_obj.Placement)
     if spec.get("frame"):
         return _static_frame(spec["frame"], host)
     plane = spec.get("plane", "XY")
@@ -797,7 +876,9 @@ def _loft_wires(obj, host):
         if "link" in entry:
             wires.append(_shape_wire(links[int(entry["link"])].Shape))
         else:
-            face = _make_profile_shape(entry["spec"], host)
+            face = _make_profile_shape(
+                entry["spec"], host, frame_obj=getattr(obj, "Frame", None)
+            )
             if len(face.Wires) != 1:
                 raise ValueError("loft profiles with holes are not supported")
             wires.append(face.OuterWire)
@@ -813,6 +894,7 @@ def _add_profile_properties(obj, feat, host, operation="pad", id_map=None,
     obj.addProperty("App::PropertyString", "HostName", "Geometry")
     obj.addProperty("App::PropertyLink", "Profile", "Geometry")
     obj.addProperty("App::PropertyLink", "Support", "Geometry")
+    obj.addProperty("App::PropertyLink", "Frame", "Geometry")
     obj.addProperty("App::PropertyString", "SupportSpec", "Geometry")
     obj.addProperty("App::PropertyLength", "Length", "Geometry")
     obj.addProperty("App::PropertyEnumeration", "Axis", "Geometry")
@@ -833,25 +915,34 @@ def _add_profile_properties(obj, feat, host, operation="pad", id_map=None,
     profile_id = feat.get("profile")
     if profile_id:
         obj.Profile = id_map[profile_id]
+    frame_id = (feat.get("placement") or {}).get("frame_id") or feat.get("frame_id")
     support = feat.get("support")
-    support_id = _support_feature_id(support, default_support)
+    support_id = _support_feature_id(
+        support, None if frame_id else default_support
+    )
     if support_id:
         obj.Support = id_map[support_id]
         support_spec = dict(support) if isinstance(support, dict) else {"feature": support_id}
         support_spec.setdefault("feature", support_id)
         obj.SupportSpec = json.dumps(support_spec)
-    elif profile_id and hasattr(obj.Profile, "McpSupport") and obj.Profile.McpSupport:
+    elif not frame_id and profile_id and hasattr(obj.Profile, "McpSupport") \
+            and obj.Profile.McpSupport:
         obj.Support = obj.Profile.McpSupport
         obj.SupportSpec = obj.Profile.McpSupportSpec
-    elif profile_id and hasattr(obj.Profile, "Support") and obj.Profile.Support:
+    elif not frame_id and profile_id and hasattr(obj.Profile, "Support") \
+            and obj.Profile.Support:
         obj.Support = obj.Profile.Support
         obj.SupportSpec = obj.Profile.SupportSpec
     else:
         obj.SupportSpec = "{}"
+    if frame_id:
+        if frame_id not in id_map:
+            raise ValueError("unknown profile frame feature %r" % frame_id)
+        obj.Frame = id_map[frame_id]
     obj.Axis = ["x", "y", "z", "u", "v", "normal"]
     obj.Operation = ["face", "pad", "revolve", "sweep", "loft"]
     plane = spec.get("plane", feat.get("plane", "XY"))
-    default_axis = "u" if operation == "revolve" and support_id else \
+    default_axis = "u" if operation == "revolve" and (support_id or frame_id) else \
         ("x" if operation == "revolve" else _normal_axis_for_plane(plane))
     obj.Axis = (feat.get("axis") or default_axis).lower()
     obj.Operation = operation
@@ -909,7 +1000,9 @@ class _ProfileExtrusionProxy:
         if getattr(obj, "Profile", None):
             face = _profile_face_from_shape(obj.Profile.Shape)
         elif hasattr(obj, "ProfileSpec"):
-            face = _make_profile_shape(spec, host, support, support_spec)
+            face = _make_profile_shape(
+                spec, host, support, support_spec, getattr(obj, "Frame", None)
+            )
         else:
             face = _make_profile_shape({"points": json.loads(obj.ProfilePoints)}, None)
         if operation == "face":
@@ -935,6 +1028,8 @@ class _ProfileExtrusionProxy:
             return
         if support is not None:
             direction = _support_frame(support, support_spec, host)["normal"] * obj.Length.Value
+        elif getattr(obj, "Frame", None) is not None:
+            direction = _frame_from_placement(obj.Frame.Placement)["normal"] * obj.Length.Value
         else:
             direction = _profile_axis(obj.Axis, obj.Length.Value)
         if getattr(obj, "Reversed", False):
@@ -972,6 +1067,65 @@ class _EdgeTreatmentProxy:
             obj.Shape = obj.Base.Shape.makeFillet(obj.Size.Value, edges)
         else:
             obj.Shape = obj.Base.Shape.makeChamfer(obj.Size.Value, edges)
+
+
+class _DatumFrameProxy:
+    def dumps(self):
+        return None
+
+    def loads(self, state):
+        return None
+
+    __getstate__ = dumps
+    __setstate__ = loads
+
+    def execute(self, obj):
+        host = _profile_host(obj)
+        spec = json.loads(obj.FrameSpec or "{}")
+        base = getattr(obj, "BaseFrame", None)
+        support = getattr(obj, "Support", None)
+        support_spec = json.loads(obj.SupportSpec or "{}")
+        frame = _datum_frame(
+            spec, host,
+            base_frame=_frame_from_placement(base.Placement) if base else None,
+            support_obj=support,
+            support_spec=support_spec,
+        )
+        obj.Placement = App.Placement(frame["origin"], _frame_rotation(frame))
+
+
+def _build_datum_frame(doc, host, feat, id_map):
+    obj = doc.addObject("Part::FeaturePython", feat["id"])
+    obj.addProperty("App::PropertyString", "HostName", "Datum")
+    obj.addProperty("App::PropertyString", "FrameSpec", "Datum")
+    obj.addProperty("App::PropertyLink", "BaseFrame", "Datum")
+    obj.addProperty("App::PropertyLink", "Support", "Datum")
+    obj.addProperty("App::PropertyString", "SupportSpec", "Datum")
+    obj.HostName = host.Name
+    obj.FrameSpec = json.dumps(feat)
+    base_id = feat.get("base_frame") or feat.get("frame_id")
+    if base_id:
+        if base_id not in id_map:
+            raise ValueError("unknown datum base frame %r" % base_id)
+        obj.BaseFrame = id_map[base_id]
+    support = feat.get("support")
+    support_id = _support_feature_id(support)
+    if support_id:
+        if support_id not in id_map:
+            raise ValueError("unknown datum support feature %r" % support_id)
+        obj.Support = id_map[support_id]
+        if hasattr(obj.Support, "Shape") and obj.Support.Shape.isNull():
+            doc.recompute()
+        obj.SupportSpec = json.dumps(
+            dict(support) if isinstance(support, dict) else {"feature": support_id}
+        )
+    else:
+        obj.SupportSpec = "{}"
+    obj.Proxy = _DatumFrameProxy()
+    obj.Proxy.execute(obj)
+    if hasattr(obj, "ViewObject"):
+        obj.ViewObject.Visibility = False
+    return obj
 
 # spec parameter type -> FreeCAD property type
 TYPE_MAP = {
@@ -1295,20 +1449,15 @@ def _build_sketch_geometry(sketch, specs, host):
     return geometry_map
 
 
-def _build_sketch_external_geometry(sketch, specs, id_map, host, geometry_map):
-    external_count = 0
-    external_map = {}
+def _resolve_sketch_external_geometry(specs, id_map, host):
+    entries = []
     for spec in specs or []:
         feature_id = spec.get("feature")
         if feature_id not in id_map:
             raise ValueError("sketch external geometry targets unknown feature %r" % feature_id)
         obj = id_map[feature_id]
-        if hasattr(obj, "getParentGeoFeatureGroup"):
-            parent = obj.getParentGeoFeatureGroup()
-            sketch_parent = sketch.getParentGeoFeatureGroup() \
-                if hasattr(sketch, "getParentGeoFeatureGroup") else None
-            if parent is not None and sketch_parent is not parent:
-                parent.addObject(sketch)
+        if hasattr(obj, "Shape") and obj.Shape.isNull():
+            obj.Document.recompute()
         selector = spec.get("selector") or {}
         kind = (selector.get("kind") or "edge").lower().rstrip("s")
         if kind not in ("edge", "vertex"):
@@ -1320,15 +1469,33 @@ def _build_sketch_external_geometry(sketch, specs, id_map, host, geometry_map):
         base_id = spec.get("id") or spec.get("reference") or "external"
         for offset, index in enumerate(indices):
             geometry_id = base_id if len(indices) == 1 else "%s_%d" % (base_id, offset + 1)
-            if geometry_id in geometry_map:
-                raise ValueError("duplicate sketch geometry id %r" % geometry_id)
-            sketch.addExternal(obj.Name, kind.title() + str(index))
-            sketch_index = -3 - external_count
-            external_count += 1
-            geometry_map[geometry_id] = sketch_index
-            external_map[geometry_id] = {
-                "feature": feature_id, "subelement": kind.title() + str(index),
-            }
+            entries.append({
+                "id": geometry_id, "feature": feature_id, "object": obj,
+                "subelement": kind.title() + str(index),
+            })
+    return entries
+
+
+def _build_sketch_external_geometry(sketch, specs, id_map, host, geometry_map):
+    external_map = {}
+    entries = _resolve_sketch_external_geometry(specs, id_map, host)
+    for external_count, entry in enumerate(entries):
+        geometry_id = entry["id"]
+        obj = entry["object"]
+        if hasattr(obj, "getParentGeoFeatureGroup"):
+            parent = obj.getParentGeoFeatureGroup()
+            sketch_parent = sketch.getParentGeoFeatureGroup() \
+                if hasattr(sketch, "getParentGeoFeatureGroup") else None
+            if parent is not None and sketch_parent is not parent:
+                parent.addObject(sketch)
+        if geometry_id in geometry_map:
+            raise ValueError("duplicate sketch geometry id %r" % geometry_id)
+        sketch.addExternal(obj.Name, entry["subelement"])
+        sketch_index = -3 - external_count
+        geometry_map[geometry_id] = sketch_index
+        external_map[geometry_id] = {
+            "feature": entry["feature"], "subelement": entry["subelement"],
+        }
     return external_map
 
 
@@ -1404,38 +1571,19 @@ def _sketch_constraint(sketch, spec, geometry_map, host):
     return index
 
 
-def _build_sketch(doc, host, feat, id_map):
-    sketch = doc.addObject("Sketcher::SketchObject", feat["id"])
-    geometry_map = _build_sketch_geometry(sketch, feat.get("geometry"), host)
-    external_map = _build_sketch_external_geometry(
-        sketch, feat.get("external_geometry"), id_map, host, geometry_map
-    )
+def _build_sketch_constraints(sketch, specs, geometry_map, host):
     constraint_map = {}
-    for number, spec in enumerate(feat.get("constraints") or []):
+    for number, spec in enumerate(specs or []):
         constraint_id = spec.get("id") or "constraint_%d" % number
         if constraint_id in constraint_map:
             raise ValueError("duplicate sketch constraint id %r" % constraint_id)
         constraint_map[constraint_id] = _sketch_constraint(
             sketch, spec, geometry_map, host
         )
-    sketch.addProperty("App::PropertyString", "GeometryMap", "MCP")
-    sketch.addProperty("App::PropertyString", "ConstraintMap", "MCP")
-    sketch.addProperty("App::PropertyString", "ExternalMap", "MCP")
-    sketch.addProperty("App::PropertyString", "HostName", "MCP")
-    sketch.addProperty("App::PropertyLink", "McpSupport", "MCP")
-    sketch.addProperty("App::PropertyString", "McpSupportSpec", "MCP")
-    sketch.GeometryMap = json.dumps(geometry_map)
-    sketch.ConstraintMap = json.dumps(constraint_map)
-    sketch.ExternalMap = json.dumps(external_map)
-    sketch.HostName = host.Name
-    support = feat.get("support")
-    support_id = _support_feature_id(support)
-    if support_id:
-        sketch.McpSupport = id_map[support_id]
-        sketch.McpSupportSpec = json.dumps(support)
-    else:
-        sketch.McpSupportSpec = "{}"
-    _apply_common_placement(sketch, feat, host, id_map)
+    return constraint_map
+
+
+def _check_sketch_solver(sketch, feat):
     result = sketch.solve()
     conflicts = list(sketch.ConflictingConstraints)
     redundant = list(sketch.RedundantConstraints)
@@ -1448,6 +1596,38 @@ def _build_sketch(doc, host, feat, id_map):
     if feat.get("require_fully_constrained") and not sketch.FullyConstrained:
         raise ValueError("sketch %r is under-constrained (%d DoF)" %
                          (feat["id"], sketch.DoF))
+
+
+def _build_sketch(doc, host, feat, id_map):
+    sketch = doc.addObject("Sketcher::SketchObject", feat["id"])
+    geometry_map = _build_sketch_geometry(sketch, feat.get("geometry"), host)
+    external_map = _build_sketch_external_geometry(
+        sketch, feat.get("external_geometry"), id_map, host, geometry_map
+    )
+    constraint_map = _build_sketch_constraints(
+        sketch, feat.get("constraints"), geometry_map, host
+    )
+    sketch.addProperty("App::PropertyString", "GeometryMap", "MCP")
+    sketch.addProperty("App::PropertyString", "ConstraintMap", "MCP")
+    sketch.addProperty("App::PropertyString", "ExternalMap", "MCP")
+    sketch.addProperty("App::PropertyString", "ExternalSpec", "MCP")
+    sketch.addProperty("App::PropertyString", "HostName", "MCP")
+    sketch.addProperty("App::PropertyLink", "McpSupport", "MCP")
+    sketch.addProperty("App::PropertyString", "McpSupportSpec", "MCP")
+    sketch.GeometryMap = json.dumps(geometry_map)
+    sketch.ConstraintMap = json.dumps(constraint_map)
+    sketch.ExternalMap = json.dumps(external_map)
+    sketch.ExternalSpec = json.dumps(feat.get("external_geometry") or [])
+    sketch.HostName = host.Name
+    support = feat.get("support")
+    support_id = _support_feature_id(support)
+    if support_id:
+        sketch.McpSupport = id_map[support_id]
+        sketch.McpSupportSpec = json.dumps(support)
+    else:
+        sketch.McpSupportSpec = "{}"
+    _apply_common_placement(sketch, feat, host, id_map)
+    _check_sketch_solver(sketch, feat)
     return sketch
 
 
@@ -1455,9 +1635,11 @@ def _apply_profile_placement(obj, feat, host):
     placement_feat = dict(feat)
     placement = dict(placement_feat.get("placement") or {})
     placement.pop("frame", None)
+    placement.pop("frame_id", None)
     placement.pop("support", None)
     placement_feat["placement"] = placement
     placement_feat.pop("frame", None)
+    placement_feat.pop("frame_id", None)
     placement_feat.pop("support", None)
     _apply_common_placement(obj, placement_feat, host)
 
@@ -1519,6 +1701,9 @@ def _build_feature(doc, host, feat, id_map, profile_definitions=None):
         _bind(obj, "Width", size.get("y"), hn)
         _bind(obj, "Height", size.get("z"), hn)
         place(obj)
+    elif ftype == "datum_frame":
+        feat.setdefault("role", "construction")
+        obj = _build_datum_frame(doc, host, feat, id_map)
     elif ftype == "cylinder":
         obj = doc.addObject("Part::Cylinder", feat["id"])
         _bind(obj, "Radius", feat.get("radius"), hn)
@@ -1916,6 +2101,7 @@ def op_get_sketch_status(component_id, feature_id):
         "geometry_map": json.loads(sketch.GeometryMap or "{}"),
         "constraint_map": json.loads(sketch.ConstraintMap or "{}"),
         "external_map": json.loads(sketch.ExternalMap or "{}"),
+        "external_spec": json.loads(getattr(sketch, "ExternalSpec", "[]") or "[]"),
     }
 
 
@@ -1977,7 +2163,7 @@ def op_patch_component(component_id, operations, expected_revision=None,
 def op_list_feature_types():
     return {
         "feature_types": [
-            "box", "cylinder", "tube", "cone", "prism", "transform",
+            "box", "cylinder", "tube", "cone", "prism", "datum_frame", "transform",
             "cut", "union", "intersection", "array", "grid_array",
             "profile_2d", "sketch_2d", "profile_extrude", "pad", "pocket", "extrude_cut",
             "revolve", "sweep", "loft",
@@ -2013,6 +2199,7 @@ COMMON_FEATURE_PROPERTIES = {
     "tags": {"type": "array"},
     "placement": {"description": "translation, rotation, frame, and support"},
     "frame": {"description": "principal plane or origin/x_direction/normal frame"},
+    "frame_id": {"description": "earlier datum_frame feature id"},
     "support": {"description": "feature plus a shared face selector"},
     "reversed": {"type": "boolean", "default": False},
     "symmetric": {"type": "boolean", "default": False},
@@ -2027,6 +2214,24 @@ PROFILE_OPERATION_PROPERTIES = {
 }
 
 FEATURE_SCHEMAS = {
+    "datum_frame": {
+        "required": ["id"],
+        "properties": {
+            "plane": {"enum": ["XY", "XZ", "YZ"], "default": "XY"},
+            "origin": {"type": "vector3"},
+            "normal": {"type": "vector3"},
+            "x_direction": {"type": "vector3"},
+            "x_point": {"type": "vector3"},
+            "plane_point": {"type": "vector3"},
+            "base_frame": {"description": "earlier datum_frame feature id"},
+            "support": {"description": "planar face selector or named reference"},
+            "offsets": {"properties": {"u": {}, "v": {}, "normal": {}}},
+            "rotation": {"properties": {
+                "axis": {"one_of": ["u", "v", "normal", "vector3"]},
+                "angle": {},
+            }},
+        },
+    },
     "box": {"required": ["id", "size"], "properties": {
         "size": {"required": ["x", "y", "z"]}, "position": {"optional": True}}},
     "cylinder": {"required": ["id", "radius", "height"],
@@ -2153,7 +2358,7 @@ def op_capabilities():
     from patterns import list_patterns
     import FreeCAD
     return {
-        "api_version": "2.2",
+        "api_version": "2.3",
         "freecad_version": ".".join(FreeCAD.Version()[:3]),
         "feature_types": op_list_feature_types()["feature_types"],
         "patterns": list_patterns(),
@@ -2164,6 +2369,8 @@ def op_capabilities():
         "profile_definitions": True,
         "profile_operations": ["pad", "pocket", "revolve", "sweep", "loft"],
         "named_geometry_references": True,
+        "dynamic_external_geometry": True,
+        "named_datum_frames": True,
         "sketch_constraints": [
             "coincident", "horizontal", "vertical", "parallel", "perpendicular",
             "equal", "concentric", "tangent", "point_on_object", "symmetric",
@@ -2189,9 +2396,12 @@ def op_expand_pattern(feature):
 def _feature_inputs(feat):
     """Feature ids referenced by a graph node."""
     ids = []
-    for k in ("base", "tool", "profile", "path"):
+    for k in ("base", "tool", "profile", "path", "base_frame", "frame_id"):
         if isinstance(feat.get(k), str):
             ids.append(feat[k])
+    placement = feat.get("placement") or {}
+    if isinstance(placement.get("frame_id"), str):
+        ids.append(placement["frame_id"])
     for entry in feat.get("loft_profiles") or []:
         if isinstance(entry, dict) and isinstance(entry.get("profile"), str):
             ids.append(entry["profile"])
@@ -2201,6 +2411,9 @@ def _feature_inputs(feat):
     support_id = _support_feature_id(feat.get("support"))
     if support_id:
         ids.append(support_id)
+    placement_support_id = _support_feature_id(placement.get("support"))
+    if placement_support_id:
+        ids.append(placement_support_id)
     ids += list(feat.get("shapes") or [])
     return list(dict.fromkeys(ids))
 
@@ -2409,7 +2622,7 @@ def _dependents(meta, changed):
 def _refresh_common_placements(doc, meta, feature_ids, host):
     profile_types = {
         "profile_2d", "profile_extrude", "pad", "pocket", "extrude_cut",
-        "revolve", "sweep", "loft",
+        "revolve", "sweep", "loft", "datum_frame",
     }
     id_map = {
         feature_id: doc.getObject(name)
@@ -2419,8 +2632,9 @@ def _refresh_common_placements(doc, meta, feature_ids, host):
         if feature["id"] not in feature_ids or feature["type"] in profile_types:
             continue
         placement = feature.get("placement") or {}
-        if not (placement.get("frame") or placement.get("support") or
-                feature.get("frame") or feature.get("support")):
+        if not (placement.get("frame") or placement.get("frame_id") or
+                placement.get("support") or feature.get("frame") or
+                feature.get("frame_id") or feature.get("support")):
             continue
         obj = id_map.get(feature["id"])
         if obj is None:
@@ -2432,6 +2646,69 @@ def _refresh_common_placements(doc, meta, feature_ids, host):
             ) if target is not None]
         for target in targets:
             _apply_common_placement(target, feature, host, id_map)
+
+
+def _refresh_datum_frames(doc, meta, feature_ids):
+    refreshed = []
+    for feature in meta.get("build_graph", []):
+        if feature["id"] not in feature_ids or feature.get("type") != "datum_frame":
+            continue
+        obj = doc.getObject(meta.get("id_map", {}).get(feature["id"], ""))
+        if obj is None or getattr(obj, "Proxy", None) is None:
+            continue
+        obj.Proxy.execute(obj)
+        refreshed.append(feature["id"])
+    return refreshed
+
+
+def _refresh_sketch_external_geometry(doc, meta, feature_ids, host):
+    id_map = {
+        feature_id: doc.getObject(name)
+        for feature_id, name in meta.get("id_map", {}).items()
+    }
+    remapped = []
+    for feature in meta.get("build_graph", []):
+        if feature["id"] not in feature_ids or feature.get("type") != "sketch_2d":
+            continue
+        sketch = id_map.get(feature["id"])
+        if sketch is None or not feature.get("external_geometry"):
+            continue
+        entries = _resolve_sketch_external_geometry(
+            feature["external_geometry"], id_map, host
+        )
+        desired = {
+            entry["id"]: {
+                "feature": entry["feature"], "subelement": entry["subelement"],
+            }
+            for entry in entries
+        }
+        current = json.loads(getattr(sketch, "ExternalMap", "{}") or "{}")
+        if desired == current:
+            continue
+
+        while sketch.ConstraintCount:
+            sketch.delConstraint(sketch.ConstraintCount - 1)
+        for index in reversed(range(len(sketch.ExternalGeometry))):
+            sketch.delExternal(index)
+
+        geometry_map = {
+            name: index for name, index in
+            json.loads(sketch.GeometryMap or "{}").items() if index >= 0
+        }
+        external_map = _build_sketch_external_geometry(
+            sketch, feature["external_geometry"], id_map, host, geometry_map
+        )
+        constraint_map = _build_sketch_constraints(
+            sketch, feature.get("constraints"), geometry_map, host
+        )
+        sketch.GeometryMap = json.dumps(geometry_map)
+        sketch.ConstraintMap = json.dumps(constraint_map)
+        sketch.ExternalMap = json.dumps(external_map)
+        if hasattr(sketch, "ExternalSpec"):
+            sketch.ExternalSpec = json.dumps(feature["external_geometry"])
+        _check_sketch_solver(sketch, feature)
+        remapped.append(feature["id"])
+    return remapped
 
 
 def _as_number(v):
@@ -2478,6 +2755,7 @@ def op_set_component_parameters(component_id, values, rebuild=True, validate=Fal
         if violations:
             raise ValueError("parameter(s) out of bounds: %s" % "; ".join(violations))
 
+    remapped_external = []
     _begin(doc, "set_component_parameters")
     try:
         changed = []
@@ -2494,6 +2772,10 @@ def op_set_component_parameters(component_id, values, rebuild=True, validate=Fal
             # only for the response — it does not scope this rebuild.
             doc.recompute()
             affected = _dependents(meta, changed)
+            _refresh_datum_frames(doc, meta, affected)
+            remapped_external = _refresh_sketch_external_geometry(
+                doc, meta, affected, host
+            )
             _refresh_common_placements(doc, meta, affected, host)
             doc.recompute()
             id_map = {
@@ -2512,6 +2794,7 @@ def op_set_component_parameters(component_id, values, rebuild=True, validate=Fal
 
     result = {"changed": changed,
               "regenerated": _dependents(meta, changed),
+              "remapped_external_geometry": remapped_external,
               "bbox": _merge_bbox(_feature_solids(doc, meta))}
     if validate:
         result["validation"] = op_validate_component(component_id)

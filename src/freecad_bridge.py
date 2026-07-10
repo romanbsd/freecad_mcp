@@ -379,13 +379,13 @@ async def define_component(component_id: str, features: list,
                           geometry_references: list = None) -> Any:
     """Define (or replace) the component's build graph — a list of features.
     Feature types include primitives, booleans, arrays, reusable 2D profiles,
-    native constrained sketches, pad/pocket/revolve/sweep/loft operations,
-    edge treatments, and groups.
+    native constrained sketches, reusable datum frames,
+    pad/pocket/revolve/sweep/loft operations, edge treatments, and groups.
     Sizes/positions are expressions over $params
     (with units), e.g. "$width / 2", "$wall_thickness + 2 mm". Booleans/arrays
-    reference other features by id. Shared `placement`, `frame`, `support`,
-    `reversed`, `symmetric`, and selector fields use one schema across feature
-    types. Each feature may set `role`
+    reference other features by id. Shared `placement`, `frame`, `frame_id`,
+    `support`, `reversed`, `symmetric`, and selector fields use one schema
+    across feature types. Each feature may set `role`
     (output/construction/tool/inspection) and `tags`. Read
     freecad://guide/cookbook for examples and use describe_feature_type for
     machine-readable fields.
@@ -412,7 +412,8 @@ async def set_component_parameters(component_id: str, values: dict,
                                    enforce_bounds: bool = False) -> Any:
     """Update input parameters and rebuild only affected features (native
     incremental recompute). Returns changed params, regenerated feature ids,
-    optional validation, and the component bounding box. Derived params are
+    remapped sketch external geometry, optional validation, and the component
+    bounding box. Derived params are
     read-only and rejected.
 
     Declared min/max bounds are advisory by default (a value outside them is

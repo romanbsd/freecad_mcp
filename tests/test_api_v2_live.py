@@ -72,9 +72,9 @@ def test_v2_component_workflow():
     )
 
     feature_types = call("list_feature_types")["feature_types"]
-    assert {"tube", "grid_array", "pattern"}.issubset(feature_types)
+    assert {"tube", "grid_array", "pattern", "datum_frame"}.issubset(feature_types)
     capabilities = call("capabilities")
-    assert capabilities["api_version"] == "2.0"
+    assert capabilities["api_version"] == "2.3"
     assert capabilities["structural_patch_mode"] == "dependency_scoped"
     tube_schema = call("describe_feature_type", feature_type="tube")
     assert "outer_radius" in tube_schema["schema"]["required"]

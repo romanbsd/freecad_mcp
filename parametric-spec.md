@@ -139,8 +139,8 @@ Expressions use `$parameter_name`, arithmetic, and FreeCAD-compatible units.
 
 ### Common placement and selectors
 
-Every feature accepts the same common fields: `placement`, `frame`, `support`,
-`reversed`, and `symmetric`. `position` remains a compatibility spelling for
+Every feature accepts the same common fields: `placement`, `frame`, `frame_id`,
+`support`, `reversed`, and `symmetric`. `position` remains a compatibility spelling for
 `placement.translation`. A placement can contain `translation`, `rotation`, a
 named principal-plane `frame`, or a custom frame with `origin`,
 `x_direction`, and `normal`.
@@ -148,6 +148,28 @@ named principal-plane `frame`, or a custom frame with `origin`,
 profiles, primitives, and other shape features. `reversed` flips the local
 normal; `symmetric` centers axial features around the frame origin. Native
 feature placements are refreshed after parameter changes.
+
+### Datum frames
+
+`datum_frame` adds a reusable local coordinate system to the feature graph.
+Consumers reference an earlier datum with `frame_id`, so dependency-scoped
+rebuilds update downstream primitives, sketches, and profile operations.
+
+```json
+{
+  "id": "mount_frame",
+  "type": "datum_frame",
+  "support": {"reference": "panel_top"},
+  "offsets": {"u": "10 mm", "v": "5 mm", "normal": "$clearance"},
+  "rotation": {"axis": "normal", "angle": "$mount_angle"}
+}
+```
+
+A datum can start from `plane` plus `origin`, from `normal` and `x_direction`,
+from three points (`origin`, `x_point`, `plane_point`), from a planar-face
+`support`, or from an earlier `base_frame`. Offsets use the local `u`, `v`, and
+`normal` axes. Rotation accepts a local axis name or a vector. Datum objects
+are hidden construction features but remain inspectable in FreeCAD.
 
 Faces, edges, vertices, and solids use one selector shape:
 
@@ -244,6 +266,10 @@ geometry, constraint, and external-geometry maps.
 `external_geometry` accepts named edge or vertex references. The resulting
 external IDs can be used by constraints alongside local geometry IDs. Closed
 sketches can be passed directly to profile operations with `profile`.
+External selectors are re-evaluated after parameter changes. If a semantic
+edge or vertex moves to another topological index, links and declarative
+constraints are rebuilt in one transaction. `set_component_parameters`
+reports those sketches in `remapped_external_geometry`.
 
 ### Reusable profiles and profile operations
 
