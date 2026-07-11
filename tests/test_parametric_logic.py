@@ -166,6 +166,49 @@ def test_patch_component_rejects_stale_revision_without_building(parametric, mon
         )
 
 
+def test_preview_parameter_update_returns_structured_failure(parametric, monkeypatch):
+    monkeypatch.setattr(
+        parametric, "op_set_component_parameters",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("bad width")),
+    )
+    result = parametric.op_preview_parameter_update(
+        "component://Doc/Part", {"width": "bad"}
+    )
+    assert result["valid"] is False
+    assert result["committed"] is False
+    assert result["errors"][0]["code"] == "PREVIEW_FAILED"
+
+
+def test_explain_rebuild_reports_parameter_and_downstream_reasons(parametric,
+                                                                  monkeypatch):
+    graph = [
+        {"id": "body", "type": "box", "size": {"x": "$width"}},
+        {"id": "rounded", "type": "fillet", "base": "body", "radius": "1 mm"},
+    ]
+    meta = {
+        "revision": 2,
+        "schema": [{"name": "width", "kind": "input"}],
+        "build_graph": graph,
+        "outputs": ["rounded"],
+        "geometry_references": [],
+        "dependency_index": parametric._dependency_index(
+            [{"name": "width", "kind": "input"}], graph, {}
+        ),
+    }
+    monkeypatch.setattr(
+        parametric, "_resolve",
+        lambda component_id: (object(), object(), meta),
+    )
+    result = parametric.op_explain_rebuild(
+        "component://Doc/Part", parameters={"width": "20 mm"}
+    )
+    assert result["affected"] == ["body", "rounded"]
+    assert {reason["type"] for reason in result["reasons"]["rounded"]} == {
+        "upstream_feature",
+    }
+    assert result["outputs"] == ["rounded"]
+
+
 def test_structural_dependents_rebuild_only_changed_branch(parametric):
     graph = [
         {"id": "base", "type": "box"},
@@ -238,7 +281,7 @@ def test_capabilities_advertise_named_references_and_sketches(parametric, monkey
     monkeypatch.setitem(sys.modules, "FreeCAD", fake_freecad)
     capabilities = parametric.op_capabilities()
 
-    assert capabilities["api_version"] == "2.8"
+    assert capabilities["api_version"] == "2.9"
     assert capabilities["named_geometry_references"] is True
     assert capabilities["dynamic_external_geometry"] is True
     assert capabilities["named_datum_frames"] is True
@@ -258,6 +301,9 @@ def test_capabilities_advertise_named_references_and_sketches(parametric, monkey
         "revolute", "slider", "cylindrical", "planar",
     ]
     assert capabilities["assembly_dof_analysis"] is True
+    assert capabilities["transactional_previews"] == [
+        "parameter_update", "structural_patch",
+    ]
     assert "radius" in capabilities["sketch_constraints"]
 
 

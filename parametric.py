@@ -3273,7 +3273,8 @@ def op_create_component(document, name, label=None, parameters=None):
 
 
 def op_define_component(component_id, features, rules=None, profiles=None,
-                        profile_definitions=None, geometry_references=None):
+                        profile_definitions=None, geometry_references=None,
+                        preview=False, validate_preview=False):
     doc, container, meta = _resolve(component_id)
     host = _host(doc, meta)
     definition_list = profile_definitions if profile_definitions is not None else \
@@ -3363,15 +3364,25 @@ def op_define_component(component_id, features, rules=None, profiles=None,
             meta["rules"] = rules
         if profiles is not None:
             meta["profiles"] = profiles
-        _save(container, meta)
-        doc.commitTransaction()
+        preview_analysis = _component_analysis_snapshot(doc, meta, component_id) \
+            if preview else None
+        preview_validation = _evaluate_component_validation(
+            doc, meta, component_id, include_measurements=True
+        ) if preview and validate_preview else None
+        if preview:
+            _abort(doc)
+        else:
+            _save(container, meta)
+            doc.commitTransaction()
     except Exception:
         _abort(doc)
         raise
 
     return {"features_created": list(name_map.keys()), "object_names": name_map,
             "profiles_registered": list(definition_map.keys()),
-            "references_resolved": resolved_references}
+            "references_resolved": resolved_references,
+            "preview_analysis": preview_analysis,
+            "preview_validation": preview_validation}
 
 
 def _apply_graph_operations(graph, operations, outputs=None):
@@ -3498,8 +3509,7 @@ def op_get_sketch_status(component_id, feature_id):
     }
 
 
-def op_get_assembly_status(component_id):
-    doc, container, meta = _resolve(component_id)
+def _assembly_status_from_state(doc, meta, component_id):
     host = _host(doc, meta)
     graph = meta.get("build_graph", [])
     id_map = {
@@ -3556,6 +3566,11 @@ def op_get_assembly_status(component_id):
     }
 
 
+def op_get_assembly_status(component_id):
+    doc, container, meta = _resolve(component_id)
+    return _assembly_status_from_state(doc, meta, component_id)
+
+
 def op_refresh_assembly(component_id):
     doc, container, meta = _resolve(component_id)
     host = _host(doc, meta)
@@ -3602,6 +3617,7 @@ def op_patch_component(component_id, operations, expected_revision=None,
     if expected_revision is not None and int(expected_revision) != revision:
         raise ValueError("STALE_COMPONENT_REVISION: expected %s, current %s" %
                          (expected_revision, revision))
+    before = _component_analysis_snapshot(doc, meta, component_id)
     patch = _apply_graph_operations(
         meta.get("build_graph", []), operations, meta.get("outputs", [])
     )
@@ -3618,37 +3634,292 @@ def op_patch_component(component_id, operations, expected_revision=None,
                 "geometry reference %r targets missing feature %r" %
                 (reference["id"], reference["feature"])
             )
-    if dry_run:
-        return {
-            "dry_run": True, "revision": revision,
-            "added": patch["added"], "changed": patch["changed"],
-            "removed": patch["removed"], "outputs": patch["outputs"],
-        }
-
     impacted = _structural_dependents(
         meta.get("build_graph", []), patch["graph"],
         patch["added"] + patch["changed"] + patch["removed"],
     )
     new_meta = _rebuild_graph_patch(
-        doc, container, meta, patch["graph"], impacted
+        doc, container, meta, patch["graph"], impacted, preview=dry_run,
+        validate_preview=validate,
     )
     if new_meta is None:
-        op_define_component(component_id, patch["graph"])
-        doc, container, new_meta = _resolve(component_id)
+        defined = op_define_component(
+            component_id, patch["graph"], preview=dry_run,
+            validate_preview=validate,
+        )
+        if dry_run:
+            new_meta = copy.deepcopy(meta)
+            new_meta["build_graph"] = patch["graph"]
+            new_meta["_preview_analysis"] = defined["preview_analysis"]
+            new_meta["_preview_validation"] = defined["preview_validation"]
+        else:
+            doc, container, new_meta = _resolve(component_id)
     new_meta["outputs"] = patch["outputs"]
-    _save(container, new_meta)
+    if not dry_run:
+        _save(container, new_meta)
+    after = new_meta.pop("_preview_analysis", None) if dry_run else \
+        _component_analysis_snapshot(doc, new_meta, component_id)
+    preview_validation = new_meta.pop("_preview_validation", None) \
+        if dry_run else None
     result = {
-        "revision": int(new_meta.get("revision", revision + 1)),
+        "revision": revision if dry_run else
+        int(new_meta.get("revision", revision + 1)),
         "added": patch["added"], "changed": patch["changed"],
         "removed": patch["removed"],
         "regenerated": [
             f["id"] for f in patch["graph"] if f["id"] in impacted
         ],
         "outputs": patch["outputs"],
+        "dry_run": bool(dry_run), "committed": not dry_run,
+        "valid": not bool((after or {}).get("build_errors")),
+        "before": before, "after": after,
     }
     if validate:
-        result["validation"] = op_validate_component(component_id)
+        result["validation"] = preview_validation if dry_run else \
+            op_validate_component(component_id)
     return result
+
+
+def op_validate_patch(component_id, operations, expected_revision=None,
+                      validate=True):
+    try:
+        result = op_patch_component(
+            component_id, operations, expected_revision=expected_revision,
+            validate=validate, dry_run=True,
+        )
+        result["operation"] = "validate_patch"
+        result["errors"] = []
+        result["warnings"] = []
+        return result
+    except Exception as exc:
+        return {
+            "operation": "validate_patch", "component_id": component_id,
+            "dry_run": True, "committed": False, "valid": False,
+            "errors": [{"code": "PATCH_VALIDATION_FAILED",
+                        "message": str(exc)}],
+            "warnings": [],
+        }
+
+
+def op_explain_rebuild(component_id, parameters=None, feature_ids=None,
+                       operations=None):
+    doc, container, meta = _resolve(component_id)
+    graph = meta.get("build_graph", [])
+    parameter_names = list((parameters or {}).keys()) if isinstance(
+        parameters, dict) else list(parameters or [])
+    unknown_parameters = [name for name in parameter_names
+                          if name not in {p["name"] for p in meta["schema"]}]
+    if unknown_parameters:
+        raise ValueError("unknown parameter(s): %s" %
+                         ", ".join(unknown_parameters))
+    parameter_affected = _dependents(meta, parameter_names)
+    explicit = list(feature_ids or [])
+    known = {feature["id"] for feature in graph}
+    unknown_features = [feature_id for feature_id in explicit
+                        if feature_id not in known]
+    if unknown_features:
+        raise ValueError("unknown feature(s): %s" % ", ".join(unknown_features))
+
+    patch = None
+    structural_affected = []
+    candidate_graph = graph
+    if operations:
+        patch = _apply_graph_operations(
+            graph, operations, meta.get("outputs", [])
+        )
+        references = _geometry_reference_map(
+            meta.get("geometry_references", [])
+        )
+        candidate_graph = [
+            _expand_geometry_references(feature, references)
+            for feature in patch["graph"]
+        ]
+        seeds = patch["added"] + patch["changed"] + patch["removed"]
+        structural_affected = _structural_dependents(
+            graph, candidate_graph, seeds
+        )
+    if explicit:
+        structural_affected = list(dict.fromkeys(
+            structural_affected + _structural_dependents(
+                graph, graph, explicit
+            )
+        ))
+    affected_set = set(parameter_affected) | set(structural_affected)
+    affected = [feature["id"] for feature in candidate_graph
+                if feature["id"] in affected_set]
+    reasons = {}
+    for feature in candidate_graph:
+        feature_id = feature["id"]
+        if feature_id not in affected_set:
+            continue
+        feature_reasons = []
+        tokens = set(_TOKEN.findall(json.dumps(feature)))
+        for name in parameter_names:
+            if name in tokens:
+                feature_reasons.append({"type": "parameter", "id": name})
+        for source in _feature_inputs(feature):
+            if source in affected_set:
+                feature_reasons.append({"type": "upstream_feature", "id": source})
+        if feature_id in structural_affected:
+            feature_reasons.append({"type": "structural_change", "id": feature_id})
+        reasons[feature_id] = feature_reasons
+    references = [
+        reference["id"] for reference in _geometry_reference_map(
+            meta.get("geometry_references", [])).values()
+        if reference["feature"] in affected_set
+    ]
+    by_id = {feature["id"]: feature for feature in candidate_graph}
+    return {
+        "component_id": component_id,
+        "revision": int(meta.get("revision", 0)),
+        "parameters": parameter_names,
+        "parameter_affected": parameter_affected,
+        "structural_affected": structural_affected,
+        "affected": affected,
+        "reasons": reasons,
+        "geometry_references": references,
+        "sketches": [feature_id for feature_id in affected
+                     if by_id.get(feature_id, {}).get("type") == "sketch_2d"],
+        "mates": [feature_id for feature_id in affected
+                  if by_id.get(feature_id, {}).get("type") == "mate"],
+        "instances": [feature_id for feature_id in affected
+                      if by_id.get(feature_id, {}).get("type") ==
+                      "component_instance"],
+        "outputs": [feature_id for feature_id in meta.get("outputs", [])
+                    if feature_id in affected_set],
+        "patch": None if patch is None else {
+            key: patch[key] for key in
+            ("added", "changed", "removed", "outputs")
+        },
+    }
+
+
+def _shape_diagnostics(shape):
+    if shape is None:
+        return None
+    if shape.isNull():
+        return {"null": True, "valid": False, "solids": 0}
+    bounds = shape.BoundBox
+    return {
+        "null": False, "valid": bool(shape.isValid()),
+        "solids": len(shape.Solids), "volume": float(shape.Volume),
+        "area": float(shape.Area),
+        "bbox": {
+            "min": [bounds.XMin, bounds.YMin, bounds.ZMin],
+            "max": [bounds.XMax, bounds.YMax, bounds.ZMax],
+            "size": [bounds.XLength, bounds.YLength, bounds.ZLength],
+        },
+    }
+
+
+def op_get_feature_diagnostics(component_id, feature_id=None):
+    doc, container, meta = _resolve(component_id)
+    graph = meta.get("build_graph", [])
+    if feature_id is not None and feature_id not in {
+            feature["id"] for feature in graph}:
+        raise ValueError("unknown feature %r" % feature_id)
+    id_map = {
+        feature_key: doc.getObject(name)
+        for feature_key, name in meta.get("id_map", {}).items()
+    }
+    host = _host(doc, meta)
+    reference_map = _geometry_reference_map(
+        meta.get("geometry_references", [])
+    )
+    reference_results = {}
+    for reference in reference_map.values():
+        try:
+            reference_results[reference["id"]] = _resolve_geometry_reference(
+                reference, id_map, host, strict_tracking=False
+            )
+        except Exception as exc:
+            reference_results[reference["id"]] = {
+                "id": reference["id"], "error": str(exc),
+                "tracking": {"status": "error"},
+            }
+    assembly = op_get_assembly_status(component_id) if any(
+        feature.get("type") in ("component_instance", "mate")
+        for feature in graph
+    ) else None
+    assembly_instances = {
+        item["id"]: item for item in (assembly or {}).get("instances", [])
+    }
+    assembly_mates = {
+        item["id"]: item for item in (assembly or {}).get("mates", [])
+    }
+    diagnostics, errors, warnings = [], [], []
+    for feature in graph:
+        if feature_id is not None and feature["id"] != feature_id:
+            continue
+        obj = id_map.get(feature["id"])
+        item = {
+            "id": feature["id"], "type": feature["type"],
+            "object": obj.Name if obj is not None else None,
+            "state": list(getattr(obj, "State", [])) if obj is not None else [],
+            "inputs": _feature_inputs(feature),
+            "expressions": [[path, expression] for path, expression in
+                            list(getattr(obj, "ExpressionEngine", []))]
+            if obj is not None else [],
+        }
+        if obj is None:
+            item["severity"] = "error"
+            item["message"] = "generated object is missing"
+            errors.append({"feature": feature["id"], "code": "MISSING_OBJECT",
+                           "message": item["message"]})
+        else:
+            shape = getattr(obj, "Shape", None)
+            item["shape"] = _shape_diagnostics(shape)
+            invalid_state = any(state in ("Error", "Invalid")
+                                for state in item["state"])
+            invalid_shape = item["shape"] is not None and \
+                not item["shape"]["valid"]
+            item["severity"] = "error" if invalid_state or invalid_shape else "ok"
+            if item["severity"] == "error":
+                errors.append({"feature": feature["id"],
+                               "code": "INVALID_FEATURE",
+                               "message": "object or shape is invalid"})
+        item["geometry_references"] = [
+            reference_results[reference["id"]]
+            for reference in reference_map.values()
+            if reference["feature"] == feature["id"]
+        ]
+        for reference in item["geometry_references"]:
+            status = reference.get("tracking", {}).get("status")
+            if status in ("remapped", "ambiguous", "missing", "error"):
+                warnings.append({"feature": feature["id"],
+                                 "code": "REFERENCE_%s" % status.upper(),
+                                 "message": "geometry reference %s is %s" %
+                                 (reference["id"], status)})
+        if feature["type"] == "sketch_2d" and obj is not None:
+            item["sketch"] = {
+                "dof": int(obj.DoF),
+                "fully_constrained": bool(obj.FullyConstrained),
+                "conflicting": list(obj.ConflictingConstraints),
+                "redundant": list(obj.RedundantConstraints),
+                "malformed": list(obj.MalformedConstraints),
+            }
+            if not item["sketch"]["fully_constrained"]:
+                warnings.append({"feature": feature["id"],
+                                 "code": "SKETCH_UNDERCONSTRAINED",
+                                 "message": "sketch has %d DOF" % obj.DoF})
+        if feature["type"] == "component_instance":
+            item["assembly"] = assembly_instances.get(feature["id"])
+        elif feature["type"] == "mate":
+            item["assembly"] = assembly_mates.get(feature["id"])
+            if item["assembly"] and not item["assembly"]["satisfied"]:
+                warnings.append({"feature": feature["id"],
+                                 "code": "MATE_UNSATISFIED",
+                                 "message": "mate residual exceeds tolerance"})
+        diagnostics.append(item)
+    return {
+        "component_id": component_id, "feature_id": feature_id,
+        "status": "error" if errors else "warning" if warnings else "ok",
+        "summary": {"features": len(diagnostics), "errors": len(errors),
+                    "warnings": len(warnings)},
+        "errors": errors, "warnings": warnings,
+        "features": diagnostics,
+        "assembly": assembly,
+    }
 
 
 def op_list_feature_types():
@@ -3988,13 +4259,17 @@ def op_capabilities():
     from patterns import list_patterns
     import FreeCAD
     return {
-        "api_version": "2.8",
+        "api_version": "2.9",
         "freecad_version": ".".join(FreeCAD.Version()[:3]),
         "feature_types": op_list_feature_types()["feature_types"],
         "patterns": list_patterns(),
         "validation_profiles": ["geometry_baseline", "cnc_plywood", "fdm"],
         "response_format": "native",
         "structural_patch_mode": "dependency_scoped",
+        "transactional_previews": ["parameter_update", "structural_patch"],
+        "diagnostic_surfaces": [
+            "explain_rebuild", "feature_diagnostics", "before_after",
+        ],
         "selector_kinds": list(_SUBELEMENTS.keys()),
         "profile_definitions": True,
         "profile_operations": ["pad", "pocket", "revolve", "sweep", "loft"],
@@ -4138,8 +4413,10 @@ def _remove_generated_feature(doc, feature, obj):
             doc.removeObject(child.Name)
 
 
-def _rebuild_graph_patch(doc, container, meta, new_graph, impacted):
+def _rebuild_graph_patch(doc, container, meta, new_graph, impacted,
+                         preview=False, validate_preview=False):
     """Transactionally rebuild only structurally affected graph nodes."""
+    meta = copy.deepcopy(meta) if preview else meta
     old_graph = meta.get("build_graph", [])
     old_by_id = {feature["id"]: feature for feature in old_graph}
     new_by_id = {feature["id"]: feature for feature in new_graph}
@@ -4213,8 +4490,19 @@ def _rebuild_graph_patch(doc, container, meta, new_graph, impacted):
             _profile_definition_map(meta.get("profile_definitions", [])),
         )
         meta["revision"] = int(meta.get("revision", 0)) + 1
-        _save(container, meta)
-        doc.commitTransaction()
+        if preview:
+            meta["_preview_analysis"] = _component_analysis_snapshot(
+                doc, meta, container.mcp_component_id
+            )
+            if validate_preview:
+                meta["_preview_validation"] = _evaluate_component_validation(
+                    doc, meta, container.mcp_component_id,
+                    include_measurements=True,
+                )
+            _abort(doc)
+        else:
+            _save(container, meta)
+            doc.commitTransaction()
         return meta
     except Exception:
         _abort(doc)
@@ -4449,12 +4737,60 @@ def _bound_violations(schema, values):
     return bad
 
 
+def _parameter_snapshot(host, schema):
+    values = {}
+    for parameter in schema:
+        try:
+            values[parameter["name"]] = str(getattr(host, parameter["name"]))
+        except Exception:
+            values[parameter["name"]] = None
+    return values
+
+
+def _component_analysis_snapshot(doc, meta, component_id=None):
+    host = _host(doc, meta)
+    shapes = _feature_solids(doc, meta)
+    references = []
+    id_map = {
+        feature_id: doc.getObject(name)
+        for feature_id, name in meta.get("id_map", {}).items()
+    }
+    for reference in _geometry_reference_map(
+            meta.get("geometry_references", [])).values():
+        try:
+            references.append(_resolve_geometry_reference(
+                reference, id_map, host, strict_tracking=False
+            ))
+        except Exception as exc:
+            references.append({
+                "id": reference["id"], "feature": reference["feature"],
+                "tracking": {"status": "error"}, "error": str(exc),
+            })
+    snapshot = {
+        "parameters": _parameter_snapshot(host, meta.get("schema", [])),
+        "bbox": _merge_bbox(shapes),
+        "volume": sum(float(obj.Shape.Volume) for obj in shapes),
+        "area": sum(float(obj.Shape.Area) for obj in shapes),
+        "measurements": _measurements(doc, meta),
+        "build_errors": _errors(_component_objects(doc, meta)),
+        "geometry_references": references,
+    }
+    if component_id and any(
+            feature.get("type") in ("component_instance", "mate")
+            for feature in meta.get("build_graph", [])):
+        snapshot["assembly"] = _assembly_status_from_state(
+            doc, meta, component_id
+        )
+    return snapshot
+
+
 def op_set_component_parameters(component_id, values, rebuild=True, validate=False,
-                                enforce_bounds=False):
+                                enforce_bounds=False, dry_run=False):
     doc, container, meta = _resolve(component_id)
     host = _host(doc, meta)
     kinds = {p["name"]: p.get("kind", "input") for p in meta["schema"]}
     types = {p["name"]: _prop_type(p) for p in meta["schema"]}
+    before = _component_analysis_snapshot(doc, meta, component_id)
 
     if enforce_bounds:
         violations = _bound_violations(meta["schema"], values)
@@ -4516,7 +4852,12 @@ def op_set_component_parameters(component_id, values, rebuild=True, validate=Fal
             if errs:
                 # Transactional: keep the last valid geometry on a bad rebuild.
                 raise ValueError("rebuild failed; invalid features: %s" % ", ".join(errs))
-        doc.commitTransaction()
+        after = _component_analysis_snapshot(doc, meta, component_id)
+        validation = op_validate_component(component_id) if validate else None
+        if dry_run:
+            _abort(doc)
+        else:
+            doc.commitTransaction()
     except Exception:
         _abort(doc)
         raise
@@ -4525,10 +4866,36 @@ def op_set_component_parameters(component_id, values, rebuild=True, validate=Fal
               "regenerated": _dependents(meta, changed),
               "remapped_external_geometry": remapped_external,
               "geometry_references": resolved_references,
-              "bbox": _merge_bbox(_feature_solids(doc, meta))}
-    if validate:
-        result["validation"] = op_validate_component(component_id)
+              "bbox": after["bbox"],
+              "before": before, "after": after,
+              "dry_run": bool(dry_run), "committed": not dry_run,
+              "valid": not after["build_errors"]}
+    if validation is not None:
+        result["validation"] = validation
     return result
+
+
+def op_preview_parameter_update(component_id, values, rebuild=True, validate=True,
+                                enforce_bounds=False):
+    try:
+        result = op_set_component_parameters(
+            component_id, values, rebuild=rebuild, validate=validate,
+            enforce_bounds=enforce_bounds, dry_run=True,
+        )
+        result["operation"] = "preview_parameter_update"
+        result["errors"] = []
+        result["warnings"] = [
+            finding for finding in result.get("validation", {}).get("findings", [])
+            if finding.get("severity") == "warning"
+        ]
+        return result
+    except Exception as exc:
+        return {
+            "operation": "preview_parameter_update", "component_id": component_id,
+            "dry_run": True, "committed": False, "valid": False,
+            "errors": [{"code": "PREVIEW_FAILED", "message": str(exc)}],
+            "warnings": [],
+        }
 
 
 def op_get_component(component_id):
@@ -4620,12 +4987,10 @@ def _measurements(doc, meta):
     return out
 
 
-def op_validate_component(component_id, profiles=None, rule_ids=None,
-                          include_measurements=False, tolerance=None):
-    """Run baseline/profile rules + custom component rules over the recomputed
-    component (design_rules.py). Read-only; returns the rich result schema."""
+def _evaluate_component_validation(doc, meta, component_id, profiles=None,
+                                   rule_ids=None, include_measurements=False,
+                                   tolerance=None):
     import design_rules as DR
-    doc, container, meta = _resolve(component_id)
     tol = tolerance or meta.get("tolerance") or "0.01 mm"
     ctx = _build_context(doc, meta, tol)
 
@@ -4666,6 +5031,18 @@ def op_validate_component(component_id, profiles=None, rule_ids=None,
               "findings": findings}
     if include_measurements:
         result["measurements"] = _measurements(doc, meta)
+    return result
+
+
+def op_validate_component(component_id, profiles=None, rule_ids=None,
+                          include_measurements=False, tolerance=None):
+    """Run baseline/profile rules + custom component rules over the recomputed
+    component (design_rules.py). Read-only; returns the rich result schema."""
+    doc, container, meta = _resolve(component_id)
+    result = _evaluate_component_validation(
+        doc, meta, component_id, profiles=profiles, rule_ids=rule_ids,
+        include_measurements=include_measurements, tolerance=tolerance,
+    )
     meta["validation"] = result
     _save(container, meta)
     return result

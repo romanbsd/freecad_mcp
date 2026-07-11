@@ -497,6 +497,30 @@ Applies incremental parameter updates and rebuilds only affected features.
 
 Returns changed parameters, regenerated features, validation result, and bounding box.
 
+### Transactional preview and diagnostics
+
+`preview_parameter_update` runs the same parameter assignment, dependency
+refresh, topology remapping, assembly solve, recompute, and optional design-rule
+validation as `set_component_parameters`, then aborts the FreeCAD transaction.
+Its result includes `before` and `after` parameter values, bounds, volume, area,
+per-feature measurements, reference status, assembly status, warnings, and
+fatal errors. `committed` is always false.
+
+`validate_patch` applies graph operations through the real dependency-scoped
+builder, validates resulting shapes and design rules, captures the same
+before/after analysis, and aborts. Transform edits that require the full builder
+are also previewed transactionally. Neither document revision nor stored
+validation state changes.
+
+`explain_rebuild` is read-only and does not recompute. Given parameter names,
+feature IDs, or patch operations, it reports affected features in graph order,
+upstream reasons, topology references, sketches, instances, mates, and outputs.
+
+`get_feature_diagnostics` returns normalized diagnostics for one feature or the
+whole graph: FreeCAD object state, shape validity and measurements, expression
+bindings, topology-reference health, sketch constraints, instance DOF, and mate
+residuals. Findings use machine-readable `errors` and `warnings` arrays.
+
 ### `get_component`
 
 Returns the component schema, current parameter values, dependency graph summary, variants, and latest validation status.

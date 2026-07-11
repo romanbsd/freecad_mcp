@@ -429,6 +429,17 @@ async def set_component_parameters(component_id: str, values: dict,
 
 
 @mcp.tool()
+async def preview_parameter_update(component_id: str, values: dict,
+                                   rebuild: bool = True, validate: bool = True,
+                                   enforce_bounds: bool = False) -> Any:
+    """Run the real parameter rebuild transaction and abort it after analysis."""
+    return await _request({"type": "preview_parameter_update", "params": {
+        "component_id": component_id, "values": values,
+        "rebuild": rebuild, "validate": validate,
+        "enforce_bounds": enforce_bounds}})
+
+
+@mcp.tool()
 async def get_component(component_id: str) -> Any:
     """Return the component's parameter registry (with current values),
     dependency graph summary, variants, and latest validation status."""
@@ -492,6 +503,34 @@ async def patch_component(component_id: str, operations: list,
         "component_id": component_id, "operations": operations,
         "expected_revision": expected_revision, "validate": validate,
         "dry_run": dry_run}})
+
+
+@mcp.tool()
+async def validate_patch(component_id: str, operations: list,
+                         expected_revision: int = None,
+                         validate: bool = True) -> Any:
+    """Build a structural patch transactionally and return diagnostics only."""
+    return await _request({"type": "validate_patch", "params": {
+        "component_id": component_id, "operations": operations,
+        "expected_revision": expected_revision, "validate": validate}})
+
+
+@mcp.tool()
+async def explain_rebuild(component_id: str, parameters: Any = None,
+                          feature_ids: list = None,
+                          operations: list = None) -> Any:
+    """Explain parameter and structural dependency propagation without rebuilding."""
+    return await _request({"type": "explain_rebuild", "params": {
+        "component_id": component_id, "parameters": parameters,
+        "feature_ids": feature_ids, "operations": operations}})
+
+
+@mcp.tool()
+async def get_feature_diagnostics(component_id: str,
+                                  feature_id: str = None) -> Any:
+    """Inspect feature, shape, expression, reference, sketch, and mate health."""
+    return await _request({"type": "get_feature_diagnostics", "params": {
+        "component_id": component_id, "feature_id": feature_id}})
 
 
 @mcp.tool()

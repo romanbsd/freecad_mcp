@@ -567,13 +567,12 @@ get_component_graph(component_id, detail="summary")
 
 Use `detail="full"` when preparing edits. The result contains a `revision`.
 
-Dry-run a patch:
+Transactionally validate a patch:
 
 ```json
 {
   "component_id": "component://Mount/MotorMount",
   "expected_revision": 3,
-  "dry_run": true,
   "operations": [
     {
       "op": "upsert",
@@ -588,6 +587,10 @@ Dry-run a patch:
   ]
 }
 ```
+
+Pass this payload to `validate_patch`. It builds the candidate FreeCAD geometry,
+runs validation profiles, captures `before` and `after` analysis, and aborts the
+transaction. `patch_component(dry_run=true)` uses the same real preview path.
 
 Supported patch operations:
 
@@ -611,6 +614,22 @@ set_component_parameters(
 ```
 
 Derived parameters are read-only.
+
+Preview a parameter change without mutating the document:
+
+```text
+preview_parameter_update(
+  component_id,
+  values={"width":"40 mm"},
+  rebuild=true,
+  validate=true
+)
+```
+
+Use `explain_rebuild(parameters={"width":"40 mm"})` before previewing when you
+only need dependency scope. Use `get_feature_diagnostics(feature_id="body")`
+for shape, expression, reference, sketch, or assembly health. Omitting
+`feature_id` audits the entire graph.
 
 ## Roles and outputs
 

@@ -366,7 +366,7 @@ def test_v2_component_workflow():
         "component_instance", "mate",
     }.issubset(feature_types)
     capabilities = call("capabilities")
-    assert capabilities["api_version"] == "2.8"
+    assert capabilities["api_version"] == "2.9"
     assert capabilities["structural_patch_mode"] == "dependency_scoped"
     assert capabilities["manufacturing_features"] == [
         "hole", "shell", "draft", "rib", "face_offset", "replace_face",
@@ -517,6 +517,49 @@ def test_v2_component_workflow():
         }],
     )
     assert dry_run["added"] == ["retainer"]
+    assert dry_run["valid"] is True
+    assert dry_run["committed"] is False
+    assert "retainer" in dry_run["after"]["measurements"]
+    unchanged = call(
+        "execute",
+        code=(
+            "d=App.getDocument('ApiV2Live')\n"
+            "result={'retainer':d.getObject('retainer') is not None}"
+        ),
+    )["result"]
+    assert unchanged["retainer"] is False
+    assert call("get_component_graph", component_id=component_id)["revision"] == 1
+
+    stored_validation = call(
+        "get_component", component_id=component_id
+    )["validation"]
+    validated_patch = call(
+        "validate_patch", component_id=component_id, expected_revision=1,
+        operations=[{
+            "op": "upsert",
+            "feature": {
+                "id": "preview_brace", "type": "box",
+                "size": {"x": "2 mm", "y": "2 mm", "z": "12 mm"},
+                "role": "inspection",
+            },
+        }],
+    )
+    assert validated_patch["valid"] is True
+    assert validated_patch["committed"] is False
+    assert validated_patch["validation"]["validation_status"] == "ok"
+    assert "preview_brace" in validated_patch["after"]["measurements"]
+    assert call("execute", code=(
+        "result=App.getDocument('ApiV2Live').getObject('preview_brace') is None"
+    ))["result"] is True
+    assert call("get_component", component_id=component_id)["validation"] == \
+        stored_validation
+
+    diagnostics = call(
+        "get_feature_diagnostics", component_id=component_id,
+        feature_id="insert",
+    )
+    assert diagnostics["status"] == "ok"
+    assert diagnostics["features"][0]["shape"]["valid"] is True
 
     patched = call(
         "patch_component",
@@ -598,6 +641,30 @@ def test_proxy_survives_save_reload(tmp_path):
         "result = App.getDocument(%r).getObject(%r).Shape.BoundBox.XLength"
         % (doc_name, pattern_name)
     ))["result"]
+
+    preview = call(
+        "preview_parameter_update", component_id=component_id,
+        values={"cham": "8 mm"}, rebuild=True, validate=True,
+    )
+    assert preview["valid"] is True
+    assert preview["committed"] is False
+    assert preview["before"]["parameters"]["cham"] != \
+        preview["after"]["parameters"]["cham"]
+    assert preview["before"]["volume"] != preview["after"]["volume"]
+    assert abs(chamfer_volume() - before) < 1e-6
+    assert call("get_component", component_id=component_id)["validation"] is None
+
+    explanation = call(
+        "explain_rebuild", component_id=component_id,
+        parameters={"cham": "8 mm"},
+    )
+    assert {"ch", "patterned"} <= set(explanation["affected"])
+    invalid_preview = call(
+        "preview_parameter_update", component_id=component_id,
+        values={"unknown_parameter": 1},
+    )
+    assert invalid_preview["valid"] is False
+    assert invalid_preview["errors"][0]["code"] == "PREVIEW_FAILED"
 
     # round-trip through disk: this is where a lost Proxy would surface
     call("execute", code="App.getDocument(%r).saveAs(%r)" % (doc_name, path))
