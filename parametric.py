@@ -200,7 +200,132 @@ def _element_matches(element, kind, selector, host=None):
     return True
 
 
-def _select_subelements(shape, selector, kind=None, host=None, expect=None):
+def _float_vector(value):
+    return [float(value.x), float(value.y), float(value.z)]
+
+
+def _element_signature(element, kind):
+    """Return a JSON-safe geometric fingerprint independent of topology index."""
+    bounds = element.BoundBox
+    signature = {
+        "geometry": "",
+        "center": [
+            (bounds.XMin + bounds.XMax) / 2,
+            (bounds.YMin + bounds.YMax) / 2,
+            (bounds.ZMin + bounds.ZMax) / 2,
+        ],
+        "size": [bounds.XLength, bounds.YLength, bounds.ZLength],
+    }
+    if kind == "face":
+        signature["geometry"] = getattr(element.Surface, "TypeId", "")
+        signature["measure"] = float(element.Area)
+        try:
+            signature["direction"] = _float_vector(_face_normal(element))
+        except (AttributeError, ValueError):
+            pass
+    elif kind == "edge":
+        signature["geometry"] = getattr(getattr(element, "Curve", None),
+                                        "TypeId", "")
+        signature["measure"] = float(element.Length)
+        radius = getattr(getattr(element, "Curve", None), "Radius", None)
+        if radius is not None:
+            signature["radius"] = float(radius)
+        points = [getattr(vertex, "Point", None)
+                  for vertex in getattr(element, "Vertexes", [])]
+        signature["points"] = sorted(
+            [_float_vector(point) for point in points if point is not None]
+        )
+    elif kind == "vertex":
+        signature["geometry"] = "vertex"
+        signature["point"] = _float_vector(element.Point)
+    elif kind == "solid":
+        signature["geometry"] = getattr(element, "ShapeType", "solid")
+        signature["measure"] = float(element.Volume)
+    return signature
+
+
+def _relative_delta(left, right):
+    return abs(float(left) - float(right)) / max(abs(float(left)),
+                                                     abs(float(right)), 1.0)
+
+
+def _signature_distance(baseline, candidate):
+    if baseline.get("geometry") and candidate.get("geometry") and \
+            baseline["geometry"] != candidate["geometry"]:
+        return float("inf")
+    deltas = []
+    for key, weight in (("center", 1.0), ("size", 1.0),
+                        ("direction", 3.0), ("point", 2.0)):
+        if key in baseline and key in candidate:
+            deltas.extend(
+                _relative_delta(a, b) * weight
+                for a, b in zip(baseline[key], candidate[key])
+            )
+    for key, weight in (("measure", 0.5), ("radius", 1.0)):
+        if key in baseline and key in candidate:
+            deltas.append(_relative_delta(baseline[key], candidate[key]) * weight)
+    if baseline.get("points") and candidate.get("points") and \
+            len(baseline["points"]) == len(candidate["points"]):
+        for left, right in zip(baseline["points"], candidate["points"]):
+            deltas.extend(_relative_delta(a, b) for a, b in zip(left, right))
+    return sum(deltas) / len(deltas) if deltas else 0.0
+
+
+def _tracked_subelements(elements, kind, tracking, strict=True):
+    signatures = list(tracking.get("signatures") or [])
+    baseline_names = list(tracking.get("subelements") or [])
+    if not signatures:
+        return None, {"status": "untracked", "matches": []}
+    max_distance = float(tracking.get("max_distance", 1.0))
+    ambiguity = float(tracking.get("ambiguity_tolerance", 0.02))
+    available = set(range(len(elements)))
+    selected = []
+    matches = []
+    for position, baseline in enumerate(signatures):
+        ranked = sorted(
+            (_signature_distance(baseline, _element_signature(element, kind)), index)
+            for index, element in enumerate(elements) if index in available
+        )
+        finite = [item for item in ranked if math.isfinite(item[0])]
+        baseline_name = baseline_names[position] \
+            if position < len(baseline_names) else None
+        if not finite or finite[0][0] > max_distance:
+            diagnostic = {"status": "missing", "baseline": baseline_name,
+                          "best_distance": finite[0][0] if finite else None,
+                          "matches": matches}
+            if strict:
+                raise ValueError("tracked %s %r could not be remapped" %
+                                 (kind, baseline_name))
+            return [], diagnostic
+        best_distance, best_index = finite[0]
+        if len(finite) > 1 and finite[1][0] - best_distance <= \
+                ambiguity * max(1.0, best_distance):
+            diagnostic = {
+                "status": "ambiguous", "baseline": baseline_name,
+                "candidates": [kind.title() + str(item[1] + 1)
+                               for item in finite[:2]],
+                "best_distance": best_distance, "matches": matches,
+            }
+            if strict:
+                raise ValueError("tracked %s %r remap is ambiguous between %s" %
+                                 (kind, baseline_name,
+                                  ", ".join(diagnostic["candidates"])))
+            return [], diagnostic
+        available.remove(best_index)
+        selected.append(elements[best_index])
+        matches.append({
+            "baseline": baseline_name,
+            "current": kind.title() + str(best_index + 1),
+            "distance": best_distance,
+        })
+    status = "stable" if all(
+        item["baseline"] == item["current"] for item in matches
+    ) else "remapped"
+    return selected, {"status": status, "matches": matches}
+
+
+def _select_subelements(shape, selector, kind=None, host=None, expect=None,
+                        diagnostics=False, strict_tracking=True):
     selector = selector or {}
     kind = (kind or selector.get("kind") or "face").lower().rstrip("s")
     if kind not in _SUBELEMENTS:
@@ -238,12 +363,21 @@ def _select_subelements(shape, selector, kind=None, host=None, expect=None):
         point = _vector(body["near"])
         selected = [min(selected, key=lambda item: _bounds_center(item).distanceToPoint(point))]
 
+    tracking_result = {"status": "untracked", "matches": []}
+    tracked, tracking_result = _tracked_subelements(
+        elements, kind, selector.get("tracking") or {}, strict_tracking
+    )
+    if tracked is not None:
+        selected = tracked
+
     expected = expect if expect is not None else selector.get("expect")
     if expected == "one":
         expected = 1
     if isinstance(expected, int) and len(selected) != expected:
         raise ValueError("%s selector expected %d match(es), got %d" %
                          (kind, expected, len(selected)))
+    if diagnostics:
+        return selected, tracking_result
     return selected
 
 
@@ -262,6 +396,8 @@ def _geometry_reference_map(references):
         result[reference_id] = {
             "id": reference_id, "feature": feature_id, "selector": selector,
         }
+        if reference.get("tracking"):
+            result[reference_id]["tracking"] = copy.deepcopy(reference["tracking"])
     return result
 
 
@@ -272,6 +408,8 @@ def _merge_named_selector(value, references):
     if reference_id not in references:
         raise ValueError("unknown geometry reference %r" % reference_id)
     resolved = copy.deepcopy(references[reference_id]["selector"])
+    if references[reference_id].get("tracking"):
+        resolved["tracking"] = copy.deepcopy(references[reference_id]["tracking"])
     for key, override in value.items():
         if key == "where" and isinstance(override, dict):
             where = dict(resolved.get("where") or {})
@@ -385,29 +523,84 @@ def _subelement_indices(shape, kind, elements):
     return indices
 
 
-def _resolve_geometry_reference(reference, id_map, host=None):
+def _attach_reference_tracking(value, references):
+    """Propagate captured baselines into every expanded selector consumer."""
+    if isinstance(value, list):
+        for item in value:
+            _attach_reference_tracking(item, references)
+        return value
+    if not isinstance(value, dict):
+        return value
+    reference_id = value.get("reference")
+    tracking = references.get(reference_id, {}).get("tracking") \
+        if reference_id else None
+    if tracking:
+        if isinstance(value.get("selector"), dict):
+            value["selector"]["tracking"] = copy.deepcopy(tracking)
+        elif any(key in value for key in
+                 ("kind", "where", "index", "indices", "expect")):
+            value["tracking"] = copy.deepcopy(tracking)
+    for child in value.values():
+        _attach_reference_tracking(child, references)
+    return value
+
+
+def _resolve_geometry_reference(reference, id_map, host=None,
+                                strict_tracking=False):
     feature_id = reference["feature"]
     if feature_id not in id_map:
         raise ValueError("geometry reference %r targets unknown feature %r" %
                          (reference["id"], feature_id))
     obj = id_map[feature_id]
-    selector = reference["selector"]
+    selector = copy.deepcopy(reference["selector"])
+    if reference.get("tracking"):
+        selector["tracking"] = copy.deepcopy(reference["tracking"])
     kind = (selector.get("kind") or "face").lower().rstrip("s")
-    elements = _select_subelements(obj.Shape, selector, kind, host)
-    if not elements:
+    elements, tracking = _select_subelements(
+        obj.Shape, selector, kind, host, diagnostics=True,
+        strict_tracking=strict_tracking,
+    )
+    if not elements and tracking["status"] == "untracked":
         raise ValueError("geometry reference %r matched no %s" %
                          (reference["id"], kind))
+    indices = _subelement_indices(obj.Shape, kind, elements)
     return {
         "id": reference["id"], "feature": feature_id, "object": obj.Name,
         "kind": kind, "count": len(elements),
-        "subelements": [kind.title() + str(index)
-                        for index in _subelement_indices(obj.Shape, kind, elements)],
+        "subelements": [kind.title() + str(index) for index in indices],
+        "tracking": tracking,
     }
 
 
-def _resolve_all_geometry_references(meta, id_map, host=None):
+def _capture_geometry_reference_baselines(references, id_map, host=None):
+    captured = _geometry_reference_map(references)
+    resolved = []
+    for reference in captured.values():
+        tracking_options = dict(reference.pop("tracking", {}) or {})
+        initial = _resolve_geometry_reference(reference, id_map, host)
+        obj = id_map[reference["feature"]]
+        kind = initial["kind"]
+        elements = _select_subelements(obj.Shape, reference["selector"], kind, host)
+        reference["tracking"] = {
+            "version": 1,
+            "subelements": initial["subelements"],
+            "signatures": [_element_signature(element, kind)
+                           for element in elements],
+            "max_distance": float(
+                tracking_options.get("max_distance", 1.0)
+            ),
+            "ambiguity_tolerance": float(
+                tracking_options.get("ambiguity_tolerance", 0.02)
+            ),
+        }
+        resolved.append(_resolve_geometry_reference(reference, id_map, host))
+    return list(captured.values()), resolved
+
+
+def _resolve_all_geometry_references(meta, id_map, host=None,
+                                     strict_tracking=False):
     return [
-        _resolve_geometry_reference(reference, id_map, host)
+        _resolve_geometry_reference(reference, id_map, host, strict_tracking)
         for reference in _geometry_reference_map(
             meta.get("geometry_references", [])
         ).values()
@@ -2999,10 +3192,17 @@ def op_define_component(component_id, features, rules=None, profiles=None,
         if errs:
             # Transactional: roll back so the prior valid graph survives.
             raise ValueError("build failed; invalid features: %s" % ", ".join(errs))
+        tracked_references, resolved_references = \
+            _capture_geometry_reference_baselines(
+                list(reference_map.values()), id_map, host
+            )
+        tracked_reference_map = _geometry_reference_map(tracked_references)
+        for feature in graph:
+            _attach_reference_tracking(feature, tracked_reference_map)
         meta["build_graph"] = graph
         meta["id_map"] = name_map
         meta["profile_definitions"] = list(profile_definitions or definition_list)
-        meta["geometry_references"] = list(geometry_references or reference_list)
+        meta["geometry_references"] = tracked_references
         meta["dependency_index"] = _dependency_index(
             meta["schema"], graph, definition_map
         )
@@ -3015,7 +3215,6 @@ def op_define_component(component_id, features, rules=None, profiles=None,
         if profiles is not None:
             meta["profiles"] = profiles
         _save(container, meta)
-        resolved_references = _resolve_all_geometry_references(meta, id_map, host)
         doc.commitTransaction()
     except Exception:
         _abort(doc)
@@ -3314,6 +3513,17 @@ SELECTOR_SCHEMA = {
             "planar": {"type": "boolean"}, "min_dot": {"type": "number"},
         }},
         "expect": {"one_of": ["one", "integer"]},
+        "tracking": {
+            "type": "object", "generated": True,
+            "description": "Persisted geometric baseline for topology-safe remapping",
+            "properties": {
+                "version": {"type": "integer"},
+                "subelements": {"type": "array", "items": {"type": "string"}},
+                "signatures": {"type": "array", "items": {"type": "object"}},
+                "max_distance": {"type": "number"},
+                "ambiguity_tolerance": {"type": "number"},
+            },
+        },
     },
 }
 
@@ -3605,7 +3815,7 @@ def op_capabilities():
     from patterns import list_patterns
     import FreeCAD
     return {
-        "api_version": "2.6",
+        "api_version": "2.7",
         "freecad_version": ".".join(FreeCAD.Version()[:3]),
         "feature_types": op_list_feature_types()["feature_types"],
         "patterns": list_patterns(),
@@ -3616,6 +3826,11 @@ def op_capabilities():
         "profile_definitions": True,
         "profile_operations": ["pad", "pocket", "revolve", "sweep", "loft"],
         "named_geometry_references": True,
+        "topology_resilient_references": True,
+        "reference_tracking_version": 1,
+        "reference_tracking_statuses": [
+            "stable", "remapped", "ambiguous", "missing", "untracked",
+        ],
         "dynamic_external_geometry": True,
         "named_datum_frames": True,
         "manufacturing_features": [
@@ -3814,7 +4029,9 @@ def _rebuild_graph_patch(doc, container, meta, new_graph, impacted):
                 "patch rebuild failed; invalid features: %s" %
                 ", ".join(errors)
             )
-        _resolve_all_geometry_references(meta, id_map, host)
+        _resolve_all_geometry_references(
+            meta, id_map, host, strict_tracking=True
+        )
         meta["build_graph"] = new_graph
         meta["id_map"] = {fid: obj.Name for fid, obj in id_map.items()}
         meta["dependency_index"] = _dependency_index(
@@ -4071,8 +4288,27 @@ def op_set_component_parameters(component_id, values, rebuild=True, validate=Fal
             raise ValueError("parameter(s) out of bounds: %s" % "; ".join(violations))
 
     remapped_external = []
+    resolved_references = []
     _begin(doc, "set_component_parameters")
     try:
+        stored_references = _geometry_reference_map(
+            meta.get("geometry_references", [])
+        )
+        if stored_references and any(
+                not reference.get("tracking")
+                for reference in stored_references.values()):
+            current_id_map = {
+                feature_id: doc.getObject(name)
+                for feature_id, name in meta.get("id_map", {}).items()
+            }
+            tracked_references, _ = _capture_geometry_reference_baselines(
+                list(stored_references.values()), current_id_map, host
+            )
+            tracked_map = _geometry_reference_map(tracked_references)
+            for feature in meta.get("build_graph", []):
+                _attach_reference_tracking(feature, tracked_map)
+            meta["geometry_references"] = tracked_references
+            _save(container, meta)
         changed = []
         for k, v in (values or {}).items():
             if k not in kinds:
@@ -4099,7 +4335,9 @@ def op_set_component_parameters(component_id, values, rebuild=True, validate=Fal
                 feature_id: doc.getObject(name)
                 for feature_id, name in meta.get("id_map", {}).items()
             }
-            _resolve_all_geometry_references(meta, id_map, host)
+            resolved_references = _resolve_all_geometry_references(
+                meta, id_map, host, strict_tracking=True
+            )
             errs = _errors(_component_objects(doc, meta))
             if errs:
                 # Transactional: keep the last valid geometry on a bad rebuild.
@@ -4112,6 +4350,7 @@ def op_set_component_parameters(component_id, values, rebuild=True, validate=Fal
     result = {"changed": changed,
               "regenerated": _dependents(meta, changed),
               "remapped_external_geometry": remapped_external,
+              "geometry_references": resolved_references,
               "bbox": _merge_bbox(_feature_solids(doc, meta))}
     if validate:
         result["validation"] = op_validate_component(component_id)

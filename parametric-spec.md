@@ -317,9 +317,10 @@ forms remain accepted.
 
 ### Named geometry references
 
-`geometry_references` assigns stable names to semantic selector recipes. The
-selector is re-evaluated against current geometry instead of freezing a
-`FaceN` or `EdgeN` index.
+`geometry_references` assigns stable names to semantic selector recipes. At the
+first successful definition, the resolver captures a geometric signature for
+every selected face, edge, vertex, or solid. Later rebuilds verify the original
+subelement and deterministically remap it when FreeCAD changes topology order.
 
 ```json
 {
@@ -349,7 +350,14 @@ selector is re-evaluated against current geometry instead of freezing a
 Use `{ "reference": "panel_top" }` wherever a support is accepted and
 `{ "reference": "front_edge" }` as a selector or sketch external geometry.
 `list_geometry_references` returns the registry; `resolve_geometry_reference`
-returns its current object and subelement matches.
+returns its current object, subelement matches, remap distances, and one of
+`stable`, `remapped`, `ambiguous`, `missing`, or legacy `untracked`. Ambiguous and missing mappings
+fail feature rebuilds transactionally rather than silently selecting different
+geometry. Optional reference-level `tracking.max_distance` and
+`tracking.ambiguity_tolerance` values tune matching; generated signatures and
+baseline subelement names are persisted in component metadata. Components
+created before API 2.7 capture baselines automatically on their next parameter
+update.
 
 ### Constrained sketches
 

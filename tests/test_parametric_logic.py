@@ -238,7 +238,7 @@ def test_capabilities_advertise_named_references_and_sketches(parametric, monkey
     monkeypatch.setitem(sys.modules, "FreeCAD", fake_freecad)
     capabilities = parametric.op_capabilities()
 
-    assert capabilities["api_version"] == "2.6"
+    assert capabilities["api_version"] == "2.7"
     assert capabilities["named_geometry_references"] is True
     assert capabilities["dynamic_external_geometry"] is True
     assert capabilities["named_datum_frames"] is True
@@ -249,6 +249,10 @@ def test_capabilities_advertise_named_references_and_sketches(parametric, monkey
         "linear", "grid", "polar", "mirror", "path",
     ]
     assert capabilities["assembly_instances"] is True
+    assert capabilities["topology_resilient_references"] is True
+    assert capabilities["reference_tracking_statuses"] == [
+        "stable", "remapped", "ambiguous", "missing", "untracked",
+    ]
     assert capabilities["mate_modes"] == [
         "rigid", "coincident", "offset", "angle",
     ]
@@ -332,6 +336,81 @@ def test_named_selector_supplies_default_base_and_external_dependency(parametric
 
     assert fillet["base"] == "panel"
     assert parametric._feature_inputs(sketch) == ["panel"]
+
+
+def test_tracked_edge_remaps_after_topology_reorder(parametric):
+    class Bounds:
+        def __init__(self, x):
+            self.XMin, self.XMax = x, x + 10
+            self.YMin = self.YMax = self.ZMin = self.ZMax = 0.0
+            self.XLength, self.YLength, self.ZLength = 10.0, 0.0, 0.0
+
+    class Curve:
+        TypeId = "Part::GeomLine"
+
+    class Edge:
+        def __init__(self, x):
+            self.BoundBox = Bounds(x)
+            self.Length = 10.0
+            self.Curve = Curve()
+            self.Vertexes = []
+
+    target, other = Edge(0), Edge(30)
+    tracking = {
+        "subelements": ["Edge1"],
+        "signatures": [parametric._element_signature(target, "edge")],
+    }
+    shape = types.SimpleNamespace(Edges=[other, target])
+    selected, diagnostic = parametric._select_subelements(
+        shape, {"kind": "edge", "index": 1, "tracking": tracking},
+        diagnostics=True,
+    )
+    assert selected == [target]
+    assert diagnostic["status"] == "remapped"
+    assert diagnostic["matches"][0]["current"] == "Edge2"
+
+
+def test_tracked_edge_rejects_ambiguous_remap(parametric):
+    class Bounds:
+        XMin, XMax = 0.0, 10.0
+        YMin = YMax = ZMin = ZMax = 0.0
+        XLength, YLength, ZLength = 10.0, 0.0, 0.0
+
+    class Curve:
+        TypeId = "Part::GeomLine"
+
+    class Edge:
+        def __init__(self):
+            self.BoundBox = Bounds()
+            self.Length = 10.0
+            self.Curve = Curve()
+            self.Vertexes = []
+
+    baseline = parametric._element_signature(Edge(), "edge")
+    shape = types.SimpleNamespace(Edges=[Edge(), Edge()])
+    with pytest.raises(ValueError, match="ambiguous"):
+        parametric._select_subelements(shape, {
+            "kind": "edge", "tracking": {
+                "subelements": ["Edge1"], "signatures": [baseline],
+            },
+        })
+
+
+def test_reference_tracking_propagates_to_nested_selectors(parametric):
+    tracking = {"version": 1, "subelements": ["Face1"],
+                "signatures": [{"geometry": "Part::GeomPlane"}]}
+    graph = [{
+        "id": "pocket", "type": "pocket",
+        "support": {"reference": "top", "selector": {"kind": "face"}},
+        "external_geometry": [{
+            "reference": "top", "selector": {"kind": "edge"},
+        }],
+    }]
+    parametric._attach_reference_tracking(
+        graph, {"top": {"tracking": tracking}}
+    )
+    assert graph[0]["support"]["selector"]["tracking"] == tracking
+    assert graph[0]["external_geometry"][0]["selector"]["tracking"] == tracking
 
 
 def test_datum_frames_participate_in_graph_dependencies(parametric):

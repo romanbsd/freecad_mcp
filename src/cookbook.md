@@ -321,7 +321,23 @@ Name semantic selectors once at component definition time:
 
 Use `{"reference":"top_face"}` as a support or selector. Call
 `list_geometry_references(resolve=true)` to audit all matches and
-`resolve_geometry_reference` to inspect one current match.
+`resolve_geometry_reference` to inspect one current match. Each reference
+captures a geometric baseline when the component is defined. Resolution reports
+`stable` when the original topology index still matches and `remapped` when the
+same geometry moved to another index. `ambiguous` and `missing` references stop
+the rebuild transaction instead of allowing a different face or edge to be
+selected silently.
+
+For unusually large topology changes, tune matching on the reference itself:
+
+```json
+{
+  "id": "front_edge",
+  "feature": "panel",
+  "selector": {"kind": "edge", "index": 1, "expect": "one"},
+  "tracking": {"max_distance": 1.5, "ambiguity_tolerance": 0.01}
+}
+```
 
 ### Native constrained sketches
 

@@ -447,7 +447,7 @@ async def get_component_graph(component_id: str, detail: str = "summary") -> Any
 @mcp.tool()
 async def list_geometry_references(component_id: str,
                                    resolve: bool = False) -> Any:
-    """List named semantic geometry references, optionally resolving matches."""
+    """List named references and optionally report topology tracking status."""
     return await _request({"type": "list_geometry_references", "params": {
         "component_id": component_id, "resolve": resolve}})
 
@@ -455,7 +455,7 @@ async def list_geometry_references(component_id: str,
 @mcp.tool()
 async def resolve_geometry_reference(component_id: str,
                                      reference_id: str) -> Any:
-    """Resolve one named geometry reference to current object subelements."""
+    """Resolve one reference with stable/remapped/ambiguous/missing diagnostics."""
     return await _request({"type": "resolve_geometry_reference", "params": {
         "component_id": component_id, "reference_id": reference_id}})
 

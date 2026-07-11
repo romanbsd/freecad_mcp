@@ -125,6 +125,11 @@ def _assert_manufacturing_workflow():
         "draft_angle": "8 deg",
     })
     assert set(feature_ids) <= set(updated["regenerated"])
+    assert len(updated["geometry_references"]) == 2
+    assert all(
+        item["tracking"]["status"] in ("stable", "remapped")
+        for item in updated["geometry_references"]
+    )
     after = call("execute", code=(
         "d=App.getDocument('ApiManufacturingLive')\n"
         "ids=%r\n"
@@ -317,7 +322,7 @@ def test_v2_component_workflow():
         "component_instance", "mate",
     }.issubset(feature_types)
     capabilities = call("capabilities")
-    assert capabilities["api_version"] == "2.6"
+    assert capabilities["api_version"] == "2.7"
     assert capabilities["structural_patch_mode"] == "dependency_scoped"
     assert capabilities["manufacturing_features"] == [
         "hole", "shell", "draft", "rib", "face_offset", "replace_face",
