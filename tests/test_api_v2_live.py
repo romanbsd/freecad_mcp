@@ -594,6 +594,80 @@ def test_v2_component_workflow():
     _assert_assembly_workflow()
 
 
+def test_build_component_supports_parameterized_compound_pocket():
+    doc_name = "CompoundProfileLive"
+    call("execute", code=(
+        "import FreeCAD as App, importlib, parametric\n"
+        "importlib.reload(parametric)\n"
+        "if %r in App.listDocuments():\n"
+        "    App.closeDocument(%r)" % (doc_name, doc_name)
+    ))
+
+    schema = call("describe_feature_type", feature_type="pocket")["schema"]
+    sections = schema["properties"]["sections"]
+    section_types = {
+        item["type"]: item for item in sections["items"]["one_of"]
+    }
+    assert section_types["circle"]["one_of"] == ["radius", "diameter"]
+    assert section_types["slot"]["one_of"] == ["radius", "width"]
+
+    built = call(
+        "build_component",
+        document={"name": doc_name, "replace": True},
+        component={
+            "name": "CompoundPocket",
+            "parameters": [
+                {"name": "head_d", "type": "length", "default": "6 mm"},
+                {"name": "slot_w", "type": "length", "default": "3.5 mm"},
+                {"name": "hole_v", "type": "length", "default": "4 mm"},
+            ],
+            "features": [
+                {
+                    "id": "panel", "type": "box",
+                    "size": {"x": "30 mm", "y": "20 mm", "z": "2 mm"},
+                },
+                {
+                    "id": "keyhole", "type": "pocket", "base": "panel",
+                    "length": "3 mm",
+                    "support": {"feature": "panel", "face": {
+                        "axis": "z", "side": "max",
+                    }},
+                    "reversed": True,
+                    "sections": [
+                        {"type": "circle", "center": [0, "$hole_v"],
+                         "diameter": "$head_d"},
+                        {"type": "slot", "start": [0, "$hole_v - 8 mm"],
+                         "end": [0, "$hole_v"], "width": "$slot_w"},
+                    ],
+                },
+            ],
+            "outputs": ["keyhole"],
+        },
+        validate={"profiles": ["geometry_baseline"]},
+    )
+    component_id = built["component_id"]
+    assert built["validation"]["validation_status"] == "ok"
+
+    before = call("execute", code=(
+        "d=App.getDocument(%r)\n"
+        "tool=d.getObject('keyhole_Tool')\n"
+        "result={'valid':d.getObject('keyhole').Shape.isValid(), "
+        "'tool_center_y':tool.Shape.BoundBox.Center.y}" % doc_name
+    ))["result"]
+    assert before["valid"] is True
+
+    updated = call(
+        "set_component_parameters", component_id=component_id,
+        values={"hole_v": "2 mm"}, rebuild=True, validate=True,
+    )
+    assert "keyhole" in updated["regenerated"]
+    after_center = call("execute", code=(
+        "d=App.getDocument(%r)\n"
+        "result=d.getObject('keyhole_Tool').Shape.BoundBox.Center.y" % doc_name
+    ))["result"]
+    assert after_center == pytest.approx(before["tool_center_y"] - 2.0)
+
+
 def test_proxy_survives_save_reload(tmp_path):
     """FeaturePython proxies must survive save/reopen and keep recomputing."""
     doc_name = "ProxyReload"

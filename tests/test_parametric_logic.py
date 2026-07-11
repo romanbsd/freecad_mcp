@@ -291,6 +291,26 @@ def test_profile_radius_accepts_clean_size_aliases(parametric):
         parametric._profile_radius({"width": 0}, None, "slot")
 
 
+def test_parameter_refresh_executes_profile_boolean_tool(parametric):
+    calls = []
+    tool = types.SimpleNamespace(
+        Proxy=types.SimpleNamespace(execute=lambda obj: calls.append(obj))
+    )
+    result = types.SimpleNamespace(Tool=tool)
+    doc = types.SimpleNamespace(getObject=lambda name: result)
+    meta = {
+        "build_graph": [{"id": "keyhole", "type": "pocket"}],
+        "id_map": {"keyhole": "KeyholeResult"},
+    }
+
+    refreshed = parametric._refresh_declarative_features(
+        doc, meta, {"keyhole"}, host=object()
+    )
+
+    assert refreshed == ["keyhole"]
+    assert calls == [tool]
+
+
 def test_common_feature_schema_uses_one_selector_and_placement_contract(parametric):
     described = parametric.op_describe_feature_type("fillet")
     common = described["common_properties"]

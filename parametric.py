@@ -4661,6 +4661,10 @@ def _refresh_declarative_features(doc, meta, feature_ids, host):
         "feature_pattern", "array", "grid_array", "linear_pattern",
         "polar_pattern", "mirror_pattern", "path_pattern",
     }
+    profile_operations = {
+        "profile_2d", "profile_extrude", "pad", "pocket", "extrude_cut",
+        "revolve", "sweep", "loft",
+    }
     refreshed = []
     for feature in meta.get("build_graph", []):
         if feature["id"] not in feature_ids:
@@ -4680,6 +4684,11 @@ def _refresh_declarative_features(doc, meta, feature_ids, host):
         elif feature_type in manufacturing | patterns and \
                 getattr(obj, "Proxy", None) is not None:
             obj.Proxy.execute(obj)
+        elif feature_type in profile_operations:
+            tool = getattr(obj, "Tool", None) or obj
+            if getattr(tool, "Proxy", None) is None:
+                continue
+            tool.Proxy.execute(tool)
         else:
             continue
         refreshed.append(feature["id"])
