@@ -199,7 +199,7 @@ def _assert_feature_pattern_workflow():
 def _assert_assembly_workflow():
     call("execute", code=(
         "import FreeCAD as App\n"
-        "for name in ('ApiAssemblySource','ApiAssemblyLive'):\n"
+        "for name in ('ApiAssemblySource','ApiAssemblyLive','ApiAssemblyConflict'):\n"
         "    if name in App.listDocuments(): App.closeDocument(name)"
     ))
     source = call(
@@ -230,7 +230,8 @@ def _assert_assembly_workflow():
     assembly_id = assembly["component_id"]
     call("define_component", component_id=assembly_id, features=[
         {"id": "fixed", "type": "component_instance",
-         "component_id": source_id, "output": "body", "position": {"x": "10 mm"}},
+         "component_id": source_id, "output": "body", "grounded": True,
+         "position": {"x": "10 mm"}},
         {"id": "offset_part", "type": "component_instance",
          "component_id": source_id, "output": "body", "variant": "wide"},
         {"id": "angle_part", "type": "component_instance",
@@ -239,6 +240,10 @@ def _assert_assembly_workflow():
         {"id": "rigid_part", "type": "component_instance",
          "component_id": source_id, "output": "body"},
         {"id": "coincident_part", "type": "component_instance",
+         "component_id": source_id, "output": "body"},
+        {"id": "revolute_part", "type": "component_instance",
+         "component_id": source_id, "output": "body"},
+        {"id": "multi_part", "type": "component_instance",
          "component_id": source_id, "output": "body"},
         {"id": "offset_mate", "type": "mate", "mode": "offset",
          "moving": {"instance": "offset_part", "frame": "left"},
@@ -254,13 +259,52 @@ def _assert_assembly_workflow():
         {"id": "coincident_mate", "type": "mate", "mode": "coincident",
          "moving": {"instance": "coincident_part", "frame": "left"},
          "target": {"instance": "fixed", "frame": "right"}},
+        {"id": "revolute_mate", "type": "mate", "mode": "revolute",
+         "moving": {"instance": "revolute_part", "frame": "left"},
+         "target": {"instance": "fixed", "frame": "right"}},
+        {"id": "slider_mate", "type": "mate", "mode": "slider",
+         "moving": {"instance": "multi_part", "frame": "left"},
+         "target": {"instance": "fixed", "frame": "right"}},
+        {"id": "planar_mate", "type": "mate", "mode": "planar",
+         "moving": {"instance": "multi_part", "frame": "left"},
+         "target": {"instance": "fixed", "frame": "right"}},
     ])
     status = call("get_assembly_status", component_id=assembly_id)
     assert status["satisfied"] is True
-    assert len(status["instances"]) == 5
+    assert status["solver_status"] == "underconstrained"
+    assert status["degrees_of_freedom"] == 1
+    assert len(status["instances"]) == 7
     assert {mate["mode"] for mate in status["mates"]} == {
-        "rigid", "coincident", "offset", "angle",
+        "rigid", "coincident", "offset", "angle", "revolute", "slider", "planar",
     }
+    states = {item["id"]: item for item in status["instances"]}
+    assert states["fixed"]["grounded"] is True
+    assert states["revolute_part"]["degrees_of_freedom"] == 1
+    assert states["multi_part"]["constraint_count"] == 2
+    assert states["multi_part"]["degrees_of_freedom"] == 0
+
+    conflict = call(
+        "create_component", document="ApiAssemblyConflict", name="Conflict",
+    )
+    conflict_id = conflict["component_id"]
+    call("define_component", component_id=conflict_id, features=[
+        {"id": "base", "type": "component_instance", "component_id": source_id,
+         "output": "body", "grounded": True},
+        {"id": "moving", "type": "component_instance", "component_id": source_id,
+         "output": "body"},
+        {"id": "mate_a", "type": "mate", "mode": "rigid",
+         "moving": {"instance": "moving", "frame": "left"},
+         "target": {"instance": "base", "frame": "right"}},
+        {"id": "mate_b", "type": "mate", "mode": "rigid",
+         "moving": {"instance": "moving", "frame": "left"},
+         "target": {"instance": "base", "frame": "right"},
+         "offset": {"normal": "3 mm"}},
+    ])
+    conflict_status = call("get_assembly_status", component_id=conflict_id)
+    assert conflict_status["satisfied"] is False
+    assert conflict_status["overconstrained"] is True
+    assert conflict_status["solver_status"] == "overconstrained"
+    assert sum(not mate["satisfied"] for mate in conflict_status["mates"]) >= 1
 
     updated = call("set_component_parameters", component_id=assembly_id, values={
         "gap": "7 mm", "instance_width": "26 mm", "mate_angle": "45 deg",
@@ -269,8 +313,8 @@ def _assert_assembly_workflow():
     call("set_component_parameters", component_id=source_id, values={"width": "22 mm"})
     refreshed = call("refresh_assembly", component_id=assembly_id)
     assert refreshed["satisfied"] is True
-    assert len(refreshed["refreshed_instances"]) == 5
-    assert len(refreshed["refreshed_mates"]) == 4
+    assert len(refreshed["refreshed_instances"]) == 7
+    assert len(refreshed["refreshed_mates"]) == 7
     inspected = call("execute", code=(
         "d=App.getDocument('ApiAssemblyLive')\n"
         "result={'fixed_volume':d.getObject('fixed').Shape.Volume,"
@@ -322,7 +366,7 @@ def test_v2_component_workflow():
         "component_instance", "mate",
     }.issubset(feature_types)
     capabilities = call("capabilities")
-    assert capabilities["api_version"] == "2.7"
+    assert capabilities["api_version"] == "2.8"
     assert capabilities["structural_patch_mode"] == "dependency_scoped"
     assert capabilities["manufacturing_features"] == [
         "hole", "shell", "draft", "rib", "face_offset", "replace_face",
@@ -332,6 +376,7 @@ def test_v2_component_workflow():
     ]
     assert capabilities["mate_modes"] == [
         "rigid", "coincident", "offset", "angle",
+        "revolute", "slider", "cylindrical", "planar",
     ]
     tube_schema = call("describe_feature_type", feature_type="tube")
     assert "outer_radius" in tube_schema["schema"]["required"]

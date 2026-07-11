@@ -256,6 +256,7 @@ self-contained when the assembly is reopened.
   "type": "component_instance",
   "component_id": "component://BracketParts/WallBracket",
   "output": "body",
+  "grounded": true,
   "variant": "heavy_duty",
   "parameters": {"depth": "$bracket_depth"},
   "position": {"x": "40 mm"}
@@ -283,17 +284,32 @@ frame or local assembly feature:
 }
 ```
 
-Modes are `rigid`, `coincident`, `offset`, and `angle`. Coincident mates oppose
-frame normals by default; set `opposed=false` to preserve orientation. Offsets
-use target-frame `u`, `v`, and `normal` axes. `angle` rotates around the target
-normal. One mate may position each moving instance; duplicate constraints,
-self-mates, and dependency cycles are rejected instead of invoking a general
-constraint solver.
+Full-pose modes are `rigid`, `coincident`, `offset`, and `angle`. Coincident
+mates oppose frame normals by default; set `opposed=false` to preserve
+orientation. Offsets use target-frame `u`, `v`, and `normal` axes. `angle`
+rotates around the target normal.
+
+Partial-DOF modes are:
+
+- `revolute`: fixes the frame origin and axis, leaving rotation about the axis;
+- `slider`: fixes orientation and transverse position, leaving axial travel;
+- `cylindrical`: leaves axial travel and rotation;
+- `planar`: fixes normal distance and alignment, leaving two translations and
+  in-plane rotation.
+
+Set `grounded=true` on an instance to hold its placement fixed. A moving
+instance may have several mates. The deterministic solver iteratively projects
+each constrained coordinate, accepts redundant consistent constraints, and
+reports incompatible residuals as `overconstrained`. Dependency cycles and
+self-mates remain invalid.
 
 `get_assembly_status` reports instance source revisions/signatures, placements,
-mate residuals, and satisfaction. `refresh_assembly` recaptures source outputs
-and datum frames, reapplies placements and mates in graph order, and returns the
-updated status and assembly bounds.
+mate residual vectors, constraint rank, remaining degrees of freedom, and
+`fully_constrained`, `underconstrained`, or `overconstrained` solver status.
+Constraint rank is calculated from the numerical assembly Jacobian rather than
+the raw number of mate equations. `refresh_assembly` recaptures source outputs
+and datum frames, solves the mate graph, and returns the updated status and
+assembly bounds.
 
 Faces, edges, vertices, and solids use one selector shape:
 

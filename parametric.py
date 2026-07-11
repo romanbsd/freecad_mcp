@@ -25,6 +25,11 @@ _TOKEN = re.compile(r"\$([A-Za-z_]\w*)")
 _SUBELEMENTS = {
     "face": "Faces", "edge": "Edges", "vertex": "Vertexes", "solid": "Solids",
 }
+_MATE_MODES = (
+    "rigid", "coincident", "offset", "angle",
+    "revolute", "slider", "cylindrical", "planar",
+)
+_FULL_MATE_MODES = ("rigid", "coincident", "offset", "angle")
 
 
 def _normalize_common_feature(feat):
@@ -2875,11 +2880,13 @@ def _build_component_instance(doc, host, feat, id_map):
     obj.addProperty("App::PropertyInteger", "SourceRevision", "Assembly")
     obj.addProperty("App::PropertyString", "SourceSignature", "Assembly")
     obj.addProperty("App::PropertyBool", "Suppressed", "Assembly")
+    obj.addProperty("App::PropertyBool", "Grounded", "Assembly")
     obj.addProperty("App::PropertyString", "LastRefresh", "Assembly")
     obj.HostName = host.Name
     obj.InstanceSpec = json.dumps(feat)
     obj.SourceComponentId = component_id
     obj.Suppressed = bool(feat.get("suppressed", False))
+    obj.Grounded = bool(feat.get("grounded", False))
     obj.Proxy = _ComponentInstanceProxy()
     obj.Proxy.execute(obj)
     _apply_common_placement(obj, feat, host, id_map)
@@ -2929,8 +2936,8 @@ def _endpoint_world_frame(endpoint, id_map, require_instance=False):
 
 def _mate_desired_frame(target_frame, spec, host):
     mode = str(spec.get("mode", "rigid")).lower()
-    if mode not in ("rigid", "coincident", "offset", "angle"):
-        raise ValueError("mate mode must be rigid, coincident, offset, or angle")
+    if mode not in _MATE_MODES:
+        raise ValueError("unsupported mate mode %r" % mode)
     offsets = spec.get("offset") or spec.get("offsets") or {}
     if isinstance(offsets, (list, tuple)):
         offsets = dict(zip(("u", "v", "normal"), offsets))
@@ -2947,7 +2954,13 @@ def _mate_desired_frame(target_frame, spec, host):
     return target_frame.multiply(App.Placement(local_offset, rotation))
 
 
-def _apply_mate(obj, spec, id_map, host):
+def _rotation_vector(rotation):
+    axis = rotation.Axis
+    angle = float(rotation.Angle)
+    return [axis.x * angle, axis.y * angle, axis.z * angle]
+
+
+def _mate_residual(spec, id_map, host, placement=None):
     moving_endpoint = _mate_endpoint(spec.get("moving"), spec.get("moving_frame"))
     target_endpoint = _mate_endpoint(spec.get("target"), spec.get("target_frame"))
     moving_world, moving, moving_local = _endpoint_world_frame(
@@ -2957,24 +2970,76 @@ def _apply_mate(obj, spec, id_map, host):
     if moving is target:
         raise ValueError("mate cannot constrain an instance to itself")
     desired = _mate_desired_frame(target_world, spec, host)
-    moving.Placement = desired.multiply(moving_local.inverse())
-    actual = moving.Placement.multiply(moving_local)
-    error = desired.inverse().multiply(actual)
+    actual = (placement or moving.Placement).multiply(moving_local)
+    relative = desired.inverse().multiply(actual)
+    translation = [relative.Base.x, relative.Base.y, relative.Base.z]
+    rotation = _rotation_vector(relative.Rotation)
+    mode = str(spec.get("mode", "rigid")).lower()
+    if mode in _FULL_MATE_MODES:
+        residual = translation + rotation
+    elif mode == "revolute":
+        residual = translation + rotation[:2]
+    elif mode == "slider":
+        residual = translation[:2] + rotation
+    elif mode == "cylindrical":
+        residual = translation[:2] + rotation[:2]
+    else:  # planar
+        residual = [translation[2]] + rotation[:2]
+    return residual, moving, target, moving_local, desired, relative
+
+
+def _joint_projection(mode, relative):
+    twist_vector = relative.Rotation.multVec(App.Vector(1, 0, 0))
+    twist = math.degrees(math.atan2(twist_vector.y, twist_vector.x))
+    twist_rotation = App.Rotation(App.Vector(0, 0, 1), twist)
+    if mode in _FULL_MATE_MODES:
+        return App.Placement()
+    if mode == "revolute":
+        return App.Placement(App.Vector(), twist_rotation)
+    if mode == "slider":
+        return App.Placement(App.Vector(0, 0, relative.Base.z), App.Rotation())
+    if mode == "cylindrical":
+        return App.Placement(App.Vector(0, 0, relative.Base.z), twist_rotation)
+    return App.Placement(
+        App.Vector(relative.Base.x, relative.Base.y, 0), twist_rotation
+    )
+
+
+def _apply_mate(obj, spec, id_map, host, project=True):
+    if not hasattr(obj, "Residuals"):
+        obj.addProperty("App::PropertyString", "Residuals", "Assembly")
+    residual, moving, target, moving_local, desired, relative = \
+        _mate_residual(spec, id_map, host)
+    mode = str(spec.get("mode", "rigid")).lower()
+    if project and not bool(getattr(moving, "Grounded", False)):
+        allowed = _joint_projection(mode, relative)
+        actual = desired.multiply(allowed)
+        moving.Placement = actual.multiply(moving_local.inverse())
+        residual, moving, target, moving_local, desired, relative = \
+            _mate_residual(spec, id_map, host)
     obj.Moving = moving
     obj.Target = target
     obj.DesiredPlacement = desired
-    obj.PositionError = error.Base.Length
-    obj.AngleError = math.degrees(abs(error.Rotation.Angle))
+    position_terms = residual[:3] if mode in _FULL_MATE_MODES or \
+        mode == "revolute" else residual[:2] if mode in \
+        ("slider", "cylindrical") else residual[:1]
+    angle_terms = residual[len(position_terms):]
+    obj.PositionError = math.sqrt(sum(value * value for value in position_terms))
+    obj.AngleError = math.degrees(
+        math.sqrt(sum(value * value for value in angle_terms))
+    )
+    obj.Residuals = json.dumps(residual)
     tolerance = _quantity_value(spec.get("tolerance", "0.001 mm"), host)
     angle_tolerance = _quantity_value(spec.get("angle_tolerance", "0.001 deg"), host)
     obj.Satisfied = obj.PositionError <= tolerance and obj.AngleError <= angle_tolerance
     obj.Status = "satisfied" if obj.Satisfied else "unsatisfied"
+    return residual
 
 
 def _build_mate(doc, host, feat, id_map):
     feat.setdefault("role", "construction")
     mode = str(feat.get("mode", "rigid")).lower()
-    allowed_modes = ["rigid", "coincident", "offset", "angle"]
+    allowed_modes = list(_MATE_MODES)
     if mode not in allowed_modes:
         raise ValueError(
             "mate %r mode must be one of %s"
@@ -2989,6 +3054,7 @@ def _build_mate(doc, host, feat, id_map):
     obj.addProperty("App::PropertyPlacement", "DesiredPlacement", "Assembly")
     obj.addProperty("App::PropertyLength", "PositionError", "Assembly")
     obj.addProperty("App::PropertyAngle", "AngleError", "Assembly")
+    obj.addProperty("App::PropertyString", "Residuals", "Assembly")
     obj.addProperty("App::PropertyBool", "Satisfied", "Assembly")
     obj.addProperty("App::PropertyString", "Status", "Assembly")
     obj.HostName = host.Name
@@ -3015,53 +3081,136 @@ def _validate_assembly_graph(features, component_id=None):
             if source and source == component_id:
                 raise ValueError("component cannot instantiate itself")
 
-    constrained = {}
     targets = {}
     for feature in features:
         if feature.get("type") != "mate":
             continue
         mode = str(feature.get("mode", "rigid")).lower()
-        if mode not in ("rigid", "coincident", "offset", "angle"):
+        if mode not in _MATE_MODES:
             raise ValueError(
-                "mate %r mode must be rigid, coincident, offset, or angle"
-                % feature["id"]
+                "mate %r mode must be one of %s" %
+                (feature["id"], ", ".join(_MATE_MODES))
             )
         moving = _mate_instance_id(feature.get("moving"))
         target = _mate_instance_id(feature.get("target"))
         if not moving or moving not in by_id or \
                 by_id[moving].get("type") != "component_instance":
             raise ValueError("mate moving endpoint must name a component_instance")
-        if moving in constrained:
-            raise ValueError(
-                "instance %r is over-constrained by mates %r and %r" %
-                (moving, constrained[moving], feature["id"])
-            )
-        constrained[moving] = feature["id"]
         if target:
             if target not in by_id or by_id[target].get("type") != "component_instance":
                 raise ValueError("mate target instance %r is invalid" % target)
             if target == moving:
                 raise ValueError("mate cannot constrain an instance to itself")
-            targets[moving] = target
+            targets.setdefault(moving, set()).add(target)
 
-    for start in targets:
-        seen = set()
-        current = start
-        while current in targets:
-            if current in seen:
-                raise ValueError("assembly mate dependency cycle at %r" % current)
-            seen.add(current)
-            current = targets[current]
+    visiting, visited = set(), set()
+
+    def visit(instance_id):
+        if instance_id in visiting:
+            raise ValueError("assembly mate dependency cycle at %r" % instance_id)
+        if instance_id in visited:
+            return
+        visiting.add(instance_id)
+        for target_id in targets.get(instance_id, set()):
+            visit(target_id)
+        visiting.remove(instance_id)
+        visited.add(instance_id)
+
+    for instance_id in targets:
+        visit(instance_id)
+
+
+def _matrix_rank(matrix, tolerance=1e-7):
+    if not matrix:
+        return 0
+    work = [list(map(float, row)) for row in matrix]
+    rows, columns = len(work), len(work[0])
+    rank = pivot_row = 0
+    for column in range(columns):
+        pivot = max(range(pivot_row, rows),
+                    key=lambda row: abs(work[row][column]))
+        if abs(work[pivot][column]) <= tolerance:
+            continue
+        work[pivot_row], work[pivot] = work[pivot], work[pivot_row]
+        divisor = work[pivot_row][column]
+        work[pivot_row] = [value / divisor for value in work[pivot_row]]
+        for row in range(rows):
+            if row == pivot_row:
+                continue
+            factor = work[row][column]
+            if abs(factor) <= tolerance:
+                continue
+            work[row] = [value - factor * pivot_value
+                         for value, pivot_value in
+                         zip(work[row], work[pivot_row])]
+        rank += 1
+        pivot_row += 1
+        if pivot_row == rows:
+            break
+    return rank
+
+
+def _instance_constraint_state(features, id_map, host, instance_id):
+    instance = id_map[instance_id]
+    mates = [feature for feature in features
+             if feature.get("type") == "mate" and
+             _mate_instance_id(feature.get("moving")) == instance_id]
+    if bool(getattr(instance, "Grounded", False)):
+        return {"grounded": True, "constraint_count": len(mates),
+                "constraint_rank": 6, "degrees_of_freedom": 0}
+    if not mates:
+        return {"grounded": False, "constraint_count": 0,
+                "constraint_rank": 0, "degrees_of_freedom": 6}
+
+    base = _placement_from_data(_placement_data(instance.Placement))
+
+    def residual(placement):
+        values = []
+        for mate in mates:
+            values.extend(_mate_residual(
+                mate, id_map, host, placement=placement
+            )[0])
+        return values
+
+    baseline = residual(base)
+    columns = []
+    translation_step = 0.01
+    rotation_step = 1e-4
+    for axis in (App.Vector(1, 0, 0), App.Vector(0, 1, 0),
+                 App.Vector(0, 0, 1)):
+        candidate = _placement_from_data(_placement_data(base))
+        candidate.Base = candidate.Base + axis * translation_step
+        columns.append([(value - original) / translation_step
+                        for value, original in zip(residual(candidate), baseline)])
+    for axis in (App.Vector(1, 0, 0), App.Vector(0, 1, 0),
+                 App.Vector(0, 0, 1)):
+        candidate = _placement_from_data(_placement_data(base))
+        delta = App.Rotation(axis, math.degrees(rotation_step))
+        candidate.Rotation = delta.multiply(candidate.Rotation)
+        columns.append([(value - original) / rotation_step
+                        for value, original in zip(residual(candidate), baseline)])
+    jacobian = [list(row) for row in zip(*columns)]
+    rank = min(6, _matrix_rank(jacobian))
+    return {"grounded": False, "constraint_count": len(mates),
+            "constraint_rank": rank, "degrees_of_freedom": 6 - rank}
 
 
 def _apply_graph_mates(features, id_map, host):
-    applied = []
-    for feature in features:
-        if feature.get("type") != "mate":
-            continue
-        _apply_mate(id_map[feature["id"]], feature, id_map, host)
-        applied.append(feature["id"])
-    return applied
+    mates = [feature for feature in features if feature.get("type") == "mate"]
+    for _ in range(12):
+        maximum = 0.0
+        for feature in mates:
+            residual = _apply_mate(
+                id_map[feature["id"]], feature, id_map, host, project=True
+            )
+            maximum = max(maximum, max([abs(value) for value in residual] or [0]))
+        if maximum <= 1e-9:
+            break
+    for feature in mates:
+        _apply_mate(
+            id_map[feature["id"]], feature, id_map, host, project=False
+        )
+    return [feature["id"] for feature in mates]
 
 
 # --------------------------------------------------------------------------- #
@@ -3351,12 +3500,21 @@ def op_get_sketch_status(component_id, feature_id):
 
 def op_get_assembly_status(component_id):
     doc, container, meta = _resolve(component_id)
+    host = _host(doc, meta)
+    graph = meta.get("build_graph", [])
+    id_map = {
+        feature_id: doc.getObject(name)
+        for feature_id, name in meta.get("id_map", {}).items()
+    }
     instances, mates = [], []
-    for feature in meta.get("build_graph", []):
+    for feature in graph:
         obj = doc.getObject(meta.get("id_map", {}).get(feature["id"], ""))
         if obj is None:
             continue
         if feature.get("type") == "component_instance":
+            constraint_state = _instance_constraint_state(
+                graph, id_map, host, feature["id"]
+            )
             instances.append({
                 "id": feature["id"], "object": obj.Name,
                 "source_component_id": obj.SourceComponentId,
@@ -3366,8 +3524,10 @@ def op_get_assembly_status(component_id):
                 "variant": feature.get("variant"),
                 "parameters": dict(feature.get("parameters") or {}),
                 "suppressed": bool(obj.Suppressed),
+                "grounded": bool(getattr(obj, "Grounded", False)),
                 "last_refresh": obj.LastRefresh,
                 "placement": _placement_data(obj.Placement),
+                **constraint_state,
             })
         elif feature.get("type") == "mate":
             mates.append({
@@ -3377,10 +3537,22 @@ def op_get_assembly_status(component_id):
                 "status": obj.Status,
                 "position_error": float(obj.PositionError.Value),
                 "angle_error": float(obj.AngleError.Value),
+                "residuals": json.loads(obj.Residuals or "[]"),
             })
+    overconstrained = any(not mate["satisfied"] for mate in mates)
+    degrees_of_freedom = sum(
+        instance["degrees_of_freedom"] for instance in instances
+        if not instance["suppressed"]
+    )
+    underconstrained = degrees_of_freedom > 0 and not overconstrained
     return {
         "component_id": component_id, "instances": instances, "mates": mates,
-        "satisfied": all(mate["satisfied"] for mate in mates),
+        "satisfied": not overconstrained,
+        "degrees_of_freedom": degrees_of_freedom,
+        "underconstrained": underconstrained,
+        "overconstrained": overconstrained,
+        "solver_status": "overconstrained" if overconstrained else
+        "underconstrained" if underconstrained else "fully_constrained",
     }
 
 
@@ -3623,12 +3795,13 @@ FEATURE_SCHEMAS = {
             "variant": {"description": "named source component variant"},
             "parameters": {"description": "per-instance source parameter overrides"},
             "suppressed": {"type": "boolean", "default": False},
+            "grounded": {"type": "boolean", "default": False},
         },
     },
     "mate": {
         "required": ["id", "moving", "target"],
         "properties": {
-            "mode": {"enum": ["rigid", "coincident", "offset", "angle"]},
+            "mode": {"enum": list(_MATE_MODES)},
             "moving": {"description": "instance endpoint with optional source frame"},
             "target": {"description": "instance endpoint or local feature endpoint"},
             "moving_frame": {"type": "string"},
@@ -3815,7 +3988,7 @@ def op_capabilities():
     from patterns import list_patterns
     import FreeCAD
     return {
-        "api_version": "2.7",
+        "api_version": "2.8",
         "freecad_version": ".".join(FreeCAD.Version()[:3]),
         "feature_types": op_list_feature_types()["feature_types"],
         "patterns": list_patterns(),
@@ -3842,8 +4015,9 @@ def op_capabilities():
             "mirror_pattern", "path_pattern",
         ],
         "assembly_instances": True,
-        "mate_modes": ["rigid", "coincident", "offset", "angle"],
-        "assembly_solver": "deterministic_single_mate",
+        "mate_modes": list(_MATE_MODES),
+        "assembly_solver": "deterministic_multi_constraint",
+        "assembly_dof_analysis": True,
         "sketch_constraints": [
             "coincident", "horizontal", "vertical", "parallel", "perpendicular",
             "equal", "concentric", "tangent", "point_on_object", "symmetric",

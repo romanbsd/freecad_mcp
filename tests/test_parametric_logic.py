@@ -238,7 +238,7 @@ def test_capabilities_advertise_named_references_and_sketches(parametric, monkey
     monkeypatch.setitem(sys.modules, "FreeCAD", fake_freecad)
     capabilities = parametric.op_capabilities()
 
-    assert capabilities["api_version"] == "2.7"
+    assert capabilities["api_version"] == "2.8"
     assert capabilities["named_geometry_references"] is True
     assert capabilities["dynamic_external_geometry"] is True
     assert capabilities["named_datum_frames"] is True
@@ -255,7 +255,9 @@ def test_capabilities_advertise_named_references_and_sketches(parametric, monkey
     ]
     assert capabilities["mate_modes"] == [
         "rigid", "coincident", "offset", "angle",
+        "revolute", "slider", "cylindrical", "planar",
     ]
+    assert capabilities["assembly_dof_analysis"] is True
     assert "radius" in capabilities["sketch_constraints"]
 
 
@@ -484,7 +486,9 @@ def test_assembly_features_are_described_and_track_dependencies(parametric):
     assert instance_schema["required"] == ["id", "component_id"]
     assert mate_schema["properties"]["mode"]["enum"] == [
         "rigid", "coincident", "offset", "angle",
+        "revolute", "slider", "cylindrical", "planar",
     ]
+    assert instance_schema["properties"]["grounded"]["default"] is False
     assert parametric._feature_inputs({
         "id": "locate", "type": "mate",
         "moving": {"instance": "moving", "frame": "mount"},
@@ -492,16 +496,17 @@ def test_assembly_features_are_described_and_track_dependencies(parametric):
     }) == ["moving", "assembly_origin"]
 
 
-def test_assembly_graph_rejects_overconstraints_and_cycles(parametric):
+def test_assembly_graph_accepts_multiple_mates_but_rejects_cycles(parametric):
     instances = [
         {"id": "a", "type": "component_instance", "component_id": "component://D/A"},
         {"id": "b", "type": "component_instance", "component_id": "component://D/B"},
     ]
-    with pytest.raises(ValueError, match="over-constrained"):
-        parametric._validate_assembly_graph(instances + [
-            {"id": "m1", "type": "mate", "moving": "a", "target": "b"},
-            {"id": "m2", "type": "mate", "moving": "a", "target": "b"},
-        ])
+    parametric._validate_assembly_graph(instances + [
+        {"id": "m1", "type": "mate", "mode": "revolute",
+         "moving": "a", "target": "b"},
+        {"id": "m2", "type": "mate", "mode": "planar",
+         "moving": "a", "target": "b"},
+    ])
     with pytest.raises(ValueError, match="dependency cycle"):
         parametric._validate_assembly_graph(instances + [
             {"id": "m1", "type": "mate", "moving": "a", "target": "b"},
@@ -518,6 +523,16 @@ def test_assembly_graph_rejects_overconstraints_and_cycles(parametric):
               "component_id": "component://D/A"}],
             "component://D/A",
         )
+
+
+def test_constraint_rank_counts_only_independent_rows(parametric):
+    assert parametric._matrix_rank([
+        [1, 0, 0],
+        [0, 1, 0],
+        [1, 1, 0],
+    ]) == 2
+    assert parametric._matrix_rank([[1, 0], [0, 1]]) == 2
+    assert parametric._matrix_rank([]) == 0
 
 
 def test_manufacturing_nested_selectors_expand_named_references(parametric):

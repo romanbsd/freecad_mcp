@@ -263,7 +263,8 @@ matching source datum frames:
 [
   {
     "id": "fixed", "type": "component_instance",
-    "component_id": "component://Parts/Bracket", "output": "body"
+    "component_id": "component://Parts/Bracket", "output": "body",
+    "grounded": true
   },
   {
     "id": "moving", "type": "component_instance",
@@ -283,12 +284,19 @@ matching source datum frames:
 - `coincident` aligns origins and opposes normals unless `opposed=false`.
 - `offset` adds local target-frame `u`, `v`, and `normal` displacement.
 - `angle` rotates around the target-frame normal.
+- `revolute` leaves rotation around the common frame axis free.
+- `slider` leaves translation along the common axis free.
+- `cylindrical` leaves axial translation and rotation free.
+- `planar` leaves two in-plane translations and normal-axis rotation free.
 
-Each moving instance may have one mate. Cycles and duplicate positional mates
-fail before geometry is changed. Instances snapshot source geometry and datum
-frames, so assemblies work before source documents are saved and survive FCStd
-reopen. Call `refresh_assembly` after changing a source component; use
-`get_assembly_status` to inspect source signatures and mate residuals.
+Moving instances may have multiple mates. Consistent redundant constraints are
+accepted; incompatible constraints remain visible with residuals and an
+`overconstrained` solver status. `get_assembly_status` also returns each
+instance's constraint rank and remaining degrees of freedom. Ground one or more
+reference instances with `grounded=true`. Cycles and self-mates still fail
+before geometry is changed. Instances snapshot source geometry and datum frames,
+so assemblies work before source documents are saved and survive FCStd reopen.
+Call `refresh_assembly` after changing a source component.
 
 ### Named geometry references
 

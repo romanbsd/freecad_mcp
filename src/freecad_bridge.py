@@ -469,8 +469,7 @@ async def get_sketch_status(component_id: str, feature_id: str) -> Any:
 
 @mcp.tool()
 async def get_assembly_status(component_id: str) -> Any:
-    """Inspect component instances and deterministic frame mates, including
-    source revisions, placements, residual errors, and satisfaction state."""
+    """Inspect assembly DOF, constraint rank, residuals, and solver state."""
     return await _request({"type": "get_assembly_status", "params": {
         "component_id": component_id}})
 
