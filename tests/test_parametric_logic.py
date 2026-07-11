@@ -256,9 +256,39 @@ def test_profile_tool_schemas_describe_generic_sections(parametric):
     ]
     assert pad["schema"]["required"] == ["id", "length"]
     assert pocket["schema"]["required"] == ["id", "base", "length"]
+    sections = profile["schema"]["properties"]["sections"]
+    assert "fused" in sections["description"]
+    section_types = {
+        option["type"] for option in sections["items"]["one_of"]
+    }
+    assert section_types == {"circle", "rectangle", "polygon", "slot"}
+    circle = next(
+        option for option in sections["items"]["one_of"]
+        if option["type"] == "circle"
+    )
+    slot = next(
+        option for option in sections["items"]["one_of"]
+        if option["type"] == "slot"
+    )
+    assert circle["one_of"] == ["radius", "diameter"]
+    assert slot["one_of"] == ["radius", "width"]
+    assert pocket["schema"]["properties"]["sections"] == sections
     assert profile["schema"]["properties"]["support"]
     assert cut["schema"]["alias_of"] == "pocket"
     assert cut["schema"]["deprecated"] is True
+
+
+def test_profile_radius_accepts_clean_size_aliases(parametric):
+    assert parametric._profile_radius({"radius": 3}, None, "circle") == 3
+    assert parametric._profile_radius({"diameter": 6}, None, "circle") == 3
+    assert parametric._profile_radius({"width": 3.5}, None, "slot") == 1.75
+
+    with pytest.raises(ValueError, match="exactly one"):
+        parametric._profile_radius(
+            {"radius": 3, "diameter": 6}, None, "circle"
+        )
+    with pytest.raises(ValueError, match="positive"):
+        parametric._profile_radius({"width": 0}, None, "slot")
 
 
 def test_common_feature_schema_uses_one_selector_and_placement_contract(parametric):

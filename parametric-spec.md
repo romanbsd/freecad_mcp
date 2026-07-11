@@ -423,7 +423,8 @@ reports those sketches in `remapped_external_geometry`.
 
 Reusable 2D profiles can be placed on a principal plane or attached to a
 planar face. Profile sections support `rectangle`, `circle`, `polygon`, and
-`slot`; overlapping sections are fused into one face.
+`slot`; overlapping sections are fused into one face. Circles accept `radius`
+or `diameter`; slots accept `radius` or full `width`.
 
 ```json
 {

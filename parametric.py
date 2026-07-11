@@ -868,6 +868,8 @@ def _rectangle_face(spec, plane, host, frame=None):
         x0, y0 = cx - sx / 2, cy - sy / 2
     if spec.get("size") is not None:
         sx, sy = _profile_point(spec["size"], host)
+        if sx <= 0 or sy <= 0:
+            raise ValueError("rectangle profile size must be positive")
         x1, y1 = x0 + sx, y0 + sy
     else:
         x1, y1 = _profile_point(spec["opposite"], host)
@@ -879,10 +881,26 @@ def _rectangle_face(spec, plane, host, frame=None):
     return Part.Face(Part.makePolygon(pts))
 
 
+def _profile_radius(spec, host, section_type):
+    has_radius = spec.get("radius") is not None
+    alias = "diameter" if section_type == "circle" else "width"
+    has_alias = spec.get(alias) is not None
+    if has_radius == has_alias:
+        raise ValueError(
+            "%s profile requires exactly one of radius or %s" %
+            (section_type, alias)
+        )
+    value = _quantity_value(spec["radius"] if has_radius else spec[alias], host)
+    radius = value if has_radius else value / 2.0
+    if radius <= 0:
+        raise ValueError("%s profile radius must be positive" % section_type)
+    return radius
+
+
 def _circle_face(spec, plane, host, frame=None):
     import Part
     center = _profile_point(spec.get("center", [0, 0]), host)
-    radius = _quantity_value(spec.get("radius"), host)
+    radius = _profile_radius(spec, host, "circle")
     normal = frame["normal"] if frame is not None else \
         _profile_axis(_normal_axis_for_plane(plane), 1)
     return Part.Face(Part.Wire(Part.makeCircle(
@@ -906,7 +924,9 @@ def _slot_face(spec, plane, host, frame=None):
     import Part
     start = _profile_point(spec["start"], host)
     end = _profile_point(spec["end"], host)
-    radius = _quantity_value(spec.get("radius"), host)
+    radius = _profile_radius(spec, host, "slot")
+    if start == end:
+        raise ValueError("slot profile start and end must differ")
     if abs(start[0] - end[0]) >= abs(start[1] - end[1]):
         rect = {
             "corner": [min(start[0], end[0]), start[1] - radius],
@@ -3984,9 +4004,35 @@ COMMON_FEATURE_PROPERTIES = {
 }
 
 PROFILE_INPUTS = ["profile", "profile_id", "points", "sections", "profile_spec"]
+PROFILE_SECTION_SCHEMA = {
+    "description": "Closed filled sections are fused into one compound profile",
+    "one_of": [
+        {"type": "circle", "required": ["type", "center"],
+         "one_of": ["radius", "diameter"],
+         "properties": {"center": {"type": "vector2"},
+                        "radius": {}, "diameter": {}}},
+        {"type": "rectangle", "required": ["type", "size"],
+         "one_of": ["corner", "center"],
+         "properties": {"corner": {"type": "vector2"},
+                        "center": {"type": "vector2"},
+                        "size": {"type": "vector2"}}},
+        {"type": "polygon", "required": ["type", "points"],
+         "properties": {"points": {"items": {"type": "vector2"}}}},
+        {"type": "slot", "required": ["type", "start", "end"],
+         "one_of": ["radius", "width"],
+         "properties": {"start": {"type": "vector2"},
+                        "end": {"type": "vector2"},
+                        "radius": {}, "width": {}}},
+    ],
+}
+PROFILE_SECTIONS_PROPERTY = {
+    "description": "Closed filled sections, fused in declaration order",
+    "items": PROFILE_SECTION_SCHEMA,
+}
 PROFILE_OPERATION_PROPERTIES = {
     "profile": {"description": "graph feature id containing a profile face"},
     "profile_id": {"description": "id from component profile_definitions"},
+    "sections": PROFILE_SECTIONS_PROPERTY,
     "boolean": {"enum": ["fuse", "cut", "common"]},
 }
 
@@ -4094,7 +4140,7 @@ FEATURE_SCHEMAS = {
             "support": {"description": "optional planar-face support selector"},
             "reversed": {"type": "boolean", "default": False},
             "symmetric": {"type": "boolean", "default": False},
-            "sections": {"items": {"type": "circle|rectangle|polygon|slot"}},
+            "sections": PROFILE_SECTIONS_PROPERTY,
         },
     },
     "profile_2d": {
@@ -4103,7 +4149,7 @@ FEATURE_SCHEMAS = {
         "properties": {
             "plane": {"enum": ["XY", "XZ", "YZ"], "default": "XY"},
             "support": {"description": "optional planar-face support selector"},
-            "sections": {"items": {"type": "circle|rectangle|polygon|slot"}},
+            "sections": PROFILE_SECTIONS_PROPERTY,
         },
     },
     "sketch_2d": {
@@ -4146,6 +4192,7 @@ FEATURE_SCHEMAS = {
         "one_of": PROFILE_INPUTS,
         "properties": {
             "profile": {"description": "feature id of a profile_2d face"},
+            "sections": PROFILE_SECTIONS_PROPERTY,
             "plane": {"enum": ["XY", "XZ", "YZ"], "default": "XY"},
             "axis": {"enum": ["x", "y", "z"], "default": "normal to plane"},
             "support": {"description": "optional planar-face support selector; feature defaults to base"},
