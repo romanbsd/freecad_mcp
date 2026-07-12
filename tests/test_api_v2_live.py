@@ -668,6 +668,61 @@ def test_build_component_supports_parameterized_compound_pocket():
     assert after_center == pytest.approx(before["tool_center_y"] - 2.0)
 
 
+def test_measure_compound_balance_and_local_export(tmp_path):
+    doc_name = "MassPropertiesLive"
+    call("execute", code=(
+        "import FreeCAD as App, Part, importlib, freecad_mcp, parametric, types\n"
+        "_panel=freecad_mcp._panel\n"
+        "_server=_panel.server if _panel else None\n"
+        "importlib.reload(parametric); importlib.reload(freecad_mcp)\n"
+        "if _server:\n"
+        " _server.handle_measure=types.MethodType(freecad_mcp.FreeCADMCPServer.handle_measure,_server)\n"
+        " _server.handle_export=types.MethodType(freecad_mcp.FreeCADMCPServer.handle_export,_server)\n"
+        " _server._component_handlers=types.MethodType(freecad_mcp.FreeCADMCPServer._component_handlers,_server)\n"
+        "freecad_mcp._panel=_panel\n"
+        "if %r in App.listDocuments(): App.closeDocument(%r)\n"
+        "d=App.newDocument(%r)\n"
+        "o=d.addObject('Part::Feature','WeightedCompound')\n"
+        "o.Shape=Part.makeCompound([Part.makeBox(1,1,1),Part.makeBox(2,2,2,App.Vector(10,0,0))])\n"
+        "m=d.addObject('Part::Feature','MovedBox'); m.Shape=Part.makeBox(2,2,2)\n"
+        "m.Placement.Base=App.Vector(20,0,0); d.recompute()" %
+        (doc_name, doc_name, doc_name)
+    ))
+    measured = call("measure", a="WeightedCompound", about={
+        "point": [9.833333333333334, 17 / 18, 17 / 18],
+        "axis": [0, 0, 1], "tolerance": 1e-8,
+    })
+    assert measured["center_of_mass_source"] == "volume_weighted_solids"
+    assert measured["center_of_mass"][0] == pytest.approx(9.833333333333334)
+    assert measured["balance"]["balanced"] is True
+
+    path = str(tmp_path / "moved-local.step")
+    exported = call("export", names=["MovedBox"], path=path,
+                    coordinates="object_local")
+    assert exported["coordinates"] == "object_local"
+    bounds = call("execute", code=(
+        "s=Part.read(%r); b=s.BoundBox\n"
+        "result=[b.XMin,b.XMax,b.YMin,b.YMax,b.ZMin,b.ZMax]" % path
+    ))["result"]
+    assert bounds == pytest.approx([0, 2, 0, 2, 0, 2])
+
+    built = call("build_component", document={"name": "SolverProfileLive", "replace": True},
+        component={"name": "SolvedProfile", "parameters": [
+            {"name": "width", "type": "length", "default": "4 mm"}],
+        "features": [{"id": "profile", "type": "pad", "length": "2 mm",
+            "composition": [
+                {"operation": "union", "sections": [{"type": "rectangle",
+                    "center": [0, 0], "size": ["$width", "10 mm"]}]},
+                {"operation": "difference", "sections": [{"type": "circle",
+                    "center": [0, 0], "diameter": "2 mm"}]},
+            ]}], "outputs": ["profile"]})
+    solved = call("solve_parameter_target", component_id=built["component_id"],
+        parameter="width", bounds=["3 mm", "9 mm"],
+        target={"measurement": "volume", "value": 100}, tolerance=0.01)
+    assert solved["converged"] is True
+    assert solved["committed"] is False
+
+
 def test_proxy_survives_save_reload(tmp_path):
     """FeaturePython proxies must survive save/reopen and keep recomputing."""
     doc_name = "ProxyReload"

@@ -248,11 +248,11 @@ def test_profile_tool_schemas_describe_generic_sections(parametric):
     pocket = parametric.op_describe_feature_type("pocket")
 
     assert profile["schema"]["one_of"] == [
-        "profile_id", "points", "sections", "profile_spec"
+        "profile_id", "points", "sections", "composition", "profile_spec"
     ]
     assert cut["schema"]["required"] == ["id", "base", "length"]
     assert cut["schema"]["one_of"] == [
-        "profile", "profile_id", "points", "sections", "profile_spec"
+        "profile", "profile_id", "points", "sections", "composition", "profile_spec"
     ]
     assert pad["schema"]["required"] == ["id", "length"]
     assert pocket["schema"]["required"] == ["id", "base", "length"]
@@ -309,6 +309,20 @@ def test_parameter_refresh_executes_profile_boolean_tool(parametric):
 
     assert refreshed == ["keyhole"]
     assert calls == [tool]
+
+
+def test_scalar_parameter_solver_bisects_preview_measurement(parametric, monkeypatch):
+    def preview(component_id, values, **kwargs):
+        value = values["width"]
+        return {"after": {"volume": value * 2}}
+
+    monkeypatch.setattr(parametric, "op_set_component_parameters", preview)
+    solved = parametric.op_solve_parameter_target(
+        "component://Doc/Part", "width", [0, 20],
+        {"measurement": "volume", "value": 12}, tolerance=1e-6,
+    )
+    assert solved["converged"] is True
+    assert solved["value"] == pytest.approx(6)
 
 
 def test_common_feature_schema_uses_one_selector_and_placement_contract(parametric):

@@ -950,6 +950,8 @@ def _profile_spec(feat):
         spec["points"] = feat.get("points")
     if feat.get("sections") is not None:
         spec["sections"] = feat.get("sections")
+    if feat.get("composition") is not None:
+        spec["composition"] = feat.get("composition")
     if feat.get("plane") is not None:
         spec["plane"] = feat.get("plane")
     if feat.get("frame") is not None:
@@ -968,7 +970,8 @@ def _profile_definition_map(profile_definitions):
         spec = dict(definition)
         spec.pop("id", None)
         resolved = _profile_spec(spec) or {}
-        if resolved.get("points") is None and resolved.get("sections") is None:
+        if (resolved.get("points") is None and resolved.get("sections") is None
+                and resolved.get("composition") is None):
             raise ValueError("profile definition %r has no geometry" % profile_id)
         definitions[profile_id] = resolved
     return definitions
@@ -1021,6 +1024,31 @@ def _make_profile_shape(spec, host=None, support_obj=None, support_spec=None,
         if support_obj is not None else \
         (_frame_from_placement(frame_obj.Placement) if frame_obj is not None else
          (_static_frame(spec.get("frame"), host) if spec.get("frame") else None))
+    if spec.get("composition") is not None:
+        result = None
+        for index, entry in enumerate(spec["composition"]):
+            operation = entry.get("operation", "union")
+            child = dict(entry)
+            child.pop("operation", None)
+            child.setdefault("plane", plane)
+            shape = _make_profile_shape(
+                child, host, support_obj, support_spec, frame_obj
+            )
+            if index == 0:
+                if operation != "union":
+                    raise ValueError("first profile composition operation must be union")
+                result = shape
+            elif operation == "union":
+                result = result.fuse(shape)
+            elif operation == "difference":
+                result = result.cut(shape)
+            elif operation == "intersection":
+                result = result.common(shape)
+            else:
+                raise ValueError("unknown profile composition operation %r" % operation)
+        if result is None:
+            raise ValueError("profile composition needs at least one entry")
+        return result.removeSplitter()
     if spec.get("points") is not None:
         return _polygon_face(spec, plane, host, frame)
     faces = []
@@ -4003,7 +4031,7 @@ COMMON_FEATURE_PROPERTIES = {
     "selector": SELECTOR_SCHEMA,
 }
 
-PROFILE_INPUTS = ["profile", "profile_id", "points", "sections", "profile_spec"]
+PROFILE_INPUTS = ["profile", "profile_id", "points", "sections", "composition", "profile_spec"]
 PROFILE_SECTION_SCHEMA = {
     "description": "Closed filled sections are fused into one compound profile",
     "one_of": [
@@ -4029,10 +4057,19 @@ PROFILE_SECTIONS_PROPERTY = {
     "description": "Closed filled sections, fused in declaration order",
     "items": PROFILE_SECTION_SCHEMA,
 }
+PROFILE_COMPOSITION_PROPERTY = {
+    "description": "Ordered 2D Boolean composition; first operation must be union",
+    "items": {"required": ["operation"], "properties": {
+        "operation": {"enum": ["union", "difference", "intersection"]},
+        "points": {"items": {"type": "vector2"}},
+        "sections": PROFILE_SECTIONS_PROPERTY,
+    }},
+}
 PROFILE_OPERATION_PROPERTIES = {
     "profile": {"description": "graph feature id containing a profile face"},
     "profile_id": {"description": "id from component profile_definitions"},
     "sections": PROFILE_SECTIONS_PROPERTY,
+    "composition": PROFILE_COMPOSITION_PROPERTY,
     "boolean": {"enum": ["fuse", "cut", "common"]},
 }
 
@@ -4145,11 +4182,12 @@ FEATURE_SCHEMAS = {
     },
     "profile_2d": {
         "required": ["id"],
-        "one_of": ["profile_id", "points", "sections", "profile_spec"],
+        "one_of": ["profile_id", "points", "sections", "composition", "profile_spec"],
         "properties": {
             "plane": {"enum": ["XY", "XZ", "YZ"], "default": "XY"},
             "support": {"description": "optional planar-face support selector"},
             "sections": PROFILE_SECTIONS_PROPERTY,
+            "composition": PROFILE_COMPOSITION_PROPERTY,
         },
     },
     "sketch_2d": {
@@ -4952,6 +4990,72 @@ def op_preview_parameter_update(component_id, values, rebuild=True, validate=Tru
             "errors": [{"code": "PREVIEW_FAILED", "message": str(exc)}],
             "warnings": [],
         }
+
+
+def _nested_metric(data, path):
+    value = data
+    for part in path.split("."):
+        if isinstance(value, list):
+            value = value[int(part)]
+        else:
+            value = value[part]
+    return float(value)
+
+
+def op_solve_parameter_target(component_id, parameter, bounds, target,
+                              tolerance=0.01, max_iterations=40, commit=False):
+    """Solve one monotonic parameter against a numeric preview measurement."""
+    if not isinstance(bounds, (list, tuple)) or len(bounds) != 2:
+        raise ValueError("bounds must contain exactly two values")
+    metric = target.get("measurement")
+    if not metric:
+        raise ValueError("target.measurement is required")
+    target_value = float(target.get("value"))
+
+    def number(value):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            import FreeCAD as App
+            return float(App.Units.Quantity(str(value)).Value)
+
+    low, high = number(bounds[0]), number(bounds[1])
+    if low >= high:
+        raise ValueError("bounds must be increasing")
+
+    def evaluate(value):
+        preview = op_set_component_parameters(
+            component_id, {parameter: value}, rebuild=True, validate=False,
+            dry_run=True,
+        )
+        return _nested_metric(preview["after"], metric)
+
+    low_value, high_value = evaluate(low), evaluate(high)
+    increasing = high_value > low_value
+    if not (min(low_value, high_value) <= target_value <= max(low_value, high_value)):
+        raise ValueError("target is not bracketed by bound measurements")
+    current = low
+    measured = low_value
+    iterations = 0
+    for iterations in range(1, int(max_iterations) + 1):
+        current = (low + high) / 2.0
+        measured = evaluate(current)
+        if abs(measured - target_value) <= float(tolerance):
+            break
+        if (measured < target_value) == increasing:
+            low = current
+        else:
+            high = current
+    committed = None
+    if commit:
+        committed = op_set_component_parameters(
+            component_id, {parameter: current}, rebuild=True, validate=True
+        )
+    return {"component_id": component_id, "parameter": parameter,
+            "value": current, "measurement": metric, "measured": measured,
+            "target": target_value, "residual": measured - target_value,
+            "iterations": iterations, "converged": abs(measured-target_value) <= float(tolerance),
+            "committed": bool(commit), "update": committed}
 
 
 def op_get_component(component_id):

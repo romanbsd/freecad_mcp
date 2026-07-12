@@ -31,6 +31,47 @@ def error_response(code, message, recoverable=False):
     }
 
 
+def _shape_mass_properties(shape):
+    solids = list(getattr(shape, "Solids", []) or [])
+    if solids:
+        volume = sum(float(s.Volume) for s in solids)
+        if volume > 0:
+            coords = [
+                sum(float(s.Volume) * getattr(s.CenterOfMass, axis)
+                    for s in solids) / volume
+                for axis in ("x", "y", "z")
+            ]
+            return volume, coords, "volume_weighted_solids"
+    try:
+        c = shape.CenterOfMass
+        return float(shape.Volume), [c.x, c.y, c.z], "shape"
+    except Exception:
+        c = shape.BoundBox.Center
+        return float(shape.Volume), [c.x, c.y, c.z], "bounding_box"
+
+
+def _balance_about(com, volume, about):
+    if not about:
+        return None
+    point = [float(v) for v in about.get("point", [0, 0, 0])]
+    axis = [float(v) for v in about.get("axis", [0, 0, 1])]
+    length = math.sqrt(sum(v * v for v in axis))
+    if length <= 1e-12:
+        raise ValueError("measurement axis must be non-zero")
+    axis = [v / length for v in axis]
+    delta = [com[i] - point[i] for i in range(3)]
+    axial = sum(delta[i] * axis[i] for i in range(3))
+    radial = [delta[i] - axial * axis[i] for i in range(3)]
+    offset = math.sqrt(sum(v * v for v in radial))
+    return {
+        "point": point, "axis": axis,
+        "axial_offset": axial, "radial_offset": offset,
+        "radial_vector": radial,
+        "first_moment_vector": [volume * v for v in radial],
+        "balanced": offset <= float(about.get("tolerance", 0.01)),
+    }
+
+
 def _fit_dims(width, height, max_dim):
     """Scale (width, height) down so the larger side is <= max_dim, keeping
     aspect ratio. No-op when max_dim is falsy or the image already fits."""
@@ -816,7 +857,7 @@ class FreeCADMCPServer:
                 info["shape"] = {"error": str(e)}
         return info
 
-    def handle_export(self, names, path):
+    def handle_export(self, names, path, coordinates="document"):
         """Export objects to a file. Format is chosen by `path` extension:
         step/stp, iges/igs, brep/brp (BREP/STEP/IGES via Part), or stl."""
         doc = App.ActiveDocument
@@ -827,25 +868,44 @@ class FreeCADMCPServer:
         if missing:
             return {"error": f"unknown object(s): {missing}"}
 
+        if coordinates not in ("document", "object_local"):
+            return {"error": "coordinates must be document or object_local"}
         ext = os.path.splitext(path)[1].lower()
+        temporary = []
         try:
+            export_objs = objs
+            if coordinates == "object_local":
+                import Part
+                export_objs = []
+                for index, source in enumerate(objs):
+                    copy = doc.addObject("Part::Feature", "McpLocalExport%d" % index)
+                    # Shape geometry is stored in object-local coordinates;
+                    # document placement is carried separately on the object.
+                    copy.Shape = source.Shape.copy()
+                    copy.Placement = App.Placement()
+                    temporary.append(copy)
+                    export_objs.append(copy)
             if ext == ".stl":
                 import Part
-                shapes = [o.Shape for o in objs if hasattr(o, "Shape")]
+                shapes = [o.Shape for o in export_objs if hasattr(o, "Shape")]
                 if not shapes:
                     return {"error": "selected objects have no Shape to export"}
                 shape = shapes[0] if len(shapes) == 1 else Part.makeCompound(shapes)
                 shape.exportStl(path)
             elif ext in (".step", ".stp", ".iges", ".igs", ".brep", ".brp"):
                 import Part
-                Part.export(objs, path)
+                Part.export(export_objs, path)
             else:
                 return {"error": f"unsupported extension {ext!r}; "
                                  f"use step/iges/brep/stl"}
         except Exception as e:
             return {"error": str(e), "traceback": traceback.format_exc()}
+        finally:
+            for obj in temporary:
+                doc.removeObject(obj.Name)
 
-        return {"exported": names, "path": path, "bytes": os.path.getsize(path)}
+        return {"exported": names, "path": path, "bytes": os.path.getsize(path),
+                "coordinates": coordinates}
 
     def handle_list_types(self, filter=""):
         """All creatable object TypeIds (optionally substring-filtered)."""
@@ -906,7 +966,7 @@ class FreeCADMCPServer:
             if prev is not None:
                 App.setActiveDocument(prev.Name)
 
-    def handle_measure(self, a, b=None):
+    def handle_measure(self, a, b=None, about=None):
         """Measure one shape (volume/area/center/bbox) or the minimum distance
         between two shapes (by object Name)."""
         doc = App.ActiveDocument
@@ -919,19 +979,15 @@ class FreeCADMCPServer:
         if b is None:
             s = oa.Shape
             bb = s.BoundBox
-            # CenterOfMass isn't defined on every shape type (e.g. a Compound);
-            # fall back to the bounding-box center.
-            try:
-                c = s.CenterOfMass
-                com = [c.x, c.y, c.z]
-            except Exception:
-                com = [bb.Center.x, bb.Center.y, bb.Center.z]
+            volume, com, source = _shape_mass_properties(s)
             return {
                 "object": a,
                 "shape_type": s.ShapeType,
-                "volume": float(s.Volume),
+                "volume": volume,
                 "area": float(s.Area),
                 "center_of_mass": com,
+                "center_of_mass_source": source,
+                "balance": _balance_about(com, volume, about),
                 "bbox": {"xmin": bb.XMin, "ymin": bb.YMin, "zmin": bb.ZMin,
                          "xmax": bb.XMax, "ymax": bb.YMax, "zmax": bb.ZMax},
                 "bbox_size": [bb.XLength, bb.YLength, bb.ZLength],
@@ -1066,6 +1122,7 @@ class FreeCADMCPServer:
             "define_component": parametric.op_define_component,
             "set_component_parameters": parametric.op_set_component_parameters,
             "preview_parameter_update": parametric.op_preview_parameter_update,
+            "solve_parameter_target": parametric.op_solve_parameter_target,
             "get_component": parametric.op_get_component,
             "get_component_graph": parametric.op_get_component_graph,
             "list_geometry_references": parametric.op_list_geometry_references,

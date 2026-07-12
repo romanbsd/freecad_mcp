@@ -148,7 +148,7 @@ async def get_object(name: str, compact: bool = False) -> Any:
 
 
 @mcp.tool()
-async def export(names: list[str], path: str) -> Any:
+async def export(names: list[str], path: str, coordinates: str = "document") -> Any:
     """Export objects to a CAD file. The format is chosen by the file
     extension: .step/.stp, .iges/.igs, .brep/.brp, or .stl.
 
@@ -156,7 +156,9 @@ async def export(names: list[str], path: str) -> Any:
         names: object Names to export (from list_objects).
         path: absolute output path; its extension picks the format.
     """
-    return await _request({"type": "export", "params": {"names": names, "path": path}})
+    return await _request({"type": "export", "params": {
+        "names": names, "path": path, "coordinates": coordinates,
+    }})
 
 
 @mcp.tool()
@@ -181,7 +183,7 @@ async def describe_type(type_id: str) -> Any:
 
 
 @mcp.tool()
-async def measure(a: str, b: str = "") -> Any:
+async def measure(a: str, b: str = "", about: dict = None) -> Any:
     """Measure geometry. With one object: volume, area, center of mass, bbox.
     With two: the minimum distance between them, the closest points, and the
     overlap volume (overlap_volume>0 / clash=True means they interfere — use
@@ -191,8 +193,21 @@ async def measure(a: str, b: str = "") -> Any:
         a: object Name.
         b: optional second object Name; omit to measure `a` alone.
     """
-    params = {"a": a, "b": b or None}
+    params = {"a": a, "b": b or None, "about": about}
     return await _request({"type": "measure", "params": params})
+
+
+@mcp.tool()
+async def solve_parameter_target(
+    component_id: str, parameter: str, bounds: list, target: dict,
+    tolerance: float = 0.01, max_iterations: int = 40, commit: bool = False,
+) -> Any:
+    """Solve one bounded monotonic component parameter for a numeric target."""
+    return await _request({"type": "solve_parameter_target", "params": {
+        "component_id": component_id, "parameter": parameter,
+        "bounds": bounds, "target": target, "tolerance": tolerance,
+        "max_iterations": max_iterations, "commit": commit,
+    }})
 
 
 @mcp.tool()
