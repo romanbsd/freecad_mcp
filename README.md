@@ -217,5 +217,94 @@ Declarative features include `tube` and `grid_array`. Version 1 patterns include
 `lego.stud_grid` and `lego.brick_underside`; patterns expand into ordinary graph nodes
 so they remain inspectable and patchable.
 
+## API 2.9 capabilities
+
+The current server exposes a substantially broader FreeCAD surface than the original
+script-only bridge. Call `capabilities` to discover the running FreeCAD version,
+supported feature types, patterns, validation profiles, and response format; use
+`describe_feature_type` for the machine-readable schema of any declarative feature.
+
+### Direct document tools
+
+In addition to `execute`, `get_screenshot`, and document inspection, the bridge provides
+focused operations that avoid a one-off Python script for common edits:
+
+- `transform` moves or rotates an object, optionally into a copy.
+- `set_property` updates scalar, string, boolean, and enum data properties and recomputes.
+- `fillet` and `boolean` apply edge treatments and cut/fuse/common operations.
+- `duplicate` creates single copies or linear/polar arrays, optionally as a compound or fuse.
+- `measure` reports volume, area, center of mass, bounding boxes, minimum distance, closest
+  points, and overlap/clash volume.
+- `get_selection` / `set_selection` work with the GUI selection, while `get_subelements`
+  exposes indexed edges, faces, sketch geometry, and constraints for precise targeting.
+
+`get_screenshot` now supports standard and current camera views, target visibility,
+temporary transparency, custom camera/view sequences, dimension caps, and wireframe
+captures. `execute` keeps a persistent helper namespace, runs as one undo transaction,
+recomputes by default, and can return hardened document/object/view context plus
+recompute errors.
+
+### Declarative modeling
+
+Components are backed by FreeCAD's native expression and dependency engine. The feature
+catalog includes:
+
+- primitives and structure: `box`, `cylinder`, `tube`, `cone`, `prism`, `datum_frame`,
+  `transform`, booleans, `group`, and linked `component_instance` features;
+- profiles and solid operations: `profile_2d`, `sketch_2d`, `profile_extrude`, `pad`,
+  `pocket`, `extrude_cut`, `revolve`, `sweep`, and `loft`;
+- manufacturing features: `hole`, `shell`, `draft`, `rib`, `face_offset`,
+  `replace_face`, `fillet`, and `chamfer`;
+- patterns: unified linear, grid, polar, mirror, and path patterns, with legacy aliases
+  (`array`, `grid_array`, `linear_pattern`, `polar_pattern`, `mirror_pattern`, and
+  `path_pattern`). Use `list_patterns` and `expand_pattern` to inspect or expand
+  server-owned patterns into ordinary editable graph nodes.
+
+Features share common placement, frame, support, selector, role, and tag fields. Reusable
+geometry-only `profile_definitions` and named datum frames can be referenced without
+creating unnecessary document objects. `build_component` combines creation, definition,
+validation, and optional export in one request.
+
+### Validation, references, and diagnostics
+
+Components can carry custom design rules and use the built-in `geometry_baseline`,
+`cnc_plywood`, and `fdm` profiles. `validate_component` is read-only and returns build
+and validation status, severity-ranked findings, actual/required values, optional
+measurements, and suggested parameter changes. `check_fit` verifies containment,
+clearance, retainer interference, and sampled unrestrained translations.
+
+Named face, edge, vertex, and solid references are tracked across rebuilds. Use
+`list_geometry_references` and `resolve_geometry_reference` to inspect stable,
+remapped, ambiguous, missing, or untracked references. Native constrained sketches
+report solver status, degrees of freedom, constraint errors, and named geometry maps via
+`get_sketch_status`.
+
+The component workflow is revisioned and dependency-scoped:
+
+- `patch_component` applies optimistic-concurrency structural edits;
+- `preview_parameter_update` and `validate_patch` run the real rebuild path and abort
+  before committing changes;
+- `explain_rebuild` reports parameter and structural impact without rebuilding;
+- `get_feature_diagnostics` reports feature, shape, expression, reference, sketch, and
+  mate health.
+
+Preview operations do not overwrite the component's stored validation result. Use
+`get_component_graph(detail="full")` when an editable graph is needed, and
+`get_component` for the compact registry, current values, variants, dependency summary,
+and latest committed validation.
+
+### Assemblies and outputs
+
+Assemblies support grounded instances and deterministic multi-constraint mates, including
+rigid/coincident/offset/angle plus `revolute`, `slider`, `cylindrical`, and `planar`
+modes. `get_assembly_status` reports constraint count/rank, degrees of freedom, solver
+state, residuals, and bounds; `refresh_assembly` refreshes source instances and reapplies
+mates in dependency order.
+
+Use `create_component_variant` for named parameter overrides, `render_component` for
+standard views or optional plane/offset cross-sections, `export_component` for FCStd,
+STEP, STL, IGES, or BREP, and `export_bundle` for multi-format, per-output, and assembly
+exports.
+
 Bridge tools return native MCP objects rather than JSON encoded inside strings. Clients
 that parsed the old string response should remove that extra JSON decoding step.
