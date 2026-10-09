@@ -1,0 +1,3 @@
+interface:
+  display_name: "Spray-paint stencil"
+  short_description: "Create image-based stencils with FreeCAD MCP"

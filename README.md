@@ -77,6 +77,9 @@ To configure the MCP server, you can use a JSON format to specify the server set
 
 ## Features
 
+For image-derived spray-paint templates, see the reusable
+[stencil skill](.agents/skills/stencil/SKILL.md) (`$stencil`).
+
 The FreeCAD MCP exposes these tools, plus an MCP resource `freecad://guide/cookbook` with working FreeCAD scripting idioms the agent can read before writing geometry code:
 
 ### 1. `execute`
