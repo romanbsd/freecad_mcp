@@ -8,6 +8,7 @@ import asyncio
 import base64
 import os
 import sys
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 import freecad_bridge as fb
@@ -63,6 +64,20 @@ def test_handler_error_inside_success_envelope_is_raised():
         assert "no active document" in str(e)
     else:
         raise AssertionError("expected nested handler error to be raised")
+
+
+@pytest.mark.parametrize("tool,arguments,command", [
+    (fb.inspect_surface, {"component_id":"component://D/C","feature_id":"hood","samples":7,"stripe_axis":[0,1,0],"stripe_count":9}, "inspect_surface"),
+    (fb.cross_sections, {"component_id":"component://D/C","plane":"YZ","offsets":["15 mm"],"samples":8}, "cross_sections"),
+    (fb.reference_overlay, {"component_id":"component://D/C","image_path":"/tmp/ref.png","plane":"XZ","model_points":[[0,0],[10,0]],"pixel_points":[[10,20],[110,20]],"reflection_stripes":True}, "reference_overlay"),
+])
+def test_design_tools_preserve_wire_contract(monkeypatch, tool, arguments, command):
+    async def fake(payload):
+        assert payload["type"] == command
+        assert all(payload["params"][key] == value for key,value in arguments.items())
+        return {"status":"success","result":{"samples":[[1,2,3]],"units":"mm"}}
+    monkeypatch.setattr(fb,"send_to_freecad",fake)
+    assert asyncio.run(tool(**arguments)) == {"samples":[[1,2,3]],"units":"mm"}
 
 
 if __name__ == "__main__":

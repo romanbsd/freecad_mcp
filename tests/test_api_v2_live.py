@@ -366,7 +366,7 @@ def test_v2_component_workflow():
         "component_instance", "mate",
     }.issubset(feature_types)
     capabilities = call("capabilities")
-    assert capabilities["api_version"] == "2.9"
+    assert capabilities["api_version"] == "2.11"
     assert capabilities["structural_patch_mode"] == "dependency_scoped"
     assert capabilities["manufacturing_features"] == [
         "hole", "shell", "draft", "rib", "face_offset", "replace_face",

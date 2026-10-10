@@ -4,10 +4,18 @@ import base64
 import os
 import socket
 import json
+import sys
+from pathlib import Path
 from mcp.server.fastmcp import FastMCP, Image
 
 # Initialize FastMCP server
 mcp = FastMCP("freecad-bridge")
+
+# The desktop addon and local print adapters live beside src/, rather than
+# inside the bridge package. Resolve this installation, not the caller's cwd.
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 # Constants
 FREECAD_HOST = 'localhost'
@@ -564,7 +572,14 @@ async def describe_feature_type(feature_type: str) -> Any:
 @mcp.tool()
 async def capabilities() -> Any:
     """Return API, FreeCAD, feature, pattern, and validation capabilities."""
-    return await _request({"type": "capabilities"})
+    result = await _request({"type": "capabilities"})
+    result["local_print_pipeline"] = {
+        "slicer": "BambuStudio CLI", "execution": "bridge_host",
+        "orientation_providers": ["tweaker3", "stl-fit"],
+        "optional_external_dependencies": True, "automatic_install": False,
+        "printing_supported": False,
+    }
+    return result
 
 
 @mcp.tool()
@@ -589,6 +604,119 @@ async def check_fit(component_id: str, container: str, insert: str,
         "component_id": component_id, "container": container, "insert": insert,
         "retainers": retainers or [], "probe_steps": probe_steps,
         "tolerance": tolerance}})
+
+
+@mcp.tool()
+async def inspect_surface(component_id: str, feature_id: str = None, samples: int = 15,
+                          stripe_axis: list[float] = None, stripe_count: int = 12) -> Any:
+    """Sample trimmed faces' principal curvature (1/mm), normals and reflection stripes."""
+    return await _request({"type": "inspect_surface", "params": {
+        "component_id": component_id, "feature_id": feature_id, "samples": samples,
+        "stripe_axis": stripe_axis, "stripe_count": stripe_count}})
+
+
+@mcp.tool()
+async def inspect_printability(component_id: str, feature_id: str = None,
+                               min_wall: float = .8, samples_per_face: int = 5,
+                               build_direction: list[float] = None,
+                               overhang_angle: float = 45, max_samples: int = 2000) -> Any:
+    """Read-only sampled BRep thickness/overhang/island preflight in millimeters.
+
+    Reports unresolved regions; a sampled minimum is not a proven global minimum.
+    """
+    return await _request({"type": "inspect_printability", "params": {
+        "component_id": component_id, "feature_id": feature_id, "min_wall": min_wall,
+        "samples_per_face": samples_per_face, "build_direction": build_direction,
+        "overhang_angle": overhang_angle, "max_samples": max_samples}})
+
+
+@mcp.tool()
+async def inspect_attachment(component_id: str, feature_id: str, target_id: str,
+                              anchor: list[float], radius: float = 5,
+                              tolerance: float = .05) -> Any:
+    """Check trim contact within an intended local seat, not anywhere on the body."""
+    return await _request({"type": "inspect_attachment", "params": {
+        "component_id": component_id, "feature_id": feature_id, "target_id": target_id,
+        "anchor": anchor, "radius": radius, "tolerance": tolerance}})
+
+
+@mcp.tool()
+async def create_connector_features(component_id: str, prefix: str, male_base: str,
+                                     female_base: str, position: list[float], axis: str = "z",
+                                     kind: str = "pin_socket", diameter: float = 3,
+                                     length: float = 4, clearance: float = .2, embed: float = 1,
+                                     bottom_clearance: float = .2, lead_in: float = .3,
+                                     width: float = 6, thickness: float = 1.2) -> Any:
+    """Return editable pin/socket or glue-ledge features; does not modify the model.
+
+    Position is the socket entry plane; positive axis points into the receiver.
+    Clearance is per side in mm. Preview/apply returned features with patch_component.
+    Physical clearance calibration and geometric seating validation remain necessary.
+    """
+    return await _request({"type": "create_connector_features", "params": {
+        "component_id": component_id, "prefix": prefix, "male_base": male_base,
+        "female_base": female_base, "position": position, "axis": axis, "kind": kind,
+        "diameter": diameter, "length": length, "clearance": clearance, "embed": embed,
+        "bottom_clearance": bottom_clearance, "lead_in": lead_in,
+        "width": width, "thickness": thickness}})
+
+
+@mcp.tool()
+async def suggest_print_orientations(stl_path: str, backend: str, executable: list[str] = None,
+                                      build_volume: list[float] = None, timeout: float = 120,
+                                      seed: int = 42, samples: int = 5000,
+                                      max_candidates: int = 4) -> Any:
+    """Run an optional local Tweaker-3/stl-fit adapter on a copied envelope STL.
+
+    Returns original-size rigid matrices, not print-time savings. Dependencies
+    must be installed separately. Apply one matrix to the whole native assembly.
+    """
+    from orientation_candidates import suggest_print_orientations as suggest
+    return await asyncio.to_thread(suggest, stl_path, backend, executable,
+                                   build_volume, timeout, seed, samples, max_candidates)
+
+
+@mcp.tool()
+async def compare_print_candidates(project_path: str, output_dir: str, candidates: list[dict],
+                                    slicer_path: str = None, timeout: float = 300) -> Any:
+    """Measure local BambuStudio native-3MF candidates against an automatic baseline.
+
+    Input requires one whole assembly build item in millimeters.
+    Preserves source and colors. Candidates have name, print settings, and optional
+    rotation degrees or rotation_matrix from suggest_print_orientations. Isolates
+    artifacts, bounds execution time, rejects failed/outside-plate results, and
+    reports unavailable cost buckets as null. Does not send a print job.
+    """
+    from slicer_pipeline import compare_print_candidates as compare
+    return await asyncio.to_thread(compare, project_path, output_dir, candidates,
+                                   slicer_path, timeout)
+
+
+@mcp.tool()
+async def cross_sections(component_id: str, plane: str, offsets: list,
+                         feature_id: str = None, samples: int = 80) -> Any:
+    """Return section curves at XY(z), XZ(y), or YZ(x) planes in document coordinates."""
+    return await _request({"type": "cross_sections", "params": {
+        "component_id": component_id, "plane": plane, "offsets": offsets,
+        "feature_id": feature_id, "samples": samples}})
+
+
+@mcp.tool()
+async def reference_overlay(component_id: str, image_path: str, plane: str,
+                            model_points: list, pixel_points: list,
+                            feature_id: str = None, samples: int = 80,
+                            opacity: float = 0.55, reflection_stripes: bool = False) -> Any:
+    """Return self-contained SVG: calibrated PNG plus orthographic model edges.
+
+    Two projected model anchors (mm) and matching image anchors (pixels) set
+    uniform scale/rotation. XY/XZ/YZ specify projection axes; model y is up,
+    pixel y down. Optional reflection stripes are sampled face markers.
+    """
+    return await _request({"type": "reference_overlay", "params": {
+        "component_id": component_id, "image_path": image_path, "plane": plane,
+        "model_points": model_points, "pixel_points": pixel_points,
+        "feature_id": feature_id, "samples": samples, "opacity": opacity,
+        "reflection_stripes": reflection_stripes}})
 
 
 @mcp.tool()
@@ -656,8 +784,10 @@ async def render_component(component_id: str, view: str = "iso", section: dict =
 async def export_component(component_id: str, path: str, format: str = "FCStd",
                           variant: str = "") -> Any:
     """Export the component (or a named variant) to a file. Formats: FCStd,
-    STEP, STL, IGES, BREP. FCStd saves the whole document; the others export
-    the generated solids."""
+    STEP, STL, IGES, BREP, 3MF. FCStd saves the whole document; the others export
+    the generated solids. 3MF preserves named output meshes and their print
+    colors in document coordinates, with per-part mesh checks and roundtrip
+    verification before atomic replacement."""
     return await _request({"type": "export_component", "params": {
         "component_id": component_id, "path": path, "format": format,
         "variant": variant or None}})

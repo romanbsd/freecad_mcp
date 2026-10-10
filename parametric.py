@@ -1001,7 +1001,8 @@ def _resolve_loft_entries(entries, profile_definitions, id_map):
             if profile_name not in id_map:
                 raise ValueError("unknown loft profile feature %r" % profile_name)
             links.append(id_map[profile_name])
-            resolved.append({"link": len(links) - 1})
+            resolved.append({"link": len(links) - 1, "reverse": bool(entry.get("reverse", False)),
+                             "seam_edge": entry.get("seam_edge", 0)})
             continue
         profile_id = entry.get("profile_id")
         if not profile_id or profile_id not in profile_definitions:
@@ -1062,6 +1063,32 @@ def _make_profile_shape(spec, host=None, support_obj=None, support_spec=None,
             faces.append(_polygon_face(section, plane, host, frame))
         elif kind == "slot":
             faces.append(_slot_face(section, plane, host, frame))
+        elif kind == "curved":
+            from surface_design import curve
+            edges = []
+            for segment in section.get("curves", []):
+                points = [_plane_vector(plane, *_profile_point(p, host), frame)
+                          for p in segment.get("points", segment.get("poles", []))]
+                if segment.get("type") == "line":
+                    if len(points) != 2:
+                        raise ValueError("line segment requires two points")
+                    edges.append(Part.makeLine(*points))
+                else:
+                    segment = dict(segment)
+                    if segment.get("tangents"):
+                        segment["tangents"] = [
+                            [_quantity_value(x, host) for x in t] if t is not None else None
+                            for t in segment["tangents"]]
+                        # Tangents are local directions, not translated points.
+                        segment["tangents"] = [
+                            list(frame["u"]*t[0]+frame["v"]*t[1] if frame else
+                                 _plane_vector(plane, t[0], t[1], None)) if t is not None else None
+                            for t in segment["tangents"]]
+                    edges.append(curve(segment, points).toShape())
+            wire = Part.Wire(edges)
+            if not wire.isClosed():
+                raise ValueError("curved profile must be a closed connected wire")
+            faces.append(Part.Face(wire))
         else:
             raise ValueError("unknown profile section type %r" % kind)
     if not faces:
@@ -1151,14 +1178,27 @@ def _loft_wires(obj, host):
     wires = []
     for entry in entries:
         if "link" in entry:
-            wires.append(_shape_wire(links[int(entry["link"])].Shape))
+            wire = _shape_wire(links[int(entry["link"])].Shape).copy()
+            alignment = entry
         else:
             face = _make_profile_shape(
                 entry["spec"], host, frame_obj=getattr(obj, "Frame", None)
             )
             if len(face.Wires) != 1:
                 raise ValueError("loft profiles with holes are not supported")
-            wires.append(face.OuterWire)
+            wire = face.OuterWire.copy()
+            alignment = entry["spec"]
+        seam = alignment.get("seam_edge", 0)
+        if type(seam) is not int or not 0 <= seam < len(wire.Edges):
+            raise ValueError("seam_edge must be a valid zero-based edge index")
+        if seam:
+            import Part
+            if not wire.isClosed():
+                raise ValueError("seam alignment requires a closed wire")
+            wire = Part.Wire(wire.Edges[seam:]+wire.Edges[:seam])
+        if alignment.get("reverse"):
+            wire.reverse()
+        wires.append(wire)
     return wires
 
 
@@ -1187,6 +1227,7 @@ def _add_profile_properties(obj, feat, host, operation="pad", id_map=None,
     obj.addProperty("App::PropertyBool", "Frenet", "Geometry")
     obj.addProperty("App::PropertyBool", "Ruled", "Geometry")
     obj.addProperty("App::PropertyBool", "Closed", "Geometry")
+    obj.addProperty("App::PropertyBool", "LoftSolid", "Geometry")
     obj.ProfileSpec = json.dumps(spec)
     obj.HostName = host.Name
     profile_id = feat.get("profile")
@@ -1245,6 +1286,7 @@ def _add_profile_properties(obj, feat, host, operation="pad", id_map=None,
     obj.Frenet = bool(feat.get("frenet", False))
     obj.Ruled = bool(feat.get("ruled", False))
     obj.Closed = bool(feat.get("closed", False))
+    obj.LoftSolid = bool(feat.get("solid", True))
     obj.Proxy = _ProfileExtrusionProxy()
 
 
@@ -1272,7 +1314,7 @@ class _ProfileExtrusionProxy:
             wires = _loft_wires(obj, host)
             if getattr(obj, "Reversed", False):
                 wires.reverse()
-            obj.Shape = Part.makeLoft(wires, True, obj.Ruled, obj.Closed)
+            obj.Shape = Part.makeLoft(wires, getattr(obj, "LoftSolid", True), obj.Ruled, obj.Closed)
             return
         if getattr(obj, "Profile", None):
             face = _profile_face_from_shape(obj.Profile.Shape)
@@ -1975,6 +2017,19 @@ def _axis_rotation(axis):
 def _apply_material(obj, name):
     if not name:
         return
+    if isinstance(name, dict):
+        from manufacturing_export import color_hex
+        color = color_hex(name.get("color", "#CCCCCC"))
+        if "McpPrintColor" not in obj.PropertiesList:
+            obj.addProperty("App::PropertyString", "McpPrintColor", "Manufacturing")
+            obj.addProperty("App::PropertyString", "McpPrintMaterial", "Manufacturing")
+        obj.McpPrintColor = color
+        obj.McpPrintMaterial = name.get("name", "")
+        if obj.ViewObject is not None:
+            obj.ViewObject.ShapeColor = tuple(int(color[i:i+2], 16)/255 for i in (1, 3, 5))
+        name = name.get("name")
+        if not name:
+            return
     try:
         import Materials
         mm = Materials.MaterialManager()
@@ -2085,6 +2140,16 @@ def _build_sketch_geometry(sketch, specs, host):
             )
         elif kind == "point":
             geometry = Part.Point(_sketch_point(spec["point"], host))
+        elif kind in ("bezier", "bspline"):
+            from surface_design import curve
+            spec = dict(spec)
+            if spec.get("tangents"):
+                spec["tangents"] = [[_quantity_value(x, host) for x in t]
+                                    if t is not None else None for t in spec["tangents"]]
+            geometry = curve(spec, [_sketch_point(p, host)
+                                   for p in spec.get("points", spec.get("poles", []))])
+            if kind == "bezier":
+                geometry = geometry.toBSpline()
         else:
             raise ValueError("unknown sketch geometry type %r" % kind)
         index = sketch.addGeometry(geometry, bool(spec.get("construction", False)))
@@ -2374,6 +2439,20 @@ def _build_feature(doc, host, feat, id_map, profile_definitions=None):
         )
     elif ftype == "sketch_2d":
         obj = _build_sketch(doc, host, feat, id_map)
+    elif ftype in ("curve", "surface_patch", "guided_surface"):
+        from surface_design import DesignProxy
+        obj = doc.addObject("Part::FeaturePython", feat["id"])
+        obj.addProperty("App::PropertyString", "DesignSpec", "Geometry")
+        obj.addProperty("App::PropertyString", "HostName", "Geometry")
+        obj.addProperty("App::PropertyLink", "ParameterHost", "Geometry")
+        obj.addProperty("App::PropertyLinkList", "DesignLinks", "Geometry")
+        obj.addProperty("App::PropertyString", "DesignLinkIds", "Geometry")
+        inputs = _feature_inputs(feat)
+        obj.DesignSpec = json.dumps(feat)
+        obj.HostName, obj.ParameterHost = host.Name, host
+        obj.DesignLinks = [id_map[fid] for fid in inputs]
+        obj.DesignLinkIds = json.dumps(inputs)
+        obj.Proxy = DesignProxy()
     elif ftype == "draft":
         obj = _build_draft_feature(doc, host, feat, id_map)
     elif ftype in ("hole", "shell", "rib", "face_offset", "replace_face"):
@@ -3979,6 +4058,7 @@ def op_list_feature_types():
             "mirror_pattern", "path_pattern",
             "profile_2d", "sketch_2d", "profile_extrude", "pad", "pocket", "extrude_cut",
             "revolve", "sweep", "loft",
+            "curve", "surface_patch", "guided_surface",
             "hole", "shell", "draft", "rib", "face_offset", "replace_face",
             "component_instance", "mate",
             "fillet", "chamfer", "group", "pattern",
@@ -4035,6 +4115,8 @@ PROFILE_INPUTS = ["profile", "profile_id", "points", "sections", "composition", 
 PROFILE_SECTION_SCHEMA = {
     "description": "Closed filled sections are fused into one compound profile",
     "one_of": [
+        {"type": "curved", "required": ["type", "curves"],
+         "properties": {"curves": {"description": "Closed ordered line, bezier and bspline segments; points or poles, optional tangents"}}},
         {"type": "circle", "required": ["type", "center"],
          "one_of": ["radius", "diameter"],
          "properties": {"center": {"type": "vector2"},
@@ -4096,6 +4178,15 @@ FEATURE_PATTERN_PROPERTIES = {
 }
 
 FEATURE_SCHEMAS = {
+    "curve": {"required": ["id", "curve"], "properties": {
+        "curve": {"description": "3D bezier poles or bspline interpolation/poles; optional knot multiplicities, weights, tangents"}}},
+    "surface_patch": {"required": ["id", "grid"], "properties": {
+        "grid": {"description": "Rectangular u-major array of 3D points"},
+        "mode": {"enum": ["interpolate", "poles"]},
+        "continuity": {"enum": ["G0"]}}},
+    "guided_surface": {"required": ["id", "guides"], "properties": {
+        "guides": {"description": "Bezier pole arrays bottom/top in +u, left/right in +v; opposite counts equal, corners coincide"},
+        "continuity": {"enum": ["G0"]}}},
     "datum_frame": {
         "required": ["id"],
         "properties": {
@@ -4193,7 +4284,7 @@ FEATURE_SCHEMAS = {
     "sketch_2d": {
         "required": ["id", "geometry"],
         "properties": {
-            "geometry": {"items": {"type": "line|circle|arc|point"}},
+            "geometry": {"items": {"type": "line|circle|arc|point|bezier|bspline"}},
             "constraints": {"items": {"type": (
                 "coincident|horizontal|vertical|parallel|perpendicular|equal|"
                 "concentric|tangent|point_on_object|symmetric|block|distance|"
@@ -4254,7 +4345,8 @@ FEATURE_SCHEMAS = {
     "loft": {
         "required": ["id", "loft_profiles"],
         "properties": {**PROFILE_OPERATION_PROPERTIES,
-            "loft_profiles": {"description": "ordered profile/profile_id uses"},
+            "loft_profiles": {"description": "ordered profile/profile_id uses; optional reverse and zero-based seam_edge alignment"},
+            "solid": {"type": "boolean", "default": True},
             "ruled": {"type": "boolean", "default": False},
             "closed": {"type": "boolean", "default": False},
             "base": {"optional": True}},
@@ -4344,7 +4436,13 @@ def op_capabilities():
     from patterns import list_patterns
     import FreeCAD
     return {
-        "api_version": "2.9",
+        "api_version": "2.11",
+        "print_preflight": ["sampled_normal_thickness", "sampled_overhangs", "floating_solids", "local_attachment"],
+        "connector_recipes": ["pin_socket", "glue_ledge"],
+        "design_curves": ["bezier", "bspline_interpolate", "bspline_poles"],
+        "guided_surface_continuity": "G0",
+        "design_inspection": ["curvature", "reflection_stripes", "cross_sections", "reference_overlay"],
+        "multipart_export_formats": ["3MF"],
         "freecad_version": ".".join(FreeCAD.Version()[:3]),
         "feature_types": op_list_feature_types()["feature_types"],
         "patterns": list_patterns(),
@@ -4661,6 +4759,7 @@ def _dependents(meta, changed):
 
 def _refresh_common_placements(doc, meta, feature_ids, host):
     profile_types = {
+        "curve", "surface_patch", "guided_surface",
         "profile_2d", "profile_extrude", "pad", "pocket", "extrude_cut",
         "revolve", "sweep", "loft", "datum_frame", "hole", "shell",
         "draft", "rib", "face_offset", "replace_face",
@@ -4693,6 +4792,7 @@ def _refresh_common_placements(doc, meta, feature_ids, host):
 
 def _refresh_declarative_features(doc, meta, feature_ids, host):
     manufacturing = {
+        "curve", "surface_patch", "guided_surface",
         "hole", "shell", "draft", "rib", "face_offset", "replace_face",
     }
     patterns = {
@@ -5211,6 +5311,91 @@ def op_validate_component(component_id, profiles=None, rule_ids=None,
 # --------------------------------------------------------------------------- #
 # render / export
 # --------------------------------------------------------------------------- #
+def _inspection_shape(component_id, feature_id):
+    doc, container, meta = _resolve(component_id)
+    def world_shape(obj):
+        shape = obj.Shape.copy()
+        if hasattr(obj, "getGlobalPlacement"):
+            shape.Placement = obj.getGlobalPlacement()
+        return shape
+    if feature_id:
+        obj = doc.getObject(meta.get("id_map", {}).get(feature_id, ""))
+        if obj is None or not hasattr(obj, "Shape") or obj.Shape.isNull():
+            raise ValueError("unknown or empty inspection feature %r" % feature_id)
+        return world_shape(obj)
+    import Part
+    objects = _feature_solids(doc, meta)
+    if not objects:
+        raise ValueError("component has no inspection output")
+    return Part.makeCompound([world_shape(obj) for obj in objects])
+
+
+def op_inspect_surface(component_id, feature_id=None, samples=15,
+                       stripe_axis=None, stripe_count=12):
+    from design_inspection import inspect_shape
+    return inspect_shape(_inspection_shape(component_id, feature_id), samples,
+                         stripe_axis, stripe_count)
+
+
+def op_inspect_printability(component_id, feature_id=None, min_wall=.8,
+                            samples_per_face=5, build_direction=None,
+                            overhang_angle=45, max_samples=2000):
+    from printability import analyze_shape
+    return analyze_shape(_inspection_shape(component_id, feature_id), min_wall,
+                         samples_per_face, build_direction, overhang_angle, max_samples)
+
+
+def op_inspect_attachment(component_id, feature_id, target_id, anchor,
+                          radius=5, tolerance=.05):
+    from assembly_connectors import inspect_attachment
+    return inspect_attachment(_inspection_shape(component_id, feature_id),
+                              _inspection_shape(component_id, target_id),
+                              anchor, radius, tolerance)
+
+
+def op_create_connector_features(component_id, prefix, male_base, female_base,
+                                  position, axis="z", kind="pin_socket",
+                                  diameter=3, length=4, clearance=.2, embed=1,
+                                  bottom_clearance=.2, lead_in=.3, width=6,
+                                  thickness=1.2):
+    from assembly_connectors import connector_pair
+    _doc, _container, meta = _resolve(component_id)
+    graph = {f["id"]: f for f in meta.get("build_graph", [])}
+    for base in (male_base, female_base):
+        if base not in graph:
+            raise ValueError("unknown connector base %r" % base)
+    result = connector_pair(prefix, male_base, female_base, position, axis, kind,
+                            diameter, length, clearance, embed, bottom_clearance,
+                            lead_in, width, thickness,
+                            graph[male_base].get("material"), graph[female_base].get("material"))
+    collision = set(graph) & {f["id"] for f in result["features"]}
+    if collision:
+        raise ValueError("connector identifiers already exist: %s" % sorted(collision))
+    result["component_id"] = component_id
+    result["committed"] = False
+    result["operations"] = [{"op": "upsert", "feature": f} for f in result["features"]]
+    outputs = [fid for fid in meta.get("outputs", []) if fid not in (male_base, female_base)]
+    result["operations"].append({"op": "set_output", "ids": outputs + result["output_ids"]})
+    return result
+
+
+def op_cross_sections(component_id, plane, offsets, feature_id=None, samples=80):
+    from design_inspection import sections
+    doc, container, meta = _resolve(component_id)
+    host = _host(doc, meta)
+    return sections(_inspection_shape(component_id, feature_id), plane,
+                    [_quantity_value(offset, host) for offset in offsets], samples)
+
+
+def op_reference_overlay(component_id, image_path, plane, model_points,
+                         pixel_points, feature_id=None, samples=80,
+                         opacity=0.55, reflection_stripes=False):
+    from design_inspection import reference_svg, inspect_shape
+    shape = _inspection_shape(component_id, feature_id)
+    return reference_svg(shape, image_path, plane, model_points, pixel_points,
+                         samples, opacity, inspect_shape(shape) if reflection_stripes else None)
+
+
 def op_render_component(component_id, view="iso", section=None, hide_features=None,
                         width=900, height=700):
     gui = _gui()
@@ -5309,6 +5494,31 @@ def _make_section(doc, meta, section):
     return [sect], hidden
 
 
+def _export_3mf(objects, path):
+    import MeshPart
+    from manufacturing_export import write_3mf
+    parts = []
+    for obj in objects:
+        shape = obj.Shape.copy()
+        if hasattr(obj, "getGlobalPlacement"):
+            shape.Placement = obj.getGlobalPlacement()
+        if not shape.isValid() or not shape.Solids:
+            raise ValueError("3MF part %s must be a valid solid" % obj.Label)
+        mesh = MeshPart.meshFromShape(Shape=shape, LinearDeflection=0.05,
+                                     AngularDeflection=0.15, Relative=False)
+        if not mesh.isSolid() or mesh.hasSelfIntersections():
+            raise ValueError("3MF part %s has a non-solid or self-intersecting mesh" % obj.Label)
+        vertices, triangles = mesh.Topology
+        color = getattr(obj, "McpPrintColor", None)
+        if not color:
+            rgb = obj.ViewObject.ShapeColor if obj.ViewObject is not None else (0.8, 0.8, 0.8)
+            color = "#" + "".join("%02X" % round(c*255) for c in rgb[:3])
+        parts.append({"name": obj.Label, "color": color,
+                      "vertices": [list(v) for v in vertices],
+                      "triangles": [list(t) for t in triangles]})
+    return write_3mf(path, parts)
+
+
 def op_export_component(component_id, path, format="FCStd", variant=None):
     doc, container, meta = _resolve(component_id)
     host = _host(doc, meta)
@@ -5343,7 +5553,9 @@ def op_export_component(component_id, path, format="FCStd", variant=None):
             objs = _feature_solids(doc, meta)
             if not objs:
                 return {"error": "component has no exportable output solids"}
-            if fmt == "STL":
+            if fmt == "3MF":
+                return dict(_export_3mf(objs, path), variant=variant)
+            elif fmt == "STL":
                 import Part
                 shape = (objs[0].Shape if len(objs) == 1
                          else Part.makeCompound([o.Shape for o in objs]))
@@ -5485,7 +5697,7 @@ def op_export_bundle(component_id, directory, formats=None, per_output=True,
     ])
     ext = {"FCSTD": "FCStd", "STEP": "step", "STP": "step",
            "STL": "stl", "IGES": "iges", "IGS": "iges",
-           "BREP": "brep", "BRP": "brep"}
+           "BREP": "brep", "BRP": "brep", "3MF": "3mf"}
     artifacts = []
 
     def ensure(path):
@@ -5516,7 +5728,9 @@ def op_export_bundle(component_id, directory, formats=None, per_output=True,
                     directory, "%s_%s.%s" % (base, _safe_filename(fid), suffix)
                 )
                 ensure(path)
-                if fmt == "STL":
+                if fmt == "3MF":
+                    _export_3mf([obj], path)
+                elif fmt == "STL":
                     obj.Shape.exportStl(path)
                 else:
                     Part.export([obj], path)

@@ -261,7 +261,9 @@ def test_profile_tool_schemas_describe_generic_sections(parametric):
     section_types = {
         option["type"] for option in sections["items"]["one_of"]
     }
-    assert section_types == {"circle", "rectangle", "polygon", "slot"}
+    assert section_types == {"circle", "rectangle", "polygon", "slot", "curved"}
+    curved = next(option for option in sections["items"]["one_of"] if option["type"] == "curved")
+    assert curved["required"] == ["type", "curves"]
     circle = next(
         option for option in sections["items"]["one_of"]
         if option["type"] == "circle"
@@ -345,7 +347,9 @@ def test_capabilities_advertise_named_references_and_sketches(parametric, monkey
     monkeypatch.setitem(sys.modules, "FreeCAD", fake_freecad)
     capabilities = parametric.op_capabilities()
 
-    assert capabilities["api_version"] == "2.9"
+    assert capabilities["api_version"] == "2.11"
+    assert capabilities["guided_surface_continuity"] == "G0"
+    assert capabilities["multipart_export_formats"] == ["3MF"]
     assert capabilities["named_geometry_references"] is True
     assert capabilities["dynamic_external_geometry"] is True
     assert capabilities["named_datum_frames"] is True

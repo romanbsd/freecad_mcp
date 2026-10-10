@@ -882,3 +882,34 @@ cut.Shape.exportStl("/tmp/out.stl")
 ```
 
 Prefer `export_bundle` for component models.
+
+# Declarative curved design (API 2.10)
+
+Use `describe_feature_type("curve"|"surface_patch"|"guided_surface")` for
+declarative curves/patches. Closed `curved` profile sections accept ordered
+line/Bézier/B-spline segments; loft entries support `seam_edge` and `reverse`,
+with `solid:false` for surface lofts. Guided Coons patches reproduce four
+Bézier guides exactly and guarantee G0 only; automatic G1/G2 fitting is absent.
+Use `inspect_surface` for principal curvatures and reflection stripe samples,
+`cross_sections` for section curves, and `reference_overlay` for a PNG-backed
+calibrated SVG edge overlay. Declare separate outputs with
+`material:{"name":"Bumper","color":"#C0C0C0"}` and export `format:"3MF"`
+to preserve named colored parts. See `DESIGN_CAPABILITIES.md` for complete
+contracts and examples. These capabilities supplement native FreeCAD scripting.
+
+# Print-aware workflow (API 2.11)
+
+Use `inspect_printability` on final output solids for sampled wall thickness,
+overhangs and floating clusters. Use `inspect_attachment` around intended
+bumpers, trim and connector anchors for local seating. These are sampled
+diagnostics; unresolved coverage is WARN and physical fit still needs a coupon.
+`create_connector_features` returns pin/socket or glue-ledge patch operations
+without applying them. Preview with `patch_component(..., dry_run=True)` and
+apply using `expected_revision`; the recipe preserves colors and other outputs.
+
+For measured optimization, export an STL envelope of the complete assembly,
+request optional Tweaker-3 or stl-fit orientation matrices, and pass selected
+matrices to `compare_print_candidates` with a native Bambu project. Compare
+against its automatically sliced baseline. These tools run on the bridge host,
+keep source files unchanged and never scale an assembly or start a print.
+See `DESIGN_CAPABILITIES.md` for install, coordinate and reporting contracts.

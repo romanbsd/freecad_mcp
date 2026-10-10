@@ -1145,6 +1145,12 @@ class FreeCADMCPServer:
             "create_component_variant": parametric.op_create_component_variant,
             "validate_component": parametric.op_validate_component,
             "render_component": parametric.op_render_component,
+            "inspect_surface": parametric.op_inspect_surface,
+            "inspect_printability": parametric.op_inspect_printability,
+            "inspect_attachment": parametric.op_inspect_attachment,
+            "create_connector_features": parametric.op_create_connector_features,
+            "cross_sections": parametric.op_cross_sections,
+            "reference_overlay": parametric.op_reference_overlay,
             "export_component": parametric.op_export_component,
         }
 

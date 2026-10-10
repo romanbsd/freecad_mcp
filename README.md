@@ -77,6 +77,14 @@ To configure the MCP server, you can use a JSON format to specify the server set
 
 ## Features
 
+API 2.11 includes declarative splines, guided surface patches, calibrated reference
+overlays, curvature inspection, and multipart colored 3MF export. See
+[curved design and printing](DESIGN_CAPABILITIES.md) for examples and limits.
+It also provides sampled wall/overhang checks, local attachment inspection,
+connector recipes, optional Tweaker-3/stl-fit orientation candidates, and
+measured Bambu Studio candidate comparisons. Orientation and slicing run on
+the bridge host; external providers must be installed separately.
+
 For image-derived spray-paint templates, see the reusable
 [stencil skill](.agents/skills/stencil/SKILL.md) (`$stencil`).
 
@@ -138,7 +146,7 @@ A component is an `App::Part` container with a typed **parameter registry** (eac
 - **`create_component_variant(component_id, name, values)`** — a named override set.
 - **`validate_component(component_id, profiles, rule_ids, include_measurements, tolerance)`** — a declarative design-rule-check engine (read-only). Runs built-in **profiles** (`geometry_baseline`, `cnc_plywood`) plus the component's custom rules (filter with `rule_ids`) — domain-specific checks (e.g. a nest-box's entrance range and removable roof) are expressed as custom rules, not baked-in profiles. Rule types span parameter (`required`/`parameter_minimum`/`parameter_maximum`/`enum`), shape (`geometry_valid`/`requires_solid`), intersection (`must_intersect`/`must_not_intersect`/`minimum_overlap`/`touching_allowed`), clearance (`minimum_clearance`/`maximum_gap`), and envelope. Returns `build_status`, `validation_status`, the `tolerance` used (document units, configurable), a `summary` count, and `findings` carrying `severity`, `actual`/`required`, `message`, and `suggested_parameter_change`.
 - **`render_component(component_id, view, section, hide_features, width, height)`** — image, optional cross-section (`{"plane":"XZ","offset":"90 mm"}`).
-- **`export_component(component_id, path, format, variant)`** — `FCStd`, `STEP`, `STL`, `IGES`, `BREP`.
+- **`export_component(component_id, path, format, variant)`** — `FCStd`, `STEP`, `STL`, `IGES`, `BREP`, multipart colored `3MF`.
 
 ### Example Usage
 
