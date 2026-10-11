@@ -3,10 +3,10 @@ name = "freecad-mcp"
 version = "0.1.0"
 description = "FreeCAD bridge and measured printing workflow through FastMCP"
 authors = [{name = "FreeCAD MCP Contributors"}]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 readme = "README.md"
 license = {text = "MIT"}
-dependencies = ["fastmcp>=4.1,<5", "bambu-mcp", "httpx>=0.24.1"]
+dependencies = ["fastmcp>=4.1,<5", "bambu-mcp"]
 
 [project.optional-dependencies]
 validation = ["bambu-mcp[validation]"]

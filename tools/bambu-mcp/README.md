@@ -67,7 +67,7 @@ nor simulated motion. See [measured tool evaluations](../../docs/bambu-mcp/tool-
 
 ## Known limits
 
-- Orientation candidates are the 6 axis-aligned poses + Bambu auto-orient; no face-based candidates yet.
+- Orientation tries five axis rotations plus Bambu auto-orient, against the incoming stage pose; no face-based candidates yet.
 - One object's pose changes per orientation stage (multi-object: run the stage again).
 - Z-drop reads every vertex in pure Python; very large meshes are slow.
 - Search is greedy coordinate descent, not Bayesian.

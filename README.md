@@ -7,7 +7,7 @@ The FreeCAD MCP (Model Control Protocol) provides a simplified interface for int
 https://github.com/user-attachments/assets/5acafa17-4b5b-4fef-9f6c-617e85357d44
 ## Runtime and installation
 
-The bridge uses FastMCP 4. One uv workspace environment runs both FreeCAD MCP
+The bridge requires Python 3.11 or newer and uses FastMCP 4. One uv workspace environment runs both FreeCAD MCP
 and the owned Bambu pipeline from this source checkout:
 
 ```bash
@@ -33,59 +33,13 @@ Long operations emit start/completion notifications when clients request
 progress. Cancellation or a socket timeout does not undo a command already
 running in FreeCAD; inspect the document before retrying a mutation.
 
-## Configuration
+## MCP client configuration
 
-To configure the MCP server, you can use a JSON format to specify the server settings. Below is an example configuration:
-
-```json
-{
-    "mcpServers": {
-        "freecad": {
-            "command": "C:\\ProgramData\\anaconda3\\python.exe",
-            "args": [
-                "C:\\Users\\USER\\AppData\\Roaming\\FreeCAD\\Mod\\freecad_mcp\\src\\freecad_bridge.py"
-            ]
-        }
-    }
-}
-```
-
-### Runtime and installation
-
-The bridge uses FastMCP 4. One uv workspace environment runs both FreeCAD MCP
-and the owned Bambu pipeline from this source checkout:
-
-```bash
-uv sync --locked --extra validation
-uv run --locked --extra validation python src/freecad_bridge.py
-```
-
-The optional `validation` extra enables independent lib3mf source checks.
-Configure your MCP client to run this checkout's `.venv/bin/python` with
-`src/freecad_bridge.py`; restart the connection after upgrading. FreeCAD's
-installed desktop addon and framed socket protocol are unchanged.
-
-The bridge also exposes Bambu tools under `bambu_` names, including
-`bambu_project_open`, `bambu_optimize` and `bambu_compare_project`.
-`.venv/bin/bambu-mcp` remains available as a standalone server. Set
-`BAMBU_STUDIO_BIN` for your installed slicer. Comparison workers use the same
-Python environment by default.
-
-Tools advertise operation annotations and category tags. Dictionary results
-include native structured content, screenshots remain MCP image content, and
-FreeCAD failures preserve their code/message/recoverable fields with `isError`.
-Long operations emit start/completion notifications when clients request
-progress. Cancellation or a socket timeout does not undo a command already
-running in FreeCAD; inspect the document before retrying a mutation.
-
-## Configuration Details
-
-- **command**: The path to the Python executable that will run the FreeCAD MCP server. This can vary based on your operating system:
-  - **Windows**: Typically, it might look like `C:\\ProgramData\\anaconda3\\python.exe` or `C:\\Python39\\python.exe`.
-  - **Linux**: It could be `/usr/bin/python3` or the path to your Python installation.
-  - **macOS**: Usually, it would be `/usr/local/bin/python3` or the path to your Python installation.
-
-- **args**: An array of arguments to pass to the Python command. The first argument should be the path to the `freecad_bridge.py` script, which is responsible for handling the MCP server logic. Make sure to adjust the path according to your installation.
+Use the Python executable from the workspace environment created by `uv sync`:
+`.venv/bin/python` on Linux/macOS, or `.venv\Scripts\python.exe` on Windows.
+Pass the absolute path to this checkout's `src/freecad_bridge.py` as the argument.
+The FreeCAD desktop addon remains installed in FreeCAD's Mod directory; the
+bridge runs from this source checkout with its workspace dependencies.
 
 ### Example for Different Operating Systems
 
@@ -94,10 +48,8 @@ running in FreeCAD; inspect the document before retrying a mutation.
 {
     "mcpServers": {
         "freecad": {
-            "command": "C:\\ProgramData\\anaconda3\\python.exe",
-            "args": [
-                "C:\\Users\\USER\\AppData\\Roaming\\FreeCAD\\Mod\\freecad_mcp\\src\\freecad_bridge.py"
-            ]
+            "command": "C:\\Users\\USER\\projects\\freecad_mcp\\.venv\\Scripts\\python.exe",
+            "args": ["C:\\Users\\USER\\projects\\freecad_mcp\\src\\freecad_bridge.py"]
         }
     }
 }
@@ -108,10 +60,8 @@ running in FreeCAD; inspect the document before retrying a mutation.
 {
     "mcpServers": {
         "freecad": {
-            "command": "/usr/bin/python3",
-            "args": [
-                "/home/USER/.FreeCAD/Mod/freecad_mcp/src/freecad_bridge.py"
-            ]
+            "command": "/home/USER/projects/freecad_mcp/.venv/bin/python",
+            "args": ["/home/USER/projects/freecad_mcp/src/freecad_bridge.py"]
         }
     }
 }
@@ -122,10 +72,8 @@ running in FreeCAD; inspect the document before retrying a mutation.
 {
     "mcpServers": {
         "freecad": {
-            "command": "/usr/local/bin/python3",
-            "args": [
-                "/Users/USER/Library/Preferences/FreeCAD/Mod/freecad_mcp/src/freecad_bridge.py"
-            ]
+            "command": "/Users/USER/projects/freecad_mcp/.venv/bin/python",
+            "args": ["/Users/USER/projects/freecad_mcp/src/freecad_bridge.py"]
         }
     }
 }

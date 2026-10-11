@@ -87,7 +87,7 @@ reads and `rg` when coverage is missing or stale.
 
 ## Environments and optional tools
 
-- Use one root environment for the FastMCP 4 bridge and owned Bambu server:
+- Use one Python 3.11+ root environment for the FastMCP 4 bridge and owned Bambu server:
 
   ```bash
   uv sync --locked --extra validation

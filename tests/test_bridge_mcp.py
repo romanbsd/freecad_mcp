@@ -4,7 +4,6 @@ import base64
 from pathlib import Path
 import sys
 
-import pytest
 from fastmcp import Client
 from fastmcp.client.transports import PythonStdioTransport
 

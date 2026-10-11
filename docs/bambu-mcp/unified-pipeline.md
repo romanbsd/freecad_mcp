@@ -75,7 +75,7 @@ folder is created.
 ## Results
 
 `comparison.json` contains immutable source identity, resolved settings and
-specification, slicer version, candidate settings and transforms, run IDs,
+specification, slicer version, candidate settings and transforms, owned-backend run IDs,
 rejection reasons, artifact paths, and measured metrics. It never modifies the
 input project. Candidates preserve component meshes, colors and relative
 placement. No automatic XY rearrangement or scale-down is performed.
@@ -106,9 +106,9 @@ not supported in this batch.
 ## Representative benchmarks
 
 ```bash
-cd tools/bambu-mcp
+# Run from the repository root, using the shared workspace environment.
 .venv/bin/python -m bambu_mcp.benchmarks --output /tmp/print-benchmark-001
-.venv/bin/python -m pytest -m slow
+.venv/bin/python -m pytest tools/bambu-mcp/tests -m slow
 ```
 
 The corpus generates geometry, canonicalizes each project through the real slicer

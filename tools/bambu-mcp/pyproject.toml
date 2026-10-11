@@ -2,7 +2,7 @@
 name = "bambu-mcp"
 version = "0.1.0"
 description = "MCP server that drives the Bambu Studio CLI to optimize print time and material use"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 readme = "README.md"
 license = "AGPL-3.0-only"
 license-files = ["LICENSE", "print_pipeline_core/LICENSE"]

@@ -2,7 +2,7 @@
 
 Catches regressions in how the bridge tools unwrap the server's response
 envelope ({"status":"success","result":{...}}). Run with a python that has
-`mcp`:  .venv/bin/python tests/test_bridge.py
+the root workspace dependencies: .venv/bin/python tests/test_bridge.py
 """
 import asyncio
 import base64
@@ -17,24 +17,24 @@ from fastmcp.utilities.types import Image
 _PNG = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"x" * 16).decode()
 
 
-def test_get_screenshot_unwraps_envelope():
+def test_get_screenshot_unwraps_envelope(monkeypatch):
     # Server wraps handler results; get_screenshot must look inside "result".
     async def fake(cmd):
         return {"status": "success",
                 "result": {"image_base64": _PNG, "width": 1, "height": 1, "view": "iso"}}
-    fb.send_to_freecad = fake
+    monkeypatch.setattr(fb, "send_to_freecad", fake)
     img = asyncio.run(fb.get_screenshot())
     assert isinstance(img, Image), type(img)
 
 
-def test_get_screenshot_reports_error():
+def test_get_screenshot_reports_error(monkeypatch):
     async def fake(cmd):
         return {"status": "error", "error": {
             "code": "NO_ACTIVE_VIEW",
             "message": "no active 3D view to capture",
             "recoverable": True,
         }}
-    fb.send_to_freecad = fake
+    monkeypatch.setattr(fb, "send_to_freecad", fake)
     try:
         asyncio.run(fb.get_screenshot())
     except fb.FreeCADToolError as e:
@@ -45,19 +45,19 @@ def test_get_screenshot_reports_error():
         raise AssertionError("expected RuntimeError on error envelope")
 
 
-def test_native_result_is_unwrapped_without_json_string():
+def test_native_result_is_unwrapped_without_json_string(monkeypatch):
     async def fake(cmd):
         return {"status": "success", "result": {"objects": [{"name": "Box"}]}}
-    fb.send_to_freecad = fake
+    monkeypatch.setattr(fb, "send_to_freecad", fake)
     result = asyncio.run(fb.list_objects())
     assert result == {"objects": [{"name": "Box"}]}
     assert not isinstance(result, str)
 
 
-def test_handler_error_inside_success_envelope_is_raised():
+def test_handler_error_inside_success_envelope_is_raised(monkeypatch):
     async def fake(cmd):
         return {"status": "success", "result": {"error": "no active document"}}
-    fb.send_to_freecad = fake
+    monkeypatch.setattr(fb, "send_to_freecad", fake)
     try:
         asyncio.run(fb.list_objects())
     except RuntimeError as e:
@@ -81,8 +81,4 @@ def test_design_tools_preserve_wire_contract(monkeypatch, tool, arguments, comma
 
 
 if __name__ == "__main__":
-    test_get_screenshot_unwraps_envelope()
-    test_get_screenshot_reports_error()
-    test_native_result_is_unwrapped_without_json_string()
-    test_handler_error_inside_success_envelope_is_raised()
-    print("OK: get_screenshot unwraps the result envelope and surfaces errors")
+    raise SystemExit(pytest.main([__file__]))

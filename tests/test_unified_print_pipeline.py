@@ -1,20 +1,26 @@
 import json
 import sys
 import os
+import subprocess
 from pathlib import Path
 import pytest
 import slicer_pipeline as sp
 from test_slicer_pipeline import project, slicer
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def owned_python():
     configured = os.environ.get('FREECAD_BAMBU_BACKEND_PYTHON')
     python = Path(configured) if configured else Path(sys.executable)
     if not python.is_file():
+        pytest.fail('Configured FREECAD_BAMBU_BACKEND_PYTHON is not a file')
+    probe = subprocess.run([str(python), '-c',
+        'import importlib.util; raise SystemExit(0 if importlib.util.find_spec("bambu_mcp") else 1)'],
+        capture_output=True, timeout=10)
+    if probe.returncode:
         if configured:
-            pytest.fail('Configured FREECAD_BAMBU_BACKEND_PYTHON is not a file')
-        pytest.skip('Install tools/bambu-mcp to run the cross-process test')
+            pytest.fail('Configured backend interpreter cannot import bambu_mcp')
+        pytest.skip('Install the workspace dependencies to run the cross-process test')
     return python
 
 
