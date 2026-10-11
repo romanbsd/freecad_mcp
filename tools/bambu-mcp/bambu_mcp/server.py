@@ -142,21 +142,11 @@ def _effective(s: Session, p: Package, variant: VariantOut) -> dict:
     """Catalog keys resolved the way the slicer sees them: project settings < presets < working overrides."""
     def flat(v):
         return {k: ",".join(map(str, x)) if isinstance(x, list) else str(x) for k, x in v.items() if k in CATALOG}
-    eff, errors = flat(p.project_settings()), []
-    r = runner()
-    for kind, name in [("machine", s.machine), ("process", s.process)]:
-        if name:
-            try:
-                eff.update(flat(r._load_preset(kind, name)))
-            except (ValueError, OSError) as e:
-                errors.append(f"{kind} preset {name!r}: {e}")
-    for f in s.filaments:
-        try:
-            r._load_preset("filament", f)
-        except (ValueError, OSError) as e:
-            errors.append(f"filament preset {f!r}: {e}")
-    eff.update({k: v for k, v in variant.overrides.items() if k in CATALOG})
-    return dict(effective_settings=eff, settings_errors=errors)
+    from .settings import resolve_settings
+    context = resolve_settings(p, runner()._load_preset, s.machine, s.process, s.filaments, strict=False)
+    eff, _ = context.effective(variant)
+    return dict(effective_settings=flat(eff), settings_errors=context.errors)
+
 
 
 @mcp.tool(annotations=_ann("Open project", idempotent=False))

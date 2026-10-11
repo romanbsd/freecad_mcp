@@ -64,6 +64,13 @@ class Package:
         if MODEL not in self.entries:
             raise ValueError(f"{path}: not a Bambu 3MF (no {MODEL})")
 
+    @classmethod
+    def from_entries(cls, entries):
+        """Use an already validated immutable archive snapshot without rereading a path."""
+        package = cls.__new__(cls)
+        package.entries = dict(entries)
+        return package
+
     def save(self, out):
         with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
             for n, b in self.entries.items():

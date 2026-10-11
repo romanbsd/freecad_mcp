@@ -17,7 +17,7 @@ from . import presets
 from .threemf import Package
 from print_pipeline_core.process import run_bounded
 from print_pipeline_core.artifacts import read_artifacts
-from print_pipeline_core.spec import merge_presets
+from .settings import resolve_settings
 
 HOME = Path(os.environ.get("BAMBU_MCP_HOME", Path.home() / ".bambu-mcp"))
 
@@ -164,15 +164,8 @@ class Runner:
         return str(out)
 
     def effective_settings(self, source, variant, machine=None, process=None, filaments=None):
-        p = Package(source)
-        loaded = [(kind, self._load_preset(kind, name)) for kind, name in [('machine', machine), ('process', process)] + [('filament', f) for f in filaments or []] if name]
-        settings = merge_presets(p.project_settings(), loaded)
-        settings.update(variant.overrides)
-        objects = {oid: {**settings, **values, **variant.object_overrides.get(oid, {})}
-                   for oid, values in p.object_settings().items()}
-        for oid, values in variant.object_overrides.items():
-            objects.setdefault(oid, {**settings, **values})
-        return settings, objects
+        context = resolve_settings(Package(source), self._load_preset, machine, process, filaments)
+        return context.effective(variant)
 
     def evaluate(self, source: Path, variant: Variant, machine: str | None = None,
                  process: str | None = None, filaments: list[str] | None = None,

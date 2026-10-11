@@ -9,15 +9,16 @@ from pathlib import Path
 import shutil
 import signal
 import zipfile
-import tempfile
 import xml.etree.ElementTree as ET
 
 from .catalog import validate
 from .runner import Runner, Variant
+from .settings import resolve_settings, snapshot_presets
+from .threemf import Package
 from print_pipeline_core.assembly import _read_project, _rotate_project
 from print_pipeline_core.artifacts import read_artifacts
 from print_pipeline_core.candidates import _validate, ALLOWED_SETTINGS
-from print_pipeline_core.spec import resolve_spec, violations, metric_violations, merge_presets, validate_preset_fields
+from print_pipeline_core.spec import resolve_spec, violations, metric_violations, validate_preset_fields
 from print_pipeline_core.report import summarize
 
 MAX_BYTES = 1024**3
@@ -73,15 +74,12 @@ def compare_project(project_path, output_dir, candidates, slicer_path=None, time
     entries, stored = _read_project(io.BytesIO(raw))
     r = Runner(binary=slicer_path, **({'home': Path(cache_home)} if cache_home else {}))
     # Load every requested preset before publishing any output directory.
-    selected = [('machine', requested.get('machine_preset', '')), ('process', requested.get('process_preset', ''))]
-    selected += [('filament', f) for f in requested.get('filament_presets', [])]
-    loaded = [(kind, r._load_preset(kind, name)) for kind, name in selected if name]
-    effective = merge_presets(stored, loaded)
+    context = resolve_settings(Package.from_entries(entries), r._load_preset, requested.get('machine_preset'),
+                               requested.get('process_preset'), requested.get('filament_presets'))
+    effective = context.settings
     # No spec retains compatibility while still using strict artifacts and Pareto reports.
     spec = resolve_spec(requested, effective) if print_spec is not None else None
-    object_xml = ET.fromstring(entries['Metadata/model_settings.config'])
-    per = {o.get('id'): {m.get('key'): m.get('value') for m in o.findall('metadata') if m.get('key')}
-           for o in object_xml.findall('object')}
+    per = context.objects
     prepared = []
     for candidate in [{'name': 'baseline', 'settings': {}, 'rotation_matrix': None}] + cands:
         copied = dict(entries)
@@ -106,20 +104,7 @@ def compare_project(project_path, output_dir, candidates, slicer_path=None, time
     destination = Path(output_dir).expanduser().resolve()
     destination.mkdir(parents=True, exist_ok=False)
     # Immutable, content-addressed preset snapshots prevent mid-run edits and allow cache reuse.
-    preset_paths = {'machine': None, 'process': None, 'filament': []}
-    for kind, data in loaded:
-        encoded = json.dumps(data, sort_keys=True).encode()
-        snapshots = r.home / 'preset_snapshots'; snapshots.mkdir(exist_ok=True)
-        p = snapshots / (hashlib.sha256(encoded).hexdigest() + '.json')
-        if not p.exists() or p.read_bytes() != encoded:
-            with tempfile.NamedTemporaryFile(dir=snapshots, delete=False) as handle:
-                handle.write(encoded)
-                temporary = Path(handle.name)
-            temporary.replace(p)
-        if kind == 'filament':
-            preset_paths[kind].append(str(p))
-        else:
-            preset_paths[kind] = str(p)
+    preset_paths = snapshot_presets(context.loaded, r.home)
     with ThreadPoolExecutor(max_workers=1) as warmup:
         version = warmup.submit(r.version).result()
 
@@ -142,7 +127,7 @@ def compare_project(project_path, output_dir, candidates, slicer_path=None, time
             overrides['sparse_infill_density'] = settings['sparse_infill_density']
         m = r.evaluate(path, Variant(overrides=overrides, flags={'orient': 0}, plate=1),
                        machine=preset_paths['machine'], process=preset_paths['process'],
-                       filaments=preset_paths['filament'], timeout_s=int(timeout))
+                       filaments=preset_paths['filaments'], timeout_s=int(timeout))
         row['run_id'] = m.run_id
         row['input_sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
         if not m.ok:

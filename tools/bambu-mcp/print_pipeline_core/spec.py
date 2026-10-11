@@ -107,6 +107,28 @@ def resolve_spec(raw, settings):
     return spec
 
 
+def setting_breaches(effective, baseline, floors, functional, minimum_layer, maximum_layer,
+                     *, strict=True, tolerance=0):
+    """Shared numeric/pattern checks; callers supply limits and format their API messages."""
+    for key, value in effective.items():
+        if equivalent(value, baseline.get(key)):
+            continue
+        if key in floors or key == 'layer_height':
+            try:
+                numeric = number(value)
+            except (ValueError, TypeError):
+                if strict:
+                    yield key, 'unresolved'
+                continue
+            if key in floors and numeric < floors[key]:
+                yield key, 'floor'
+            if key == 'layer_height' and ((minimum_layer is not None and numeric < minimum_layer)
+                                         or numeric > maximum_layer + tolerance):
+                yield key, 'layer'
+        if key == 'sparse_infill_pattern' and functional and value == 'lightning':
+            yield key, 'lightning'
+
+
 def violations(effective, baseline, spec, rotation=False):
     """Reject new breaches; unchanged baseline floors remain the user's explicit choice."""
     bad = []
@@ -117,23 +139,12 @@ def violations(effective, baseline, spec, rotation=False):
         bad.append('whole-assembly rotation conflicts with locked_objects')
     floors = {'wall_loops': spec['min_wall_loops'], 'top_shell_layers': spec['min_top_layers'],
               'bottom_shell_layers': spec['min_bottom_layers'], 'sparse_infill_density': spec['min_infill_pct']}
-    for key, value in effective.items():
-        if equivalent(value, baseline.get(key)):
-            continue
-        if key in floors:
-            try:
-                if number(value) < floors[key]:
-                    bad.append(key + ' below minimum')
-            except (ValueError, TypeError):
-                bad.append(key + ' is unresolved')
-        if key == 'sparse_infill_pattern' and spec['functional'] and value == 'lightning':
-            bad.append('lightning infill is forbidden for functional parts')
-        if key == 'layer_height':
-            try:
-                if not spec['bounds']['min_layer_height'] <= number(value) <= spec['max_layer_height']:
-                    bad.append('layer_height outside resolved printer/spec limits')
-            except (ValueError, TypeError):
-                bad.append('layer_height is unresolved')
+    messages = {'floor': ' below minimum', 'unresolved': ' is unresolved',
+                'lightning': 'lightning infill is forbidden for functional parts',
+                'layer': 'layer_height outside resolved printer/spec limits'}
+    for key, reason in setting_breaches(effective, baseline, floors, spec['functional'],
+                                      spec['bounds']['min_layer_height'], spec['max_layer_height']):
+        bad.append(messages[reason] if reason in ('lightning', 'layer') else key + messages[reason])
     support = effective.get('enable_support')
     if spec['keep_supports'] != 'auto':
         wanted = spec['keep_supports'] == 'required'

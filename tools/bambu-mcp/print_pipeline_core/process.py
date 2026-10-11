@@ -1,5 +1,6 @@
 """Bounded pipe capture and process-group termination (MIT)."""
 import math, os, selectors, signal, subprocess, time, threading
+from pathlib import Path
 
 _active = set()
 _lock = threading.RLock()
@@ -23,11 +24,12 @@ def run_bounded(argv, directory, timeout, log_limit=4*1024*1024):
         raise ValueError("Bounded execution requires POSIX process groups")
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("timeout must be positive and finite")
+    directory = Path(directory)
     started = time.monotonic()
     with _lock:
         if _cancelled.is_set():
             raise ValueError('Execution cancelled')
-        process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True, cwd=directory)
+        process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True, cwd=directory)
         _active.add(process.pid)
     head, tail, total, error = b'', b'', 0, None
     completed = False

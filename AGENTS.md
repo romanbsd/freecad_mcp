@@ -88,7 +88,9 @@ reads and `rg` when coverage is missing or stale.
 ## Environments and optional tools
 
 - Keep root FreeCAD bridge (`mcp<2`) and `tools/bambu-mcp` (FastMCP 4/MCP 2)
-  virtual environments separate. The bridge calls the owned backend through a
+  virtual environments separate until the bridge API is migrated. This is a
+  current dependency conflict; subprocesses can share an environment once the
+  APIs are compatible. The bridge calls the owned backend through a
   JSON worker; use `backend_python` to select its interpreter explicitly.
 - Install the owned tool from this checkout, not a sibling BambuStudio tree:
 
@@ -116,6 +118,17 @@ reads and `rg` when coverage is missing or stale.
   existing native projects/artifacts without slicing again. Write probe results
   to files so library stdout/stderr cannot corrupt JSON. Comment toolpath profiles
   describe blocks/extrusion heights, not material mass or nominal layer ladders.
+
+## Keep shared behavior centralized
+
+- Constraint checks live in `print_pipeline_core.spec.setting_breaches`; legacy
+  messages/defaults are adapters, not a second validation algorithm.
+- Resolve settings through `bambu_mcp.settings.resolve_settings`. Inspection can
+  request partial results; slicing is strict. `snapshot_presets` supplies the
+  same flattened inputs to optimizer/comparison checks, cache keys and slicing.
+- Use `print_pipeline_core.process.run_bounded` for provider and slicer processes.
+  Its returned output is a diagnostic preview; parse successful provider JSON
+  from the complete bounded log file.
 
 ## Validation and review
 

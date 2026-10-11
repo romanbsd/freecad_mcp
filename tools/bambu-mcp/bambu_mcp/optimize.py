@@ -8,7 +8,8 @@ from dataclasses import dataclass, field
 from .catalog import CATALOG
 from .runner import Metrics, Runner, Variant
 from .threemf import Package
-from print_pipeline_core.spec import resolve_spec, violations as spec_violations
+from print_pipeline_core.spec import resolve_spec, violations as spec_violations, setting_breaches, equivalent
+from .settings import resolve_settings, snapshot_presets
 from print_pipeline_core.report import summarize
 
 AXIS_POSES = [(90, 0, 0), (-90, 0, 0), (0, 90, 0), (0, -90, 0), (180, 0, 0)]
@@ -55,45 +56,45 @@ def feasible(m: Metrics, base: Metrics, o: Objective) -> bool:
     return True
 
 
-def _pct(v) -> float | None:
-    try:
-        return float(str(v).rstrip("%"))
-    except ValueError:
-        return None
-
-
 def _violations(settings: dict, o: Objective) -> list[str]:
-    """Functional-floor / limit breaches in one flat {key: value-string} settings dict."""
-    bad = []
-    for k in ("wall_loops", "top_shell_layers", "bottom_shell_layers"):
-        v = _pct(settings.get(k, ""))
-        if v is not None and v < floor(k, o.functional):
-            bad.append(f"{k}={settings[k]} below floor {floor(k, o.functional)}")
-    d = _pct(settings.get("sparse_infill_density", ""))
-    if d is not None and d < floor("sparse_infill_density", o.functional):
-        bad.append(f"sparse_infill_density={settings['sparse_infill_density']} below floor")
-    if o.functional and settings.get("sparse_infill_pattern") == "lightning":
-        bad.append("lightning infill in a functional part")
-    h = _pct(settings.get("layer_height", ""))
+    """Legacy limits/messages backed by the shared constraint checker."""
+    floors = {k: floor(k, o.functional) for k in
+              ('wall_loops', 'top_shell_layers', 'bottom_shell_layers', 'sparse_infill_density')}
     cap = o.max_layer_height if o.max_layer_height is not None else .28
-    if h is not None and h > cap + 1e-9:
-        bad.append(f"layer_height={settings['layer_height']} above max {cap}")
+    bad = []
+    for key, reason in setting_breaches(settings, {}, floors, o.functional, None, cap,
+                                      strict=False, tolerance=1e-9):
+        if reason == 'lightning':
+            bad.append('lightning infill in a functional part')
+        elif reason == 'layer':
+            bad.append(f'layer_height={settings[key]} above max {cap}')
+        elif key == 'sparse_infill_density':
+            bad.append(f'sparse_infill_density={settings[key]} below floor')
+        else:
+            bad.append(f'{key}={settings[key]} below floor {floors[key]}')
     return bad
 
 
+def _constraint_errors(context, v, base, check):
+    effective, objects = context.effective(v)
+    reference, object_reference = context.effective(base)
+    bad = check(effective, reference, v.object_rotation != base.object_rotation)
+    global_errors = set(bad)
+    for oid, settings in objects.items():
+        bad += [f'object {oid}: {message}' for message in
+                check(settings, object_reference.get(oid, reference), False) if message not in global_errors]
+    return bad
+
+
+def _legacy_check(o):
+    return lambda settings, ref, rotation=False: _violations(
+        {k: x for k, x in settings.items() if not equivalent(x, ref.get(k))}, o)
+
+
 def violations(v: Variant, base: Variant, source, o: Objective) -> list[str]:
-    """Breaches in the *effective* settings of v (global + per-object, incl. values stored in the 3MF).
-    Values identical to the baseline's are the user's own choice and are exempt."""
-    out = _violations({k: x for k, x in v.overrides.items() if base.overrides.get(k) != x}, o)
-    try:
-        stored = Package(source).object_settings()
-    except (OSError, ValueError, KeyError):
-        stored = {}
-    for oid in set(v.object_overrides) | set(stored):
-        eff = {**stored.get(oid, {}), **v.object_overrides.get(oid, {})}
-        ref = {**stored.get(oid, {}), **base.object_overrides.get(oid, {})}
-        out += [f"object {oid}: {m}" for m in _violations({k: x for k, x in eff.items() if ref.get(k) != x}, o)]
-    return out
+    """Legacy API adapter; unchanged effective global/object choices are exempt."""
+    context = resolve_settings(Package(source), None)
+    return _constraint_errors(context, v, base, _legacy_check(o))
 
 
 def evaluate_batch(runner: Runner, source, variants: list[Variant], workers: int = 2, **kw) -> list[Metrics]:
@@ -194,14 +195,15 @@ class Result:
 
 def optimize(runner: Runner, source, base_variant: Variant, o: Objective, stages=None, max_slices: int = 40,
              workers: int = 2, progress=None, print_spec=None, **kw) -> Result:
-    effective_base, object_base = None, {}
+    context = resolve_settings(Package(source), lambda kind, name: runner._load_preset(kind, name),
+                               **{k: kw.get(k) for k in ('machine', 'process', 'filaments')})
+    effective_base, _ = context.effective(base_variant)
     if print_spec is not None:
         if not isinstance(print_spec, dict):
             raise ValueError('print_spec must be a dictionary')
         for key, argument in [('machine_preset', 'machine'), ('process_preset', 'process'), ('filament_presets', 'filaments')]:
             if print_spec.get(key) and print_spec[key] != kw.get(argument):
                 raise ValueError('Select matching presets in project_open before optimizing')
-        effective_base, object_base = runner.effective_settings(source, base_variant, **{k: kw.get(k) for k in ('machine','process','filaments')})
         inherited = dict(functional=o.functional, keep_supports=o.keep_supports,
                          max_time_increase_pct=o.max_time_increase_pct,
                          max_material_increase_pct=o.max_material_increase_pct)
@@ -223,14 +225,18 @@ def optimize(runner: Runner, source, base_variant: Variant, o: Objective, stages
         o.max_material_increase_pct = o.specification['max_material_increase_pct']
     elif o.max_layer_height is None:
         o.max_layer_height = .28
+    # Slice and check against the very same flattened preset contents.
+    if context.loaded:
+        kw.update(snapshot_presets(context.loaded, runner.home))
+    if o.specification:
+        policy = dict(o.specification)
+        for key, setting in [('min_wall_loops', 'wall_loops'), ('min_top_layers', 'top_shell_layers'),
+                             ('min_bottom_layers', 'bottom_shell_layers'), ('min_infill_pct', 'sparse_infill_density')]:
+            policy[key] = max(policy[key], floor(setting, o.functional))
+        policy['max_layer_height'] = o.max_layer_height
+    check = (lambda settings, ref, rotation=False: spec_violations(settings, ref, policy, rotation)) if o.specification else _legacy_check(o)
     def breaches(v):
-        bad = violations(v, base_variant, source, o)
-        if o.specification:
-            eff, objs = runner.effective_settings(source, v, **{k: kw.get(k) for k in ('machine','process','filaments')})
-            bad += spec_violations(eff, effective_base, o.specification, v.object_rotation != base_variant.object_rotation)
-            for oid, settings in objs.items():
-                bad += [f'object {oid}: {x}' for x in spec_violations(settings, object_base.get(oid, effective_base), o.specification)]
-        return bad
+        return _constraint_errors(context, v, base_variant, check)
     if o.locked_objects and base_variant.flags.get("orient") == 1:
         raise ValueError("auto-orient (orient=1) rotates every object, which conflicts with locked_objects; "
                          "turn it off first (orient enable=false)")
@@ -293,7 +299,7 @@ def optimize(runner: Runner, source, base_variant: Variant, o: Objective, stages
             progress(used, max_slices, stage)
         if used >= max_slices:
             break
-    baseline_settings = effective_base or Package(source).project_settings()
+    baseline_settings = effective_base
     baseline_settings = {**baseline_settings, **base_variant.overrides}
     records = [dict(name='baseline', status='success', settings={}, metrics=dict(seconds=base.time_s, total_grams=base.filament_g), run_id=base.run_id)]
     for i, h in enumerate(res.history):

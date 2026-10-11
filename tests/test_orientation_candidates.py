@@ -214,11 +214,12 @@ def test_actual_optional_orientation_providers(tmp_path, backend, variable):
 
 
 def test_windows_reader_rejected_before_process_launch(tmp_path, monkeypatch):
+    from print_pipeline_core import process
     def unexpected(*args, **kwargs):
         raise AssertionError('must not launch an unsupported pipe reader')
     with monkeypatch.context() as scoped:
         scoped.setattr(oc.os, 'name', 'nt')
-        scoped.setattr(oc.subprocess, 'Popen', unexpected)
+        scoped.setattr(process.subprocess, 'Popen', unexpected)
         with pytest.raises(ValueError, match='POSIX'):
             oc._run(['unused'], tmp_path, 1)
 
@@ -271,3 +272,16 @@ class Tweak:
     assert [c['heuristic_score'] for c in result['candidates']]==[1,2]
     assert result['candidates'][0]['rotation_matrix']==[[0,1,0],[-1,0,0],[0,0,1]]
     assert envelope.read_bytes()==data
+
+
+def test_shared_runner_preserves_full_success_output(tmp_path):
+    """Provider payloads beyond the diagnostic head/tail preview must remain parseable."""
+    import json
+    payload = {'rows': ['x' * 1000 for _ in range(50)], 'last': 'complete'}
+    script = cli(tmp_path, 'print(' + repr(json.dumps(payload)) + ')')
+    assert json.loads(oc._run(script, str(tmp_path), 5)) == payload
+
+
+def test_shared_runner_detaches_provider_stdin(tmp_path):
+    script = cli(tmp_path, 'import sys\nassert sys.stdin.read() == ""\nprint("complete")')
+    assert oc._run(script, str(tmp_path), 5).strip() == 'complete'

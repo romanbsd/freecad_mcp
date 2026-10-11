@@ -91,7 +91,12 @@ remains null. Unknown layer/change counts remain null rather than zero.
 - `pareto`: candidates not dominated in both time and material.
 - `alternatives`: unique winners with before/after setting differences and trade-offs.
 
-The owned backend snapshots presets, uses deterministic candidate packages for
+Session optimization and the owned comparison backend resolve presets once and
+slice against their content-addressed snapshots. Inspection uses the same
+resolver with explicit partial-resolution errors. Constraint checks and bounded
+provider/slicer execution share their underlying implementation.
+
+The owned backend uses deterministic candidate packages for
 cache identity, and evaluates candidate processes in parallel after the baseline.
 Both backends bound logs and execution time and stop POSIX process groups on
 failure. The owned timeout range is 1–3600 seconds. Windows bounded execution is

@@ -11,13 +11,9 @@ import math
 import os
 from pathlib import Path
 import re
-import selectors
 import shutil
-import signal
 import struct
-import subprocess
 import tempfile
-import time
 
 OUTPUT_LIMIT = 256 * 1024
 MAX_STL_BYTES = 16 * 1024 * 1024
@@ -165,52 +161,18 @@ def _rotation(matrix):
     return [first, second, third]
 
 
-def _kill(process):
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    process.wait()
-
-
 def _run(argv, cwd, timeout):
-    if os.name != 'posix':
-        raise ValueError('Orientation subprocess backend currently requires POSIX process groups')
-    process = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL,
-                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               start_new_session=True, shell=False)
-    output = bytearray()
-    started = time.monotonic()
-    try:
-        with selectors.DefaultSelector() as selector:
-            selector.register(process.stdout, selectors.EVENT_READ)
-            while selector.get_map():
-                remaining = timeout - (time.monotonic() - started)
-                if remaining <= 0:
-                    raise TimeoutError("Orientation backend timed out")
-                for key, _ in selector.select(min(remaining, .1)):
-                    chunk = os.read(key.fileobj.fileno(), 8192)
-                    if not chunk:
-                        selector.unregister(key.fileobj)
-                    else:
-                        output.extend(chunk)
-                        if len(output) > OUTPUT_LIMIT:
-                            raise ValueError("Orientation backend exceeded output limit")
-            remaining = timeout - (time.monotonic() - started)
-            if remaining <= 0:
-                raise TimeoutError("Orientation backend timed out")
-            try:
-                process.wait(timeout=remaining)
-            except subprocess.TimeoutExpired as exc:
-                raise TimeoutError("Orientation backend timed out") from exc
-        if process.returncode:
-            raise RuntimeError(f"Orientation backend failed (exit {process.returncode}): " + output.decode(errors='replace')[-2000:])
-        return output.decode(errors='replace')
-    except BaseException:
-        _kill(process)
-        raise
-    finally:
-        process.stdout.close()
+    from print_pipeline_core.process import run_bounded
+    code, failure, output, _ = run_bounded(argv, cwd, timeout, OUTPUT_LIMIT)
+    if failure == 'timeout':
+        raise TimeoutError('Orientation backend timed out')
+    if failure == 'log_limit':
+        raise ValueError('Orientation backend exceeded output limit')
+    if code:
+        raise RuntimeError(f'Orientation backend failed (exit {code}): ' + output[-2000:])
+    # The diagnostic return contains only a head/tail preview. Successful provider
+    # JSON can be larger: read the complete file, already bounded by OUTPUT_LIMIT.
+    return (Path(cwd) / 'slicer.log').read_text(errors='replace')
 
 
 def suggest_print_orientations(stl_path, backend, executable=None,
