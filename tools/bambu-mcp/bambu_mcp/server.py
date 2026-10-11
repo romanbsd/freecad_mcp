@@ -18,7 +18,7 @@ from pydantic import Field
 
 from . import optimize as opt
 from .catalog import CATALOG, validate
-from .runner import Metrics, Runner, Variant, parse_result
+from .runner import Metrics, Runner, Variant
 from .schemas import (BatchRow, CompareRow, ExportResult, Flags, FlagsState, HistoryEntry, LaunchResult, ObjectId,
                       ObjectInfo, OptimizeResult, ParamSpec, ProjectOpened, ProjectSummary, SessionId,
                       SettingsState, SettingValue, StudioInfo, TransformState, VariantOut, VariantSpec)
@@ -357,11 +357,9 @@ def compare(
     """Metrics of earlier runs side by side, with time/grams deltas relative to the first."""
     rows: list[CompareRow] = []
     for rid in run_ids:
-        f = _run_dir(rid) / "result.json"
-        if not f.is_file():
+        m = runner()._cached(_run_dir(rid), rid, 0, failures=True, invalidate_corrupt=False)
+        if m is None:
             raise ValueError(f"unknown run {rid}")
-        m = parse_result(json.loads(f.read_text(encoding="utf-8")))
-        m.run_id = rid
         rows.append(CompareRow(**m.model_dump()))
     for r in rows[1:]:
         r.delta_time_s = round(r.time_s - rows[0].time_s, 1)

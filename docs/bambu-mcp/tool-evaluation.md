@@ -23,7 +23,7 @@ four Tweaker poses and four Trimesh poses per case. Candidate matrices were
 validated against the original STL; the native project retained its meshes,
 color assignments, relative placement and source identity. All four Tweaker
 poses made the multicolor case much worse and were rejected by measured budgets.
-One connector pose failed slicing. Both outcomes are retained in the evidence;
+Two connector poses (one axis rotation and one Tweaker pose) failed slicing. These outcomes are retained in the evidence;
 the heuristic is not treated as authority.
 
 The search experiment measured an 18-combination real-slicer table for each of

@@ -114,7 +114,8 @@ def compare_print_candidates(project_path, output_dir, candidates, slicer_path=N
             copied['Metadata/project_settings.config'] = json.dumps(modified).encode()
         record = dict(candidate, status='failed', directory=str(directory), started_at=datetime.now(timezone.utc).isoformat())
         records.append(record)
-        effective = {**settings, **candidate['settings']}
+        normalized = {k: str(int(v)) if isinstance(v, bool) else v for k, v in candidate['settings'].items()}
+        effective = {**settings, **normalized}
         record['effective_settings'] = effective
         record['constraint_violations'] = []
         if spec:
@@ -175,6 +176,8 @@ def compare_print_candidates(project_path, output_dir, candidates, slicer_path=N
 
 def _compare_owned(project_path, output_dir, candidates, slicer_path, timeout, print_spec, workers, backend_python):
     """Explicit JSON process boundary: no Bambu dependencies in FreeCAD's Python runtime."""
+    if not isinstance(candidates, list) or not 1 <= len(candidates) <= 12:
+        raise ValueError('candidates must contain 1..12 entries')
     if not _numeric(timeout) or not 1 <= timeout <= 3600:
         raise ValueError('Bambu backend timeout must be finite and within 1..3600 seconds')
     if isinstance(workers, bool) or not isinstance(workers, int) or not 1 <= workers <= 8:
@@ -193,7 +196,7 @@ def _compare_owned(project_path, output_dir, candidates, slicer_path, timeout, p
         directory = Path(td)
         req, response = directory/'request.json', directory/'response.json'
         req.write_text(json.dumps(request, allow_nan=False))
-        code, failure, log, elapsed = run_bounded([str(python), '-m', 'bambu_mcp.pipeline',
+        code, failure, log, _ = run_bounded([str(python), '-m', 'bambu_mcp.pipeline',
                                                   '--request', str(req), '--response', str(response)], directory, limit)
         if failure or code or not response.is_file():
             raise RuntimeError(f'Bambu backend {failure or "failed"}: {log[-2000:]}')

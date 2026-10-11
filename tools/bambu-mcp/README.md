@@ -30,6 +30,7 @@ if a tool loses any of these.
 | `settings_set` / `settings_reset` | global or per-object overrides (validated; G-code keys refused) |
 | `object_transform`, `orient`, `arrange` | per-object rotation + drop to bed, auto-orient, auto-arrange |
 | `slice`, `evaluate_batch`, `compare` | time / grams / per-role time; parallel; cached by variant hash |
+| `compare_project` | isolated native whole-assembly candidate comparison, print constraints and Pareto reports |
 | `optimize` | staged search: orientation → support → infill → shells → layer height; adhesion opt-in |
 | `export`, `open_in_studio` | write sliced 3MF; open in the GUI |
 

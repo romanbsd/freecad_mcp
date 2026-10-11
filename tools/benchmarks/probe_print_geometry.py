@@ -11,7 +11,7 @@ envelopes=Path(sys.argv[2]).parent/'envelopes';envelopes.mkdir(exist_ok=True)
 np.random.seed(42)
 for name,boxes in cases.items():
  parts=[]
- for x,y,z,w,d,h,slot in boxes:
+    for x,y,z,w,d,h,_ in boxes:
   m=trimesh.creation.box([w,d,h]);m.apply_translation([x+w/2,y+d/2,z+h/2]);parts.append(m)
  m=trimesh.util.concatenate(parts);m.export(str(envelopes/(name+'.stl')))
  t=time.perf_counter()

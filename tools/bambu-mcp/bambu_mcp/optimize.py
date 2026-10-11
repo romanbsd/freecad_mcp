@@ -75,8 +75,9 @@ def _violations(settings: dict, o: Objective) -> list[str]:
     if o.functional and settings.get("sparse_infill_pattern") == "lightning":
         bad.append("lightning infill in a functional part")
     h = _pct(settings.get("layer_height", ""))
-    if h is not None and h > (o.max_layer_height if o.max_layer_height is not None else .28) + 1e-9:
-        bad.append(f"layer_height={settings['layer_height']} above max {o.max_layer_height}")
+    cap = o.max_layer_height if o.max_layer_height is not None else .28
+    if h is not None and h > cap + 1e-9:
+        bad.append(f"layer_height={settings['layer_height']} above max {cap}")
     return bad
 
 

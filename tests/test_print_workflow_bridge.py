@@ -6,6 +6,7 @@ import pytest
 import freecad_bridge as fb
 from test_slicer_pipeline import project, slicer
 from test_orientation_candidates import envelope, matrix_cli
+from test_unified_print_pipeline import owned_python
 
 
 @pytest.mark.parametrize("tool,arguments,kind", [
@@ -49,13 +50,13 @@ def test_shared_print_spec_reaches_geometric_preflight(monkeypatch):
     assert result['min_observed_wall_mm']==.7
 
 
-def test_bridge_owned_backend_uses_real_json_worker(project,slicer,tmp_path,monkeypatch):
+def test_bridge_owned_backend_uses_real_json_worker(project,slicer,tmp_path,monkeypatch,owned_python):
     text=slicer.read_text().replace("mode=folder.name", "mode='normal'")
     text=text.replace("print('warning: preset missing')", "(folder/'result.json').write_text(json.dumps({'return_code':0,'sliced_plates':[{'id':1,'total_predication':seconds,'filaments':[{'total_used_g':42.5}]}]}))")
     slicer.write_text(text)
     monkeypatch.setenv('BAMBU_MCP_HOME',str(tmp_path/'cache'))
     result=asyncio.run(fb.compare_print_candidates(str(project),str(tmp_path/'result'),
-        [{'name':'coarse','settings':{'layer_height':.28}}],str(slicer),backend='bambu',print_spec={'nozzle_mm':.4},workers=2))
+        [{'name':'coarse','settings':{'layer_height':.28}}],str(slicer),backend='bambu',print_spec={'nozzle_mm':.4},workers=2,backend_python=str(owned_python)))
     assert result['backend']=='bambu'
     assert result['winners']['fastest']=='coarse'
     assert result['candidates'][1]['metrics']['seconds']==80

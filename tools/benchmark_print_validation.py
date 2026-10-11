@@ -71,7 +71,7 @@ def main():
     code, error, log, elapsed = run_bounded([python, str(ROOT/'tools/benchmarks/probe_print_validation.py')], work, 30)
     if code or error:
         raise RuntimeError(f'Optional probe failed: {error or code}: {log[-1000:]}')
-    report['optional_probe'] = json.loads((work/'slicer.log').read_text())
+    report['optional_probe'] = json.loads((work/'probe.json').read_text())
     report['decisions'] = dict(lib3mf='adopt optional read-only advisory validator; strict mode cannot gate Bambu files',
         gcodeparser='reject Bambu motion interpretation; use bounded native comment diagnostics instead',
         nlopt='defer CAD optimizer: numeric smoke matches a direct bound choice and proves no real CAD benefit',

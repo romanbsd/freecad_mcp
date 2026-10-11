@@ -192,7 +192,7 @@ class Runner:
         with lock:  # identical variants in one batch must not slice into the same dir at once
             return self._evaluate_locked(source, variant, key, run, machine, process, filaments, timeout_s)
 
-    def _cached(self, run: Path, key: str, plate: int, failures: bool = False) -> Metrics | None:
+    def _cached(self, run: Path, key: str, plate: int, failures: bool = False, invalidate_corrupt: bool = True) -> Metrics | None:
         """Parsed result.json, or None. Failed slices are only returned with failures=True (never cache-hit)."""
         res = run / "result.json"
         if not res.is_file():
@@ -200,7 +200,8 @@ class Runner:
         try:
             m = parse_result(json.loads(res.read_text(encoding="utf-8")), plate)
         except (OSError, ValueError, AttributeError, TypeError):
-            res.unlink(missing_ok=True)  # corrupt / partial: treat as a miss
+            if invalidate_corrupt:
+                res.unlink(missing_ok=True)  # corrupt / partial: treat as a miss
             return None
         if m.ok:
             try:

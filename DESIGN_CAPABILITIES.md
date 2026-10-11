@@ -242,6 +242,18 @@ fastest valid result becomes `best_candidate`. Review its sliced preview before
 printing. The input project remains unchanged. Processes have time/output
 limits and their child processes are stopped on timeout.
 
+### Unified comparison backend and print specification
+
+`compare_print_candidates` now also accepts `backend="bambu"`, `print_spec`,
+`workers`, and `backend_python`. The compatibility default remains `legacy`.
+The owned backend adds fully resolved presets, immutable preset snapshots, cached
+parallel slicing, and the same whole-assembly and strict artifact validation.
+Both backends return fastest, least-material and conservative alternatives with
+setting differences and trade-offs. `inspect_printability(print_spec=...)` uses
+`min_wall_mm` as its sampled threshold. See the [versioned contract and
+benchmarks](docs/bambu-mcp/unified-pipeline.md) for enforced constraints and the
+geometry/preview requirements that remain explicitly unverified.
+
 ## Tests
 
 ```sh
@@ -254,15 +266,3 @@ tests compare analytical profile volumes, interpolated points, guide boundaries,
 curvature and tangents; exercise rollback and reopen/rebuild; and verify section
 coordinates, calibration, seam alignment, colors and native 3MF reimport.
 The serializer tests independently inspect ZIP/XML and cover atomic failure.
-
-### Unified comparison backend and print specification
-
-`compare_print_candidates` now also accepts `backend="bambu"`, `print_spec`,
-`workers`, and `backend_python`. The compatibility default remains `legacy`.
-The owned backend adds fully resolved presets, immutable preset snapshots, cached
-parallel slicing, and the same whole-assembly and strict artifact validation.
-Both backends return fastest, least-material and conservative alternatives with
-setting differences and trade-offs. `inspect_printability(print_spec=...)` uses
-`min_wall_mm` as its sampled threshold. See the [versioned contract and
-benchmarks](docs/bambu-mcp/unified-pipeline.md) for enforced constraints and the
-geometry/preview requirements that remain explicitly unverified.

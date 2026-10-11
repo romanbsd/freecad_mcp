@@ -1,9 +1,7 @@
-from pathlib import Path
 import json
 import pytest
 from print_pipeline_core.spec import resolve_spec, violations
 from print_pipeline_core.report import summarize
-from bambu_mcp.pipeline import compare_project
 
 
 def test_nozzle_bounds_constraints_and_unchanged_baseline():
@@ -58,7 +56,7 @@ def test_per_slot_presets_are_resolved_without_collapsing_filaments():
     assert resolve_spec({},effective)['nozzle_mm']==.4
 
 
-def test_optimizer_shared_nozzle_limits_and_report(tmp_path):
+def test_optimizer_shared_nozzle_limits_and_report():
     from bambu_mcp import optimize
     from bambu_mcp.runner import Variant, Metrics
     from test_unit import FIXTURE
@@ -119,6 +117,55 @@ def test_boolean_candidates_use_slicer_setting_encoding():
         {'name':'no','settings':{'enable_support':False}}])] == ['1', '0']
 
 
+@pytest.mark.parametrize('spec,field', [({'filament_presets':None},'filament_presets'),
+    ({'filament_presets':'PLA'},'filament_presets'), ({'machine_preset':1},'machine_preset'),
+    ({'process_preset':[]},'process_preset')])
+def test_invalid_presets_rejected_before_loader(tmp_path, monkeypatch, spec, field):
+    from bambu_mcp import pipeline
+    from bambu_mcp.benchmarks import make_project
+    source = make_project(tmp_path/'native.3mf', 'narrow_footprint', {})
+    def forbidden(*a, **kw):
+        pytest.fail('Preset loading must not run for malformed preset fields')
+    monkeypatch.setattr(pipeline, 'Runner', forbidden)
+    with pytest.raises(ValueError, match=field):
+        pipeline.compare_project(source, tmp_path/'out', [{'name':'same'}], print_spec=spec)
+    assert not (tmp_path/'out').exists()
+
+
+def test_reported_default_layer_cap_matches_enforced_cap():
+    from bambu_mcp.optimize import Objective, _violations
+    assert _violations({'layer_height':'0.4'}, Objective()) == ['layer_height=0.4 above max 0.28']
+
+
+def test_compare_uses_strict_artifacts_and_preserves_corrupt_cache(tmp_path, monkeypatch):
+    import zipfile
+    from bambu_mcp import server
+    from bambu_mcp.runner import Runner
+    r = Runner.__new__(Runner)
+    r.home = tmp_path
+    monkeypatch.setattr(server, 'runner', lambda: r)
+    ids = ['a'*24, 'b'*24]
+    for rid, outside in zip(ids, ['false','true']):
+        directory = tmp_path/'runs'/rid
+        directory.mkdir(parents=True)
+        # JSON predictions deliberately differ: compare must use the sliced artifact.
+        (directory/'result.json').write_text(json.dumps({'return_code':0, 'sliced_plates':[
+            {'id':1, 'total_predication':10, 'filaments':[{'total_used_g':1}]}]}))
+        xml = '<config><plate><metadata key="prediction" value="100"/><metadata key="weight" value="4"/>' + f'<metadata key="outside" value="{outside}"/></plate></config>'
+        with zipfile.ZipFile(directory/'out.3mf', 'w') as z:
+            z.writestr('Metadata/slice_info.config', xml)
+            z.writestr('Metadata/plate_1.gcode', '; FEATURE: Support\n; LAYER_HEIGHT: 0.2\nG1 E1\n')
+    rows = server.compare(ids)
+    assert rows[0].ok and rows[0].time_s == 100 and rows[0].filament_g == 4
+    assert not rows[1].ok and rows[1].outside
+    assert rows[1].toolpath_profiles[0]['feature_blocks'] == {'Support':1}
+    raw = tmp_path/'runs'/ids[0]/'result.json'
+    raw.write_text('{broken')
+    with pytest.raises(ValueError, match='unknown run'):
+        server.compare([ids[0]])
+    assert raw.read_text() == '{broken'  # read-only compare must not invalidate the cache
+
+
 def test_prototype_still_honors_explicit_minimum_and_locked_assembly():
     base = {'nozzle_diameter':['.4'],'wall_loops':4,'enable_support':'1','brim_type':'outer_only'}
     spec = resolve_spec({'functional':False,'min_wall_loops':3,'locked_objects':[2],
@@ -161,7 +208,7 @@ def test_bounded_execution_stops_child_holding_pipe_after_parent_exit(tmp_path):
     from print_pipeline_core.process import run_bounded
     child = 'import time,pathlib; p=pathlib.Path("tick"); i=0\nwhile True:\n p.write_text(str(i)); i+=1; time.sleep(.02)'
     script = 'import subprocess,sys,pathlib; p=subprocess.Popen([sys.executable,"-c",' + repr(child) + ']); pathlib.Path("child.pid").write_text(str(p.pid))'
-    code, error, log, elapsed = run_bounded([sys.executable,'-c',script],tmp_path,.8)
+    _, error, _, elapsed = run_bounded([sys.executable,'-c',script],tmp_path,.8)
     assert error=='timeout' and elapsed<3
     pid=int((tmp_path/'child.pid').read_text())
     try:
@@ -184,7 +231,7 @@ def test_worker_timeout_terminates_separately_grouped_slicer(tmp_path, cleanup_e
     worker='from concurrent.futures import ThreadPoolExecutor; from pathlib import Path; import sys; from bambu_mcp.pipeline import install_cancellation; from print_pipeline_core.process import run_bounded; install_cancellation()\nwith ThreadPoolExecutor(1) as pool: pool.submit(run_bounded,[sys.executable,"-c",'+repr(child)+'],Path.cwd(),30).result()'
     if not cleanup_enabled:
         worker = worker.replace('install_cancellation()\n', 'install_cancellation(); import signal; signal.signal(signal.SIGTERM,signal.SIG_DFL)\n')
-    code,error,log,elapsed=run_bounded([sys.executable,'-c',worker],tmp_path,1)
+    _,error,_,elapsed=run_bounded([sys.executable,'-c',worker],tmp_path,1)
     assert error=='timeout' and elapsed<3
     pid=int((tmp_path/'nested.pid').read_text())
     try:

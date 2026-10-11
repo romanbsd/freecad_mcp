@@ -1,9 +1,7 @@
 import hashlib
 import io
 import os
-from pathlib import Path
 import re
-import sys
 import zipfile
 
 import pytest

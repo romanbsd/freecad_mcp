@@ -32,6 +32,16 @@ def equivalent(a, b):
         return str(a) == str(b)
 
 
+def validate_preset_fields(raw):
+    """Validate names before callers load files or iterate filament slots."""
+    for key in ('machine_preset', 'process_preset'):
+        if not isinstance(raw.get(key, ''), str):
+            raise ValueError(key + ' must be a name or path')
+    values = raw.get('filament_presets', [])
+    if not isinstance(values, list) or not all(isinstance(x, str) and x for x in values):
+        raise ValueError('filament_presets must contain nonempty strings')
+
+
 def resolve_spec(raw, settings):
     if not isinstance(raw, dict) or set(raw) - (set(DEFAULTS) | {'bounds', 'review_requirements'}):
         raise ValueError('Unknown print specification field or invalid specification')
@@ -44,10 +54,8 @@ def resolve_spec(raw, settings):
     for key in ('functional', 'require_brim'):
         if type(spec[key]) is not bool:
             raise ValueError(key + ' must be boolean')
-    for key in ('machine_preset', 'process_preset'):
-        if not isinstance(spec[key], str):
-            raise ValueError(key + ' must be a name or path')
-    for key in ('filament_presets', 'locked_keys', 'protected_surfaces'):
+    validate_preset_fields(spec)
+    for key in ('locked_keys', 'protected_surfaces'):
         if not isinstance(spec[key], list) or not all(isinstance(x, str) and x for x in spec[key]):
             raise ValueError(key + ' must contain nonempty strings')
     if not isinstance(spec['locked_objects'], list) or not all(isinstance(x, (int, str)) and not isinstance(x, bool) and str(x).isdigit() for x in spec['locked_objects']):

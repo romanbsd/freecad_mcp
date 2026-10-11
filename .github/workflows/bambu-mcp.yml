@@ -1,5 +1,12 @@
 name: Bambu MCP
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     paths:
@@ -34,6 +41,7 @@ on:
 jobs:
   unit-and-schema:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       matrix:
         python: ['3.10', '3.12']
@@ -45,6 +53,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: tools/bambu-mcp/pyproject.toml
       - run: python -m venv .venv
       - run: .venv/bin/python -m pip install '.[test,validation]'
       - run: .venv/bin/python -m pytest -m 'not slow'
@@ -55,7 +65,9 @@ jobs:
         run: tools/bambu-mcp/.venv/bin/python -m pytest tests/test_slicer_pipeline.py tests/test_unified_print_pipeline.py tests/test_orientation_candidates.py
       - name: FreeCAD bridge API compatibility
         working-directory: .
+        env:
+          FREECAD_BAMBU_BACKEND_PYTHON: ${{ github.workspace }}/tools/bambu-mcp/.venv/bin/python
         run: |
           python -m venv /tmp/freecad-bridge-tests
           /tmp/freecad-bridge-tests/bin/python -m pip install 'mcp<2' pytest
-          /tmp/freecad-bridge-tests/bin/python -m pytest tests/test_print_workflow_bridge.py
+          /tmp/freecad-bridge-tests/bin/python -m pytest tests/test_print_workflow_bridge.py tests/test_bridge.py tests/test_framing.py tests/test_parametric_logic.py tests/test_printability.py tests/test_manufacturing_export.py

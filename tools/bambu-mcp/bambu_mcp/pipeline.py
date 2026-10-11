@@ -17,7 +17,7 @@ from .runner import Runner, Variant
 from print_pipeline_core.assembly import _read_project, _rotate_project
 from print_pipeline_core.artifacts import read_artifacts
 from print_pipeline_core.candidates import _validate, ALLOWED_SETTINGS
-from print_pipeline_core.spec import resolve_spec, violations, metric_violations, merge_presets
+from print_pipeline_core.spec import resolve_spec, violations, metric_violations, merge_presets, validate_preset_fields
 from print_pipeline_core.report import summarize
 
 MAX_BYTES = 1024**3
@@ -25,6 +25,8 @@ MAX_BYTES = 1024**3
 
 def candidate_specs(candidates):
     """Share rigid-transform validation and support both maintained setting catalogs."""
+    if not isinstance(candidates, list) or not 1 <= len(candidates) <= 12:
+        raise ValueError('candidates must contain 1..12 entries')
     rows = []
     for c in candidates:
         if not isinstance(c, dict) or set(c) - {'name', 'settings', 'rotation', 'rotation_matrix'}:
@@ -58,6 +60,10 @@ def compare_project(project_path, output_dir, candidates, slicer_path=None, time
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 1 <= timeout <= 3600:
         raise ValueError('timeout must be within 1..3600 seconds')
     cands = candidate_specs(candidates)
+    requested = print_spec if print_spec is not None else {}
+    if not isinstance(requested, dict):
+        raise ValueError('print_spec must be a dictionary')
+    validate_preset_fields(requested)
     source = Path(project_path).expanduser().resolve(strict=True)
     with source.open('rb') as handle:
         raw = handle.read(MAX_BYTES + 1)
@@ -66,9 +72,6 @@ def compare_project(project_path, output_dir, candidates, slicer_path=None, time
     digest = hashlib.sha256(raw).hexdigest()
     entries, stored = _read_project(io.BytesIO(raw))
     r = Runner(binary=slicer_path, **({'home': Path(cache_home)} if cache_home else {}))
-    requested = print_spec if print_spec is not None else {}
-    if not isinstance(requested, dict):
-        raise ValueError('print_spec must be a dictionary')
     # Load every requested preset before publishing any output directory.
     selected = [('machine', requested.get('machine_preset', '')), ('process', requested.get('process_preset', ''))]
     selected += [('filament', f) for f in requested.get('filament_presets', [])]

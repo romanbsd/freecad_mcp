@@ -2,6 +2,7 @@
 import importlib.metadata
 import json
 import nlopt
+from pathlib import Path
 from gcodeparser import parse_gcode_lines
 
 calls = 0
@@ -25,7 +26,7 @@ evaluation_calls = calls
 solver_volume = volume([thickness], None)
 direct_volume = volume([1.2], None)
 lines = list(parse_gcode_lines('M620.1 E F523 T210'))
-print(json.dumps(dict(versions={p:importlib.metadata.version(p) for p in ('gcodeparser','nlopt','lib3mf')},
+Path('probe.json').write_text(json.dumps(dict(versions={p:importlib.metadata.version(p) for p in ('gcodeparser','nlopt','lib3mf')},
     gcodeparser=dict(input='M620.1 E F523 T210', parsed_commands=[list(line.command) for line in lines],
                     compatible=False, reason='Decimal M command becomes M620 and a spurious T210 tool-change command'),
     nlopt=dict(status='numerical_smoke_only', calls=evaluation_calls, thickness_mm=thickness,

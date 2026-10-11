@@ -1,5 +1,5 @@
 """Validated native whole-assembly 3MF transforms; MIT, extracted from FreeCAD pipeline."""
-import json, math, xml.etree.ElementTree as ET, zipfile
+import json, math, re, xml.etree.ElementTree as ET, zipfile
 CORE = 'http://schemas.microsoft.com/3dmanufacturing/core/2015/02'
 PROD = 'http://schemas.microsoft.com/3dmanufacturing/production/2015/06'
 
@@ -41,6 +41,8 @@ def _rotate_project(entries, matrix, max_object_visits=10000, max_vertex_visits=
     object_visits = vertex_visits = 0
     def visit(path, oid, placement, ancestors):
         nonlocal object_visits, vertex_visits
+        if not isinstance(oid, str) or not re.fullmatch(r'[0-9]+', oid) or int(oid) <= 0:
+            raise ValueError('Invalid component object id')
         object_visits += 1
         if object_visits > max_object_visits:
             raise ValueError(f'Assembly exceeds {max_object_visits} object visits')

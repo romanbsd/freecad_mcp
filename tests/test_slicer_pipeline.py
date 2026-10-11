@@ -84,6 +84,20 @@ def test_subprocess_metrics_and_source_preserved(project,slicer,tmp_path):
         assert settings['sparse_infill_density']=='10%'
 
 
+@pytest.mark.parametrize('reference', ['1', '2'])
+@pytest.mark.parametrize('object_id', ['0', '-1', '', "1' or '1'='1", "1']"])
+def test_malformed_object_references_are_cleanly_rejected(project, reference, object_id):
+    with zipfile.ZipFile(project) as z:
+        entries = {i.filename:z.read(i) for i in z.infolist()}
+    entries['3D/3dmodel.model'] = entries['3D/3dmodel.model'].replace(
+        f'objectid="{reference}"'.encode(), f'objectid="{object_id}"'.encode())
+    with zipfile.ZipFile(project, 'w') as z:
+        for name, data in entries.items():
+            z.writestr(name, data)
+    with pytest.raises(ValueError, match='Invalid component object id'):
+        sp._read_project(project)
+
+
 @pytest.mark.parametrize('name,error',[('exit','exit'),('missing','missing_output'),('broken','malformed_output'),('nan','malformed_output'),('nogcode','malformed_output'),('emptygcode','malformed_output'),('badjson','malformed_output'),('timeout','timeout'),('flood','log_limit'),('zero','malformed_output'),('zerotime','malformed_output')])
 def test_failures_not_ranked(project,slicer,tmp_path,name,error):
     report=sp.compare_print_candidates(project,tmp_path/'results',[{'name':name}],slicer,timeout=1 if name=='timeout' else 5)
