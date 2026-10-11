@@ -66,6 +66,12 @@ def run_bounded(argv, directory, timeout, log_limit=4*1024*1024):
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+            except PermissionError:
+                # macOS can return EPERM for a zombie-only group. Suppress it
+                # only once the leader is reaped; a live permission failure
+                # must remain visible rather than entering an unbounded wait.
+                if process.poll() is None:
+                    raise
         process.wait()
         with _lock:
             _active.discard(process.pid)

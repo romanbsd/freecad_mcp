@@ -4,6 +4,56 @@ from print_pipeline_core.spec import resolve_spec, violations
 from print_pipeline_core.report import summarize
 
 
+@pytest.mark.parametrize('failure', ['timeout', OSError('binary unavailable')])
+def test_version_failure_is_memoized(tmp_path, monkeypatch, failure):
+    from bambu_mcp.runner import Runner
+    import bambu_mcp.runner as module
+    calls = []
+    def probe(*args):
+        calls.append(args)
+        if isinstance(failure, Exception):
+            raise failure
+        return -9, failure, '', .1
+    monkeypatch.setattr(module, 'run_bounded', probe)
+    runner = Runner(binary='/unused/bambu', home=tmp_path)
+    assert runner.version() == runner.version() == f'? ({failure})'
+    assert len(calls) == 1
+
+
+def test_version_does_not_swallow_execution_cancellation(tmp_path, monkeypatch):
+    from bambu_mcp.runner import Runner
+    import bambu_mcp.runner as module
+    def cancelled(*args):
+        raise ValueError('Execution cancelled')
+    monkeypatch.setattr(module, 'run_bounded', cancelled)
+    runner = Runner(binary='/unused/bambu', home=tmp_path)
+    with pytest.raises(ValueError, match='Execution cancelled'):
+        runner.version()
+    assert runner._version is None
+
+
+def test_zombie_group_permission_error_preserves_result(tmp_path, monkeypatch):
+    import sys
+    import print_pipeline_core.process as module
+    original = module.subprocess.Popen
+    children = []
+    def exited_child(*args, **kwargs):
+        child = original(*args, **kwargs)
+        child.wait(timeout=3)  # tiny output fits the pipe; establish an exited leader
+        children.append(child)
+        return child
+    def zombie_group(*args):
+        raise PermissionError('zombie-only process group')
+    monkeypatch.setattr(module.subprocess, 'Popen', exited_child)
+    monkeypatch.setattr(module.os, 'killpg', zombie_group)
+    code, error, output, _ = module.run_bounded(
+        [sys.executable, '-c', 'print("done")'], tmp_path, 3, log_limit=0)
+    assert (code, error) == (0, 'log_limit')
+    assert 'done' in output
+    assert children[0].stdout.closed
+    assert children[0].pid not in module._active
+
+
 def test_nozzle_bounds_constraints_and_unchanged_baseline():
     base = {'nozzle_diameter': ['0.2'], 'min_layer_height': ['0.05'], 'max_layer_height': ['0.2'],
             'layer_height': '0.1', 'wall_loops': '2', 'sparse_infill_density': '15%', 'brim_type': 'outer_only'}

@@ -118,11 +118,12 @@ class Runner:
                 with tempfile.TemporaryDirectory(prefix='version-', dir=self.home) as td:
                     code, failure, captured, elapsed = run_bounded([self.binary, '--help'], Path(td), 30, 1024*1024)
                 if failure:
-                    return f'? ({failure})'
-                self._version = next((l for l in captured.splitlines()
-                                      if l.startswith('BambuStudio-')), '?')
+                    self._version = f'? ({failure})'
+                else:
+                    self._version = next((l for l in captured.splitlines()
+                                          if l.startswith('BambuStudio-')), '?')
             except (OSError, subprocess.SubprocessError) as e:
-                return f"? ({e})"
+                self._version = f"? ({e})"
         return self._version
 
     def argv(self, variant: Variant, in_file: str, out_dir: Path, settings: list[str],
@@ -244,8 +245,6 @@ class Runner:
                 code, failure, tail, elapsed = run_bounded(argv, run, timeout_s)
                 if failure or code != 0:
                     return Metrics(ok=False, run_id=key, error=f"{failure or 'exit'} (exit {code}): {tail[-2000:]}")
-        except subprocess.TimeoutExpired:
-            return Metrics(ok=False, run_id=key, error=f"timeout after {timeout_s}s")
         except (ValueError, KeyError, OSError, zipfile.BadZipFile, ET.ParseError) as e:
             return Metrics(ok=False, run_id=key, error=f"{type(e).__name__}: {e}")
         if not res.is_file():

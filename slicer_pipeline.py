@@ -16,7 +16,7 @@ MAX_ASSEMBLY_VERTEX_VISITS = 6000000
 
 CORE = 'http://schemas.microsoft.com/3dmanufacturing/core/2015/02'
 PROD = 'http://schemas.microsoft.com/3dmanufacturing/production/2015/06'
-from print_pipeline_core.candidates import ALLOWED_SETTINGS, _validate, _numeric
+from print_pipeline_core.candidates import _validate, _numeric
 from print_pipeline_core import assembly as _assembly
 from print_pipeline_core.artifacts import read_artifacts
 from print_pipeline_core.process import run_bounded
