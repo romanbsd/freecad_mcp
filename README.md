@@ -85,6 +85,10 @@ connector recipes, optional Tweaker-3/stl-fit orientation candidates, and
 measured Bambu Studio candidate comparisons. Orientation and slicing run on
 the bridge host; external providers must be installed separately.
 
+For standalone Bambu Studio settings tweaks, parallel slicing comparisons, and
+optimization, use the repository-owned [bambu-mcp](tools/bambu-mcp/README.md).
+It runs alongside FreeCAD MCP and requires an installed Bambu Studio executable.
+
 For image-derived spray-paint templates, see the reusable
 [stencil skill](.agents/skills/stencil/SKILL.md) (`$stencil`).
 
