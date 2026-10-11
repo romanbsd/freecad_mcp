@@ -5,6 +5,34 @@
 The FreeCAD MCP (Model Control Protocol) provides a simplified interface for interacting with FreeCAD through a server-client architecture. This allows users to execute commands and retrieve information about the current FreeCAD document and scene.
 
 https://github.com/user-attachments/assets/5acafa17-4b5b-4fef-9f6c-617e85357d44
+## Runtime and installation
+
+The bridge uses FastMCP 4. One uv workspace environment runs both FreeCAD MCP
+and the owned Bambu pipeline from this source checkout:
+
+```bash
+uv sync --locked --extra validation
+uv run --locked --extra validation python src/freecad_bridge.py
+```
+
+The optional `validation` extra enables independent lib3mf source checks.
+Configure your MCP client to run this checkout's `.venv/bin/python` with
+`src/freecad_bridge.py`; restart the connection after upgrading. FreeCAD's
+installed desktop addon and framed socket protocol are unchanged.
+
+The bridge also exposes Bambu tools under `bambu_` names, including
+`bambu_project_open`, `bambu_optimize` and `bambu_compare_project`.
+`.venv/bin/bambu-mcp` remains available as a standalone server. Set
+`BAMBU_STUDIO_BIN` for your installed slicer. Comparison workers use the same
+Python environment by default.
+
+Tools advertise operation annotations and category tags. Dictionary results
+include native structured content, screenshots remain MCP image content, and
+FreeCAD failures preserve their code/message/recoverable fields with `isError`.
+Long operations emit start/completion notifications when clients request
+progress. Cancellation or a socket timeout does not undo a command already
+running in FreeCAD; inspect the document before retrying a mutation.
+
 ## Configuration
 
 To configure the MCP server, you can use a JSON format to specify the server settings. Below is an example configuration:
@@ -22,7 +50,35 @@ To configure the MCP server, you can use a JSON format to specify the server set
 }
 ```
 
-### Configuration Details
+### Runtime and installation
+
+The bridge uses FastMCP 4. One uv workspace environment runs both FreeCAD MCP
+and the owned Bambu pipeline from this source checkout:
+
+```bash
+uv sync --locked --extra validation
+uv run --locked --extra validation python src/freecad_bridge.py
+```
+
+The optional `validation` extra enables independent lib3mf source checks.
+Configure your MCP client to run this checkout's `.venv/bin/python` with
+`src/freecad_bridge.py`; restart the connection after upgrading. FreeCAD's
+installed desktop addon and framed socket protocol are unchanged.
+
+The bridge also exposes Bambu tools under `bambu_` names, including
+`bambu_project_open`, `bambu_optimize` and `bambu_compare_project`.
+`.venv/bin/bambu-mcp` remains available as a standalone server. Set
+`BAMBU_STUDIO_BIN` for your installed slicer. Comparison workers use the same
+Python environment by default.
+
+Tools advertise operation annotations and category tags. Dictionary results
+include native structured content, screenshots remain MCP image content, and
+FreeCAD failures preserve their code/message/recoverable fields with `isError`.
+Long operations emit start/completion notifications when clients request
+progress. Cancellation or a socket timeout does not undo a command already
+running in FreeCAD; inspect the document before retrying a mutation.
+
+## Configuration Details
 
 - **command**: The path to the Python executable that will run the FreeCAD MCP server. This can vary based on your operating system:
   - **Windows**: Typically, it might look like `C:\\ProgramData\\anaconda3\\python.exe` or `C:\\Python39\\python.exe`.

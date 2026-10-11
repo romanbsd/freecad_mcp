@@ -18,6 +18,8 @@ on:
       - 'tools/benchmark_print_validation.py'
       - 'tools/benchmarks/**'
       - 'src/freecad_bridge.py'
+      - 'pyproject.toml'
+      - 'uv.lock'
       - 'printability.py'
       - 'manufacturing_export.py'
       - 'parametric.py'
@@ -33,6 +35,8 @@ on:
       - 'tools/benchmark_print_validation.py'
       - 'tools/benchmarks/**'
       - 'src/freecad_bridge.py'
+      - 'pyproject.toml'
+      - 'uv.lock'
       - 'printability.py'
       - 'manufacturing_export.py'
       - 'parametric.py'
@@ -47,29 +51,25 @@ jobs:
     strategy:
       matrix:
         python: ['3.10', '3.12']
-    defaults:
-      run:
-        working-directory: tools/bambu-mcp
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-          cache: pip
-          cache-dependency-path: tools/bambu-mcp/pyproject.toml
-      - run: python -m venv .venv
-      - run: .venv/bin/python -m pip install '.[test,validation]'
-      - run: .venv/bin/python -m pytest -m 'not slow'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked --extra validation --python '${{ matrix.python }}'
+      - name: Standalone unit and schema checks
+        run: uv run --locked --extra validation python -m pytest tools/bambu-mcp/tests -m 'not slow'
         env:
-          PRINT_VALIDATION_PYTHON: ${{ github.workspace }}/tools/bambu-mcp/.venv/bin/python
-      - name: Legacy and cross-process comparison tests
-        working-directory: .
-        run: tools/bambu-mcp/.venv/bin/python -m pytest tests/test_slicer_pipeline.py tests/test_unified_print_pipeline.py tests/test_orientation_candidates.py
-      - name: FreeCAD bridge API compatibility
-        working-directory: .
+          PRINT_VALIDATION_PYTHON: ${{ github.workspace }}/.venv/bin/python
+      - name: Bridge, shared pipeline and protocol contracts
         env:
-          FREECAD_BAMBU_BACKEND_PYTHON: ${{ github.workspace }}/tools/bambu-mcp/.venv/bin/python
-        run: |
-          python -m venv /tmp/freecad-bridge-tests
-          /tmp/freecad-bridge-tests/bin/python -m pip install 'mcp<2' pytest
-          /tmp/freecad-bridge-tests/bin/python -m pytest tests/test_print_workflow_bridge.py tests/test_bridge.py tests/test_framing.py tests/test_parametric_logic.py tests/test_printability.py tests/test_manufacturing_export.py
+          FREECAD_BAMBU_BACKEND_PYTHON: ${{ github.workspace }}/.venv/bin/python
+        run: >-
+          uv run --locked --extra validation python -m pytest
+          tests/test_slicer_pipeline.py tests/test_unified_print_pipeline.py
+          tests/test_orientation_candidates.py tests/test_print_workflow_bridge.py
+          tests/test_bridge.py tests/test_bridge_mcp.py tests/test_framing.py
+          tests/test_parametric_logic.py tests/test_printability.py tests/test_manufacturing_export.py

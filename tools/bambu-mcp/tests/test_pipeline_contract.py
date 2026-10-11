@@ -280,7 +280,7 @@ def test_bounded_execution_stops_child_holding_pipe_after_parent_exit(tmp_path):
 def test_worker_timeout_terminates_separately_grouped_slicer(tmp_path, cleanup_enabled):
     import os, sys, time
     from print_pipeline_core.process import run_bounded
-    child='import pathlib,time,os; pathlib.Path("nested.pid").write_text(str(os.getpid())); p=pathlib.Path("nested.tick"); i=0\nwhile True:\n p.write_text(str(i)); i+=1; time.sleep(.02)'
+    child='import pathlib,time,os; pathlib.Path("nested.pid").write_text(str(os.getpid())); p=pathlib.Path("nested.tick"); i=0\nwhile True:\n pending=p.with_suffix(".pending"); pending.write_text(str(i)); pending.replace(p); i+=1; time.sleep(.02)'
     worker='from concurrent.futures import ThreadPoolExecutor; from pathlib import Path; import sys; from bambu_mcp.pipeline import install_cancellation; from print_pipeline_core.process import run_bounded; install_cancellation()\nwith ThreadPoolExecutor(1) as pool: pool.submit(run_bounded,[sys.executable,"-c",'+repr(child)+'],Path.cwd(),30).result()'
     if not cleanup_enabled:
         worker = worker.replace('install_cancellation()\n', 'install_cancellation(); import signal; signal.signal(signal.SIGTERM,signal.SIG_DFL)\n')
@@ -365,3 +365,61 @@ def test_legacy_and_spec_constraint_paths_agree_on_numeric_equivalence(functiona
     assert legacy and violations({'wall_loops': value}, {'wall_loops': '3'}, spec)
     assert not list(setting_breaches({'wall_loops': floor + '.0'}, {'wall_loops': floor},
                                     {'wall_loops': 10}, functional, None, .28))
+
+
+@pytest.mark.parametrize('plate_count,json_plate_count', [(1, 1), (2, 2), (1, 2)])
+def test_cached_artifact_reuse_preserves_single_plate_contract(tmp_path, monkeypatch, plate_count, json_plate_count):
+    import zipfile
+    from bambu_mcp import runner as module
+    directory = tmp_path / 'runs' / ('a' * 24)
+    directory.mkdir(parents=True)
+    (directory / 'result.json').write_text(json.dumps({'return_code': 0, 'sliced_plates': [
+        {'id': i, 'total_predication': 10, 'filaments': [{'total_used_g': 1}]}
+        for i in range(1, json_plate_count + 1)]}))
+    with zipfile.ZipFile(directory / 'out.3mf', 'w') as archive:
+        archive.writestr('Metadata/slice_info.config', '<config>' + ''.join(
+            f'<plate><metadata key="index" value="{i}"/><metadata key="prediction" value="100"/>'
+            '<metadata key="weight" value="4"/><metadata key="outside" value="false"/></plate>'
+            for i in range(1, plate_count + 1)) + '</config>')
+        for i in range(1, plate_count + 1):
+            archive.writestr(f'Metadata/plate_{i}.gcode', 'G1 E1\n')
+    original = module.read_artifact_result
+    calls = []
+    def counted(*args, **kwargs):
+        calls.append(args)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(module, 'read_artifact_result', counted)
+    runner = module.Runner(binary='/unused/bambu', home=tmp_path)
+    metrics = runner._cached(directory, 'a' * 24, 1)
+    assert metrics.ok
+    assert '_artifact_result' not in metrics.model_dump()
+    assert '_artifact_result' not in module.Metrics.model_json_schema()['properties']
+    if plate_count == json_plate_count == 1:
+        assert metrics.comparison_metrics()['seconds'] == 100
+        assert metrics.comparison_metrics()['total_grams'] == 4
+    else:
+        with pytest.raises(ValueError, match='exactly one|Invalid sliced_plates'):
+            metrics.comparison_metrics()
+    assert len(calls) == 1
+    # A new cache read must revalidate the actual artifact, rather than trusting old metrics.
+    (directory / 'out.3mf').write_bytes(b'corrupt')
+    assert runner._cached(directory, 'a' * 24, 1) is None
+    assert len(calls) == 2
+
+
+def test_setting_encodings_preserve_public_values():
+    from print_pipeline_core.settings import encode_settings, normalize_settings
+    settings = {'enable_support': True, 'sparse_infill_density': '10%', 'layer_height': .2}
+    assert encode_settings(settings) == {'enable_support': '1', 'sparse_infill_density': '10%', 'layer_height': '0.2'}
+    assert normalize_settings(settings) == {'enable_support': '1', 'sparse_infill_density': '10%', 'layer_height': .2}
+    assert encode_settings({'enable_support': False, 'sparse_infill_density': 10}) == {
+        'enable_support': '0', 'sparse_infill_density': '10%'}
+
+
+def test_finalization_rejects_unverified_baseline_before_ranking():
+    from print_pipeline_core.report import finalize_comparison
+    rows = [dict(name='baseline', status='failed'),
+            dict(name='fast', status='success', constraint_violations=[], metrics={'seconds': 10, 'total_grams': 1})]
+    choices = finalize_comparison(rows, {}, resolve_spec({"nozzle_mm": .4}, {}))
+    assert rows[1]['error_type'] == 'baseline_unavailable'
+    assert choices['winners']['fastest'] is None

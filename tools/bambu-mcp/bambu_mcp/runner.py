@@ -11,12 +11,12 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 from . import presets
 from .threemf import Package
 from print_pipeline_core.process import run_bounded
-from print_pipeline_core.artifacts import read_artifacts
+from print_pipeline_core.artifacts import ArtifactResult, read_artifact_result
 from .settings import resolve_settings
 
 HOME = Path(os.environ.get("BAMBU_MCP_HOME", Path.home() / ".bambu-mcp"))
@@ -70,6 +70,14 @@ class Metrics(BaseModel):
     plates: int = Field(0, description="number of plates included")
     outside: bool = Field(False, description="selected sliced artifact is outside its build plate")
     out_3mf: str = Field("", description="sliced 3MF path (reopenable in Bambu Studio)")
+
+    _artifact_result: ArtifactResult | None = PrivateAttr(default=None)
+
+    def comparison_metrics(self):
+        """Reuse validated metrics without exposing internal plate counts in MCP schemas."""
+        if self._artifact_result is None:
+            raise ValueError('Missing validated sliced artifact')
+        return self._artifact_result.single_plate_metrics()
 
 
 def parse_result(j: dict, plate: int = 0) -> Metrics:
@@ -199,7 +207,9 @@ class Runner:
             return None
         if m.ok:
             try:
-                strict = read_artifacts(run / 'out.3mf', run, plate=plate, strict_single_plate=False)
+                artifact = read_artifact_result(run / 'out.3mf', run, plate=plate, strict_single_plate=False)
+                strict = artifact.metrics
+                m._artifact_result = artifact
                 m.time_s, m.filament_g = strict['seconds'], strict['total_grams']
                 m.role_time_s = strict['feature_seconds'] or {}
                 m.toolpath_profiles = strict['toolpath_profiles']

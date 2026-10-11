@@ -1,4 +1,5 @@
 """Strict sliced-3MF validation, with absent cost buckets kept as null (MIT)."""
+from dataclasses import dataclass
 import json
 import math
 import re
@@ -16,10 +17,11 @@ def _positive(value, field, strictly_positive=False):
     return value
 
 
-def read_artifacts(path, directory, max_archive_bytes=1024**3, plate=0, strict_single_plate=True):
+def read_artifact_result(path, directory, max_archive_bytes=1024**3, plate=0, strict_single_plate=True):
     result = dict(seconds=0., total_grams=0., outside=False, layers=None, filament_changes=None,
                   model_grams=None, support_grams=None, purge_grams=None, tower_grams=None,
                   feature_seconds=None, slicer_version=None, warning_message='', warnings=[], toolpath_profiles=[])
+    json_plate_count = None
     ids = []
     found_counts = {'layers': 0, 'filament_changes': 0}
     with zipfile.ZipFile(path) as archive:
@@ -80,6 +82,7 @@ def read_artifacts(path, directory, max_archive_bytes=1024**3, plate=0, strict_s
             raise ValueError('Invalid sliced plate')
         if strict_single_plate and len(sliced) != 1:
             raise ValueError('Invalid sliced_plates')
+        json_plate_count = len(sliced)
         selected = [p for p in sliced if plate in (0, p.get('id'))]
         if len(selected) != len(ids) or any(p.get('id') not in ids for p in selected):
             raise ValueError('Sliced JSON and artifact plate counts disagree')
@@ -103,4 +106,23 @@ def read_artifacts(path, directory, max_archive_bytes=1024**3, plate=0, strict_s
         result['feature_seconds'] = features if all(p.get('feature_type_times') is not None for p in selected) else None
     result['warning_message'] = '; '.join(result['warnings'])
     # main_used_g includes support; never label it model-only mass.
-    return result
+    return ArtifactResult(result, len(plates), json_plate_count)
+
+
+@dataclass
+class ArtifactResult:
+    """Validated metrics plus total plate counts, kept outside public reports."""
+    metrics: dict
+    artifact_plate_count: int
+    json_plate_count: int | None
+
+    def single_plate_metrics(self):
+        if self.artifact_plate_count != 1:
+            raise ValueError('Expected exactly one sliced plate')
+        if self.json_plate_count not in (None, 1):
+            raise ValueError('Invalid sliced_plates')
+        return self.metrics.copy()
+
+
+def read_artifacts(path, directory, max_archive_bytes=1024**3, plate=0, strict_single_plate=True):
+    return read_artifact_result(path, directory, max_archive_bytes, plate, strict_single_plate).metrics

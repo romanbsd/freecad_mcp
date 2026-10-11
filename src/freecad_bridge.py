@@ -6,16 +6,29 @@ import socket
 import json
 import sys
 from pathlib import Path
-from mcp.server.fastmcp import FastMCP, Image
+from fastmcp import FastMCP
+from fastmcp.utilities.types import Image
+from fastmcp.exceptions import ToolError
+from fastmcp.tools import ToolResult
+from fastmcp.server.middleware import Middleware
 
 # Initialize FastMCP server
-mcp = FastMCP("freecad-bridge")
+mcp = FastMCP("freecad-bridge", instructions=(
+    "Start with capabilities. Prefer editable declarative components and validation over execute. "
+    "Use inspect_printability before measured print comparisons. Read freecad://guide/cookbook "
+    "before scripting. Slicer estimates do not certify physical strength or fit."))
 
 # The desktop addon and local print adapters live beside src/, rather than
 # inside the bridge package. Resolve this installation, not the caller's cwd.
 _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
+
+def _ann(*, read_only=False, destructive=False, idempotent=True, open_world=False):
+    """Explicit tool behavior hints shared by bridge decorators."""
+    return dict(readOnlyHint=read_only, destructiveHint=destructive,
+                idempotentHint=idempotent, openWorldHint=open_world)
+
 
 # Constants
 FREECAD_HOST = 'localhost'
@@ -26,7 +39,7 @@ FREECAD_PORT = 9876
 FREECAD_TIMEOUT = float(os.environ.get('FREECAD_MCP_TIMEOUT', '30'))
 
 
-class FreeCADToolError(RuntimeError):
+class FreeCADToolError(ToolError, RuntimeError):
     def __init__(self, code: str, message: str, recoverable: bool = False):
         super().__init__(message)
         self.code = code
@@ -73,7 +86,7 @@ async def send_to_freecad(command: Dict[str, Any]) -> Dict[str, Any]:
 def _unwrap_response(response: Any) -> Any:
     """Normalize the wire envelope and surface failures as tool errors."""
     if not isinstance(response, dict):
-        raise RuntimeError("invalid response from FreeCAD")
+        raise FreeCADToolError("INVALID_RESPONSE", "invalid response from FreeCAD")
     if response.get("status") == "error":
         error = response.get("error") or {}
         raise FreeCADToolError(
@@ -83,15 +96,46 @@ def _unwrap_response(response: Any) -> Any:
         )
     result = response.get("result", response)
     if isinstance(result, dict) and result.get("error"):
-        raise RuntimeError(result["error"])
+        raise FreeCADToolError("COMMAND_ERROR", str(result["error"]))
     return result
+
+
+class BridgeMiddleware(Middleware):
+    """Preserve actionable wire errors and report actual start/completion events."""
+    async def on_call_tool(self, context, call_next):
+        name = context.message.name
+        progress = context.fastmcp_context
+        long_call = name in {
+            'execute', 'solve_parameter_target', 'build_component', 'patch_component',
+            'export', 'export_bundle', 'export_component',
+            'suggest_print_orientations', 'compare_print_candidates',
+        }
+        if long_call and progress:
+            await progress.report_progress(0, 1, f'{name} started')
+        try:
+            result = await call_next(context)
+        except FreeCADToolError as exc:
+            return ToolResult(structured_content={'error': {
+                'code': exc.code, 'message': str(exc), 'recoverable': exc.recoverable,
+            }}, is_error=True)
+        if long_call and progress and not result.is_error:
+            await progress.report_progress(1, 1, f'{name} completed')
+        return result
+
+
+mcp.add_middleware(BridgeMiddleware())
+
+# Namespaced composition keeps existing CAD tool names and exposes the full
+# owned print pipeline through the same connection. Runner initialization stays lazy.
+from bambu_mcp.server import mcp as bambu_server
+mcp.mount(bambu_server, namespace='bambu')
 
 
 async def _request(command: Dict[str, Any]) -> Any:
     return _unwrap_response(await send_to_freecad(command))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(destructive=True, idempotent=False, open_world=True), tags={"cad"})
 async def execute(code: str, return_context: bool = False, reset: bool = False) -> Any:
     """Execute Python inside the running FreeCAD instance.
 
@@ -134,14 +178,14 @@ async def execute(code: str, return_context: bool = False, reset: bool = False) 
     })
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(read_only=True), tags={"inspection"})
 async def list_objects() -> Any:
     """List every object in the active document (name, label, type). Cheap
     overview — use get_object for the full properties of one object."""
     return await _request({"type": "list_objects"})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(read_only=True), tags={"inspection"})
 async def get_object(name: str, compact: bool = False) -> Any:
     """Detail for one object: validity/state and shape bbox + topology counts
     (verts/edges/faces/solids) when present.
@@ -155,7 +199,7 @@ async def get_object(name: str, compact: bool = False) -> Any:
                            "params": {"name": name, "compact": compact}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(destructive=True), tags={"cad"})
 async def export(names: list[str], path: str, coordinates: str = "document") -> Any:
     """Export objects to a CAD file. The format is chosen by the file
     extension: .step/.stp, .iges/.igs, .brep/.brp, or .stl.
@@ -169,7 +213,7 @@ async def export(names: list[str], path: str, coordinates: str = "document") -> 
     }})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(read_only=True), tags={"inspection"})
 async def list_types(filter: str = "") -> Any:
     """List creatable FreeCAD object TypeIds (what you can pass to addObject).
 
@@ -179,7 +223,7 @@ async def list_types(filter: str = "") -> Any:
     return await _request({"type": "list_types", "params": {"filter": filter}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(read_only=True), tags={"inspection"})
 async def describe_type(type_id: str) -> Any:
     """Property schema for a TypeId: each property's type, group, doc string and
     enum options. Use this to learn what you can set before writing execute code.
@@ -190,8 +234,8 @@ async def describe_type(type_id: str) -> Any:
     return await _request({"type": "describe_type", "params": {"type_id": type_id}})
 
 
-@mcp.tool()
-async def measure(a: str, b: str = "", about: dict = None) -> Any:
+@mcp.tool(annotations=_ann(read_only=True), tags={"inspection"})
+async def measure(a: str, b: str = "", about: dict | None = None) -> Any:
     """Measure geometry. With one object: volume, area, center of mass, bbox.
     With two: the minimum distance between them, the closest points, and the
     overlap volume (overlap_volume>0 / clash=True means they interfere — use
@@ -205,7 +249,7 @@ async def measure(a: str, b: str = "", about: dict = None) -> Any:
     return await _request({"type": "measure", "params": params})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(destructive=True, idempotent=False), tags={"cad"})
 async def solve_parameter_target(
     component_id: str, parameter: str, bounds: list, target: dict,
     tolerance: float = 0.01, max_iterations: int = 40, commit: bool = False,
@@ -218,10 +262,10 @@ async def solve_parameter_target(
     }})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(idempotent=False), tags={"cad"})
 async def transform(
-    object: str, translate: list[float] = None, rotate: dict = None,
-    center: list[float] = None, relative: bool = True, copy_to: str = "",
+    object: str, translate: list[float] | None = None, rotate: dict | None = None,
+    center: list[float] | None = None, relative: bool = True, copy_to: str = "",
 ) -> Any:
     """Move/rotate a named object via its Placement — no execute script needed.
 
@@ -239,7 +283,7 @@ async def transform(
         "center": center, "relative": relative, "copy_to": copy_to or None}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(destructive=True, idempotent=False), tags={"cad"})
 async def fillet(
     object: str, edges: list[int], radius: float,
     chamfer: bool = False, copy_to: str = "",
@@ -262,7 +306,7 @@ async def fillet(
         "chamfer": chamfer, "copy_to": copy_to or None}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(destructive=True, idempotent=False), tags={"cad"})
 async def boolean(
     op: str, objects: list[str], name: str = "", keep: bool = False,
 ) -> Any:
@@ -279,10 +323,10 @@ async def boolean(
         "op": op, "objects": objects, "name": name or None, "keep": keep}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(idempotent=False), tags={"cad"})
 async def duplicate(
-    object: str, count: int = 1, translate: list[float] = None,
-    rotate: dict = None, center: list[float] = None, name: str = "",
+    object: str, count: int = 1, translate: list[float] | None = None,
+    rotate: dict | None = None, center: list[float] | None = None, name: str = "",
     combine: str = "",
 ) -> Any:
     """Copy a named object, optionally as a linear/polar array.
@@ -302,7 +346,7 @@ async def duplicate(
         "combine": combine or None}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(destructive=True), tags={"cad"})
 async def set_property(object: str, properties: dict) -> Any:
     """Set data properties on a named object, then recompute. Good for tweaking
     parametric primitives (e.g. {"Length": 30} on a Part::Box). Scalars,
@@ -316,14 +360,14 @@ async def set_property(object: str, properties: dict) -> Any:
         "object": object, "properties": properties}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(read_only=True), tags={"inspection"})
 async def get_selection() -> Any:
     """What the user has selected in FreeCAD: objects and sub-elements
     (e.g. Edge1, Face2) — use these to target fillets/chamfers. GUI only."""
     return await _request({"type": "get_selection"})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(), tags={"cad"})
 async def set_selection(names: list[str]) -> Any:
     """Replace the current selection with the given object Names. GUI only.
 
@@ -333,7 +377,7 @@ async def set_selection(names: list[str]) -> Any:
     return await _request({"type": "set_selection", "params": {"names": names}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(read_only=True), tags={"inspection"})
 async def get_subelements(name: str, limit: int = 200) -> Any:
     """Sub-geometry of an object, so you can target it by index.
 
@@ -350,12 +394,12 @@ async def get_subelements(name: str, limit: int = 200) -> Any:
                            "params": {"name": name, "limit": limit}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(), tags={"inspection"})
 async def get_screenshot(
     width: int = 1024, height: int = 768, view: str = "iso", fit: bool = True,
-    targets: list[str] = None, transparent: list[str] = None,
-    temporary: bool = True, camera: dict = None, views: list[str] = None,
-    max_dim: int = None, wireframe: bool = False,
+    targets: list[str] | None = None, transparent: list[str] | None = None,
+    temporary: bool = True, camera: dict | None = None, views: list[str] | None = None,
+    max_dim: int | None = None, wireframe: bool = False,
 ) -> Image:
     """Capture the active FreeCAD 3D view as a PNG so you can see the model.
 
@@ -381,9 +425,9 @@ async def get_screenshot(
     return Image(data=base64.b64decode(inner["image_base64"]), format="png")
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(idempotent=False), tags={"cad"})
 async def create_component(document: str, name: str, label: str = "",
-                          parameters: list = None) -> Any:
+                          parameters: list | None = None) -> Any:
     """Create a parametric component: an App::Part container with a typed
     parameter registry. Each parameter declares kind "input" (concrete, with
     `default` and optional min/max/enum/unit) or "derived" (read-only, with an
@@ -395,11 +439,11 @@ async def create_component(document: str, name: str, label: str = "",
         "parameters": parameters or []}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(destructive=True, idempotent=False), tags={"cad"})
 async def define_component(component_id: str, features: list,
-                          rules: list = None, profiles: list = None,
-                          profile_definitions: list = None,
-                          geometry_references: list = None) -> Any:
+                          rules: list | None = None, profiles: list | None = None,
+                          profile_definitions: list | None = None,
+                          geometry_references: list | None = None) -> Any:
     """Define (or replace) the component's build graph — a list of features.
     Feature types include primitives, booleans, arrays, reusable 2D profiles,
     native constrained sketches, reusable datum frames, generic hole/shell/
@@ -432,7 +476,7 @@ async def define_component(component_id: str, features: list,
         "geometry_references": geometry_references}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(destructive=True), tags={"cad"})
 async def set_component_parameters(component_id: str, values: dict,
                                    rebuild: bool = True, validate: bool = False,
                                    enforce_bounds: bool = False) -> Any:
@@ -451,7 +495,7 @@ async def set_component_parameters(component_id: str, values: dict,
         "enforce_bounds": enforce_bounds}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(read_only=True), tags={"inspection"})
 async def preview_parameter_update(component_id: str, values: dict,
                                    rebuild: bool = True, validate: bool = True,
                                    enforce_bounds: bool = False) -> Any:
@@ -462,7 +506,7 @@ async def preview_parameter_update(component_id: str, values: dict,
         "enforce_bounds": enforce_bounds}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(read_only=True), tags={"inspection"})
 async def get_component(component_id: str) -> Any:
     """Return the component's parameter registry (with current values),
     dependency graph summary, variants, and latest validation status."""
@@ -470,7 +514,7 @@ async def get_component(component_id: str) -> Any:
         "component_id": component_id}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(read_only=True), tags={"inspection"})
 async def get_component_graph(component_id: str, detail: str = "summary") -> Any:
     """Return the revisioned feature graph. Use detail='full' for editable
     feature definitions and 'summary' for ids, types, roles, and inputs."""
@@ -478,7 +522,7 @@ async def get_component_graph(component_id: str, detail: str = "summary") -> Any
         "component_id": component_id, "detail": detail}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(read_only=True), tags={"inspection"})
 async def list_geometry_references(component_id: str,
                                    resolve: bool = False) -> Any:
     """List named references and optionally report topology tracking status."""
@@ -486,7 +530,7 @@ async def list_geometry_references(component_id: str,
         "component_id": component_id, "resolve": resolve}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(read_only=True), tags={"inspection"})
 async def resolve_geometry_reference(component_id: str,
                                      reference_id: str) -> Any:
     """Resolve one reference with stable/remapped/ambiguous/missing diagnostics."""
@@ -494,21 +538,21 @@ async def resolve_geometry_reference(component_id: str,
         "component_id": component_id, "reference_id": reference_id}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(read_only=True), tags={"inspection"})
 async def get_sketch_status(component_id: str, feature_id: str) -> Any:
     """Return solver status, DoF, constraint errors, and named sketch maps."""
     return await _request({"type": "get_sketch_status", "params": {
         "component_id": component_id, "feature_id": feature_id}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(read_only=True), tags={"inspection"})
 async def get_assembly_status(component_id: str) -> Any:
     """Inspect assembly DOF, constraint rank, residuals, and solver state."""
     return await _request({"type": "get_assembly_status", "params": {
         "component_id": component_id}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(), tags={"cad"})
 async def refresh_assembly(component_id: str) -> Any:
     """Refresh instance snapshots from their source components, reapply mates
     in dependency order, and return the resulting assembly status and bounds."""
@@ -516,9 +560,9 @@ async def refresh_assembly(component_id: str) -> Any:
         "component_id": component_id}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(destructive=True, idempotent=False), tags={"cad"})
 async def patch_component(component_id: str, operations: list,
-                          expected_revision: int = None,
+                          expected_revision: int | None = None,
                           validate: bool = False,
                           dry_run: bool = False) -> Any:
     """Apply revision-checked structural edits to a component graph."""
@@ -528,9 +572,9 @@ async def patch_component(component_id: str, operations: list,
         "dry_run": dry_run}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(read_only=True), tags={"inspection"})
 async def validate_patch(component_id: str, operations: list,
-                         expected_revision: int = None,
+                         expected_revision: int | None = None,
                          validate: bool = True) -> Any:
     """Build a structural patch transactionally and return diagnostics only."""
     return await _request({"type": "validate_patch", "params": {
@@ -538,38 +582,38 @@ async def validate_patch(component_id: str, operations: list,
         "expected_revision": expected_revision, "validate": validate}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(read_only=True), tags={"inspection"})
 async def explain_rebuild(component_id: str, parameters: Any = None,
-                          feature_ids: list = None,
-                          operations: list = None) -> Any:
+                          feature_ids: list | None = None,
+                          operations: list | None = None) -> Any:
     """Explain parameter and structural dependency propagation without rebuilding."""
     return await _request({"type": "explain_rebuild", "params": {
         "component_id": component_id, "parameters": parameters,
         "feature_ids": feature_ids, "operations": operations}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(read_only=True), tags={"inspection"})
 async def get_feature_diagnostics(component_id: str,
-                                  feature_id: str = None) -> Any:
+                                  feature_id: str | None = None) -> Any:
     """Inspect feature, shape, expression, reference, sketch, and mate health."""
     return await _request({"type": "get_feature_diagnostics", "params": {
         "component_id": component_id, "feature_id": feature_id}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(read_only=True), tags={"inspection"})
 async def list_feature_types() -> Any:
     """List declarative component feature types supported by this server."""
     return await _request({"type": "list_feature_types"})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(read_only=True), tags={"inspection"})
 async def describe_feature_type(feature_type: str) -> Any:
     """Return the machine-readable schema for one declarative feature type."""
     return await _request({"type": "describe_feature_type", "params": {
         "feature_type": feature_type}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(read_only=True), tags={"inspection"})
 async def capabilities() -> Any:
     """Return API, FreeCAD, feature, pattern, and validation capabilities."""
     result = await _request({"type": "capabilities"})
@@ -582,22 +626,22 @@ async def capabilities() -> Any:
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(read_only=True), tags={"inspection"})
 async def list_patterns() -> Any:
     """List versioned server-owned CAD patterns."""
     return await _request({"type": "list_patterns"})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(read_only=True), tags={"inspection"})
 async def expand_pattern(feature: dict) -> Any:
     """Expand one pattern to its ordinary, editable component features."""
     return await _request({"type": "expand_pattern", "params": {
         "feature": feature}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(read_only=True), tags={"inspection"})
 async def check_fit(component_id: str, container: str, insert: str,
-                    retainers: list[str] = None, probe_steps: int = 16,
+                    retainers: list[str] | None = None, probe_steps: int = 16,
                     tolerance: float = 0.01) -> Any:
     """Check containment, clearance, interference, and blocked translations."""
     return await _request({"type": "check_fit", "params": {
@@ -606,21 +650,21 @@ async def check_fit(component_id: str, container: str, insert: str,
         "tolerance": tolerance}})
 
 
-@mcp.tool()
-async def inspect_surface(component_id: str, feature_id: str = None, samples: int = 15,
-                          stripe_axis: list[float] = None, stripe_count: int = 12) -> Any:
+@mcp.tool(annotations=_ann(read_only=True), tags={"inspection"})
+async def inspect_surface(component_id: str, feature_id: str | None = None, samples: int = 15,
+                          stripe_axis: list[float] | None = None, stripe_count: int = 12) -> Any:
     """Sample trimmed faces' principal curvature (1/mm), normals and reflection stripes."""
     return await _request({"type": "inspect_surface", "params": {
         "component_id": component_id, "feature_id": feature_id, "samples": samples,
         "stripe_axis": stripe_axis, "stripe_count": stripe_count}})
 
 
-@mcp.tool()
-async def inspect_printability(component_id: str, feature_id: str = None,
+@mcp.tool(annotations=_ann(read_only=True), tags={"print"})
+async def inspect_printability(component_id: str, feature_id: str | None = None,
                                min_wall: float = .8, samples_per_face: int = 5,
-                               build_direction: list[float] = None,
+                               build_direction: list[float] | None = None,
                                overhang_angle: float = 45, max_samples: int = 2000,
-                               print_spec: dict = None) -> Any:
+                               print_spec: dict | None = None) -> Any:
     """Read-only sampled BRep thickness/overhang/island preflight in millimeters.
 
     Reports unresolved regions; a sampled minimum is not a proven global minimum.
@@ -640,7 +684,7 @@ async def inspect_printability(component_id: str, feature_id: str = None,
         "overhang_angle": overhang_angle, "max_samples": max_samples}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(read_only=True), tags={"print"})
 async def inspect_attachment(component_id: str, feature_id: str, target_id: str,
                               anchor: list[float], radius: float = 5,
                               tolerance: float = .05) -> Any:
@@ -650,7 +694,7 @@ async def inspect_attachment(component_id: str, feature_id: str, target_id: str,
         "anchor": anchor, "radius": radius, "tolerance": tolerance}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(read_only=True), tags={"print"})
 async def create_connector_features(component_id: str, prefix: str, male_base: str,
                                      female_base: str, position: list[float], axis: str = "z",
                                      kind: str = "pin_socket", diameter: float = 3,
@@ -671,9 +715,9 @@ async def create_connector_features(component_id: str, prefix: str, male_base: s
         "width": width, "thickness": thickness}})
 
 
-@mcp.tool()
-async def suggest_print_orientations(stl_path: str, backend: str, executable: list[str] = None,
-                                      build_volume: list[float] = None, timeout: float = 120,
+@mcp.tool(annotations=_ann(idempotent=False), tags={"print"})
+async def suggest_print_orientations(stl_path: str, backend: str, executable: list[str] | None = None,
+                                      build_volume: list[float] | None = None, timeout: float = 120,
                                       seed: int = 42, samples: int = 5000,
                                       max_candidates: int = 4) -> Any:
     """Run an optional local Tweaker-3/stl-fit adapter on a copied envelope STL.
@@ -689,11 +733,11 @@ async def suggest_print_orientations(stl_path: str, backend: str, executable: li
                                    build_volume, timeout, seed, samples, max_candidates)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(idempotent=False), tags={"print"})
 async def compare_print_candidates(project_path: str, output_dir: str, candidates: list[dict],
-                                    slicer_path: str = None, timeout: float = 300,
-                                    backend: str = "legacy", print_spec: dict = None,
-                                    workers: int = 2, backend_python: str = None) -> Any:
+                                    slicer_path: str | None = None, timeout: float = 300,
+                                    backend: str = "legacy", print_spec: dict | None = None,
+                                    workers: int = 2, backend_python: str | None = None) -> Any:
     """Measure local BambuStudio native-3MF candidates against an automatic baseline.
 
     Input requires one whole assembly build item in millimeters.
@@ -709,19 +753,19 @@ async def compare_print_candidates(project_path: str, output_dir: str, candidate
                                    slicer_path, timeout, backend, print_spec, workers, backend_python)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(read_only=True), tags={"inspection"})
 async def cross_sections(component_id: str, plane: str, offsets: list,
-                         feature_id: str = None, samples: int = 80) -> Any:
+                         feature_id: str | None = None, samples: int = 80) -> Any:
     """Return section curves at XY(z), XZ(y), or YZ(x) planes in document coordinates."""
     return await _request({"type": "cross_sections", "params": {
         "component_id": component_id, "plane": plane, "offsets": offsets,
         "feature_id": feature_id, "samples": samples}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(read_only=True), tags={"inspection"})
 async def reference_overlay(component_id: str, image_path: str, plane: str,
                             model_points: list, pixel_points: list,
-                            feature_id: str = None, samples: int = 80,
+                            feature_id: str | None = None, samples: int = 80,
                             opacity: float = 0.55, reflection_stripes: bool = False) -> Any:
     """Return self-contained SVG: calibrated PNG plus orthographic model edges.
 
@@ -736,9 +780,9 @@ async def reference_overlay(component_id: str, image_path: str, plane: str,
         "reflection_stripes": reflection_stripes}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(destructive=True), tags={"cad"})
 async def export_bundle(component_id: str, directory: str,
-                        formats: list[str] = None, per_output: bool = True,
+                        formats: list[str] | None = None, per_output: bool = True,
                         assembly: bool = True, overwrite: bool = True,
                         basename: str = "") -> Any:
     """Export several formats and component outputs in one request."""
@@ -748,25 +792,25 @@ async def export_bundle(component_id: str, directory: str,
         "overwrite": overwrite, "basename": basename or None}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(destructive=True, idempotent=False), tags={"cad"})
 async def build_component(document: dict, component: dict,
-                          validate: dict = None, exports: dict = None) -> Any:
+                          validate: dict | None = None, exports: dict | None = None) -> Any:
     """Create, define, validate, and optionally export a component in one call."""
     return await _request({"type": "build_component", "params": {
         "document": document, "component": component,
         "validate": validate, "exports": exports}})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(idempotent=False), tags={"cad"})
 async def create_component_variant(component_id: str, name: str, values: dict) -> Any:
     """Store a named set of parameter overrides that export_component can apply."""
     return await _request({"type": "create_component_variant", "params": {
         "component_id": component_id, "name": name, "values": values}})
 
 
-@mcp.tool()
-async def validate_component(component_id: str, profiles: list = None,
-                            rule_ids: list = None, include_measurements: bool = False,
+@mcp.tool(annotations=_ann(read_only=True), tags={"inspection"})
+async def validate_component(component_id: str, profiles: list | None = None,
+                            rule_ids: list | None = None, include_measurements: bool = False,
                             tolerance: str = "") -> Any:
     """Run design-rule checks over the recomputed component (read-only). Combines
     built-in profiles (geometry_baseline, cnc_plywood; defaults
@@ -782,9 +826,9 @@ async def validate_component(component_id: str, profiles: list = None,
         "tolerance": tolerance or None}})
 
 
-@mcp.tool()
-async def render_component(component_id: str, view: str = "iso", section: dict = None,
-                          hide_features: list = None,
+@mcp.tool(annotations=_ann(), tags={"inspection"})
+async def render_component(component_id: str, view: str = "iso", section: dict | None = None,
+                          hide_features: list | None = None,
                           width: int = 900, height: int = 700) -> Image:
     """Render the component to a PNG. `view` is iso/front/top/etc. Optional
     `section` = {"plane":"XZ","offset":"90 mm"} produces a cross-section.
@@ -797,7 +841,7 @@ async def render_component(component_id: str, view: str = "iso", section: dict =
     return Image(data=base64.b64decode(inner["image_base64"]), format="png")
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann(destructive=True), tags={"cad"})
 async def export_component(component_id: str, path: str, format: str = "FCStd",
                           variant: str = "") -> Any:
     """Export the component (or a named variant) to a file. Formats: FCStd,
@@ -819,6 +863,10 @@ def cookbook() -> str:
         return f.read()
 
 
-if __name__ == "__main__":
-    # Initialize and run the server
+def main():
+    """Run the bridge over stdio for desktop MCP clients."""
     mcp.run(transport='stdio')
+
+
+if __name__ == "__main__":
+    main()

@@ -8,10 +8,11 @@ loads that same implementation for the bridge; there is no second copy.
 
 The bridge's existing comparison call defaults to `backend="legacy"` for
 compatibility. Select `backend="bambu"` for preset selection, cached results and
-parallel slicing. The bridge communicates with the installed standalone Python
-worker using JSON files, so its own runtime does not need FastMCP 4 or the Bambu
-package's dependencies. Install the local tool environment as described in its
-README; `backend_python` can identify another environment with `bambu-mcp` installed.
+parallel slicing. The bridge and standalone server use the same FastMCP 4 workspace environment.
+Comparison runs in a bounded JSON subprocess using the current interpreter;
+`backend_python` can identify a deliberately separate installation. The bridge
+also mounts the standalone MCP tools under `bambu_` names. Install both with
+`uv sync --locked --extra validation` from the repository root.
 
 ```python
 spec = {

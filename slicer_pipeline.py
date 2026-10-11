@@ -5,6 +5,7 @@ import io
 import json
 import math
 import os
+import sys
 from pathlib import Path
 import tempfile
 import xml.etree.ElementTree as ET
@@ -18,7 +19,8 @@ CORE = 'http://schemas.microsoft.com/3dmanufacturing/core/2015/02'
 PROD = 'http://schemas.microsoft.com/3dmanufacturing/production/2015/06'
 from print_pipeline_core.candidates import _validate, _numeric
 from print_pipeline_core import assembly as _assembly
-from print_pipeline_core.artifacts import read_artifacts
+from print_pipeline_core.artifacts import read_artifacts, _positive
+from print_pipeline_core.settings import encode_settings, normalize_settings
 from print_pipeline_core.process import run_bounded
 
 _identity = _assembly._identity
@@ -33,15 +35,6 @@ def _rotate_project(entries, matrix):
 
 def _read_project(path):
     return _assembly._read_project(path, MAX_ARCHIVE_BYTES, MAX_ASSEMBLY_OBJECT_VISITS, MAX_ASSEMBLY_VERTEX_VISITS)
-
-
-def _positive(value, field, strictly_positive=False):
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError('Invalid ' + field)
-    value = float(value)
-    if not math.isfinite(value) or value < 0 or strictly_positive and value == 0:
-        raise ValueError('Invalid ' + field)
-    return value
 
 
 def _parse_result(path, directory):
@@ -68,8 +61,8 @@ def compare_print_candidates(project_path, output_dir, candidates, slicer_path=N
     if backend == 'bambu':
         return _compare_owned(project_path, output_dir, candidates, slicer_path, timeout,
                               print_spec, workers, backend_python)
-    from print_pipeline_core.spec import resolve_spec, violations, metric_violations
-    from print_pipeline_core.report import summarize
+    from print_pipeline_core.spec import resolve_spec, violations
+    from print_pipeline_core.report import finalize_comparison, write_comparison
     if os.name != 'posix':
         raise ValueError('Slicer subprocess backend currently requires POSIX process groups')
     validated = _validate(candidates)
@@ -107,14 +100,11 @@ def compare_print_candidates(project_path, output_dir, candidates, slicer_path=N
         directory = destination / candidate['name']; directory.mkdir()
         if candidate['settings']:
             modified = dict(settings)
-            for key,value in candidate['settings'].items():
-                modified[key] = str(int(value)) if isinstance(value, bool) else str(value)
-                if key == 'sparse_infill_density':
-                    modified[key] += '%'
+            modified.update(encode_settings(candidate['settings']))
             copied['Metadata/project_settings.config'] = json.dumps(modified).encode()
         record = dict(candidate, status='failed', directory=str(directory), started_at=datetime.now(timezone.utc).isoformat())
         records.append(record)
-        normalized = {k: str(int(v)) if isinstance(v, bool) else v for k, v in candidate['settings'].items()}
+        normalized = normalize_settings(candidate['settings'])
         effective = {**settings, **normalized}
         record['effective_settings'] = effective
         record['constraint_violations'] = []
@@ -152,16 +142,7 @@ def compare_print_candidates(project_path, output_dir, candidates, slicer_path=N
         except (ValueError, KeyError, TypeError, OSError, zipfile.BadZipFile, ET.ParseError, OverflowError) as exc:
             record['error_type'] = 'malformed_output' if 'output_path' in record else 'invalid_project'
             record['error'] = str(exc)
-    if spec:
-        baseline = records[0]
-        for row in records[1:]:
-            if row['status'] == 'success':
-                if baseline['status'] != 'success':
-                    row.update(status='rejected', error_type='baseline_unavailable')
-                else:
-                    row['constraint_violations'] += metric_violations(row['metrics'], baseline['metrics'], spec)
-                    if row['constraint_violations']:
-                        row.update(status='rejected', error_type='constraints')
+    choices = finalize_comparison(records, settings, spec)
     successful = [r for r in records if r['status'] == 'success']
     best = min(successful, key=lambda r:r['metrics']['seconds']) if successful else None
     report = {'source_path': str(source), 'source_sha256': digest, 'slicer_path': str(executable), 'candidates': records,
@@ -169,8 +150,8 @@ def compare_print_candidates(project_path, output_dir, candidates, slicer_path=N
               'created_at': datetime.now(timezone.utc).isoformat(), 'timeout_seconds': timeout,
               'source_unchanged': hashlib.sha256(source.read_bytes()).hexdigest() == digest}
     report.update(schema_version=1, backend='legacy', print_spec=spec, baseline_settings=settings,
-                  **summarize(records, settings))
-    (destination/'comparison.json').write_text(json.dumps(report, indent=2))
+                  **choices)
+    write_comparison(destination, report)
     return report
 
 
@@ -183,7 +164,7 @@ def _compare_owned(project_path, output_dir, candidates, slicer_path, timeout, p
     if isinstance(workers, bool) or not isinstance(workers, int) or not 1 <= workers <= 8:
         raise ValueError('workers must be in 1..8')
     # Preserve the venv interpreter symlink: resolving it would select the base Python environment.
-    python = Path(backend_python or Path(__file__).resolve().parent / 'tools/bambu-mcp/.venv/bin/python').expanduser().absolute()
+    python = Path(backend_python or sys.executable).expanduser().absolute()
     if not python.is_file():
         raise ValueError('Install tools/bambu-mcp or supply backend_python')
     request = dict(project_path=str(Path(project_path).expanduser().resolve()),

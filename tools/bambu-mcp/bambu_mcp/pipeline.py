@@ -16,10 +16,10 @@ from .runner import Runner, Variant
 from .settings import resolve_settings, snapshot_presets
 from .threemf import Package
 from print_pipeline_core.assembly import _read_project, _rotate_project
-from print_pipeline_core.artifacts import read_artifacts
 from print_pipeline_core.candidates import _validate, ALLOWED_SETTINGS
-from print_pipeline_core.spec import resolve_spec, violations, metric_violations, validate_preset_fields
-from print_pipeline_core.report import summarize
+from print_pipeline_core.spec import resolve_spec, violations, validate_preset_fields
+from print_pipeline_core.report import finalize_comparison, write_comparison
+from print_pipeline_core.settings import encode_settings, normalize_settings
 
 MAX_BYTES = 1024**3
 
@@ -39,7 +39,7 @@ def candidate_specs(candidates):
         newer = {k: validate(k, v) for k, v in settings.items() if k not in ALLOWED_SETTINGS}
         row = _validate([{**c, 'settings': legacy}])[0]
         row['settings'].update(newer)
-        row['settings'] = {k: str(int(v)) if isinstance(v, bool) else v for k, v in row['settings'].items()}
+        row['settings'] = normalize_settings(row['settings'])
         rows.append(row)
     if not 1 <= len(rows) <= 12 or len({x['name'] for x in rows}) != len(rows):
         raise ValueError('Need 1..12 uniquely named candidates')
@@ -84,10 +84,9 @@ def compare_project(project_path, output_dir, candidates, slicer_path=None, time
     for candidate in [{'name': 'baseline', 'settings': {}, 'rotation_matrix': None}] + cands:
         copied = dict(entries)
         settings = dict(effective)
-        settings.update(candidate['settings'])
-        for k in ('sparse_infill_density',):
-            if k in candidate['settings']:
-                settings[k] = str(candidate['settings'][k]).rstrip('%') + '%'
+        settings.update(normalize_settings(candidate['settings']))
+        if 'sparse_infill_density' in candidate['settings']:
+            settings['sparse_infill_density'] = encode_settings(candidate['settings'])['sparse_infill_density']
         bad = violations(settings, effective, spec, candidate['rotation_matrix'] is not None) if spec else []
         if spec:
             for oid, obj in per.items():
@@ -96,17 +95,14 @@ def compare_project(project_path, output_dir, candidates, slicer_path=None, time
             _rotate_project(copied, candidate['rotation_matrix'])
         # CLI handles preset loading; project patch preserves assembly and part colors.
         if candidate['settings']:
-            patched = {**stored, **candidate['settings']}
-            if 'sparse_infill_density' in candidate['settings']:
-                patched['sparse_infill_density'] = settings['sparse_infill_density']
+            patched = {**stored, **encode_settings(candidate['settings'])}
             copied['Metadata/project_settings.config'] = json.dumps(patched).encode()
         prepared.append((candidate, copied, settings, bad))
     destination = Path(output_dir).expanduser().resolve()
     destination.mkdir(parents=True, exist_ok=False)
     # Immutable, content-addressed preset snapshots prevent mid-run edits and allow cache reuse.
     preset_paths = snapshot_presets(context.loaded, r.home)
-    with ThreadPoolExecutor(max_workers=1) as warmup:
-        version = warmup.submit(r.version).result()
+    version = r.version()
 
     def evaluate(prepared_row):
         c, copied, settings, bad = prepared_row
@@ -122,9 +118,7 @@ def compare_project(project_path, output_dir, candidates, slicer_path=None, time
             row['error_type'] = 'constraints'
             return row
         # Global CLI overrides are required to win over chosen process presets.
-        overrides = {k: str(v) for k, v in c['settings'].items()}
-        if 'sparse_infill_density' in overrides:
-            overrides['sparse_infill_density'] = settings['sparse_infill_density']
+        overrides = encode_settings(c['settings'])
         m = r.evaluate(path, Variant(overrides=overrides, flags={'orient': 0}, plate=1),
                        machine=preset_paths['machine'], process=preset_paths['process'],
                        filaments=preset_paths['filaments'], timeout_s=int(timeout))
@@ -138,7 +132,7 @@ def compare_project(project_path, output_dir, candidates, slicer_path=None, time
             return row
         try:
             cache = Path(m.out_3mf).parent
-            row['metrics'] = read_artifacts(m.out_3mf, cache)
+            row['metrics'] = m.comparison_metrics()
             shutil.copy(m.out_3mf, directory / 'sliced.3mf')
             row['output_path'] = str(directory / 'sliced.3mf')
             for filename in ('result.json', 'cmd.json', 'slicer.log'):
@@ -154,25 +148,13 @@ def compare_project(project_path, output_dir, candidates, slicer_path=None, time
     with ThreadPoolExecutor(max_workers=workers) as pool:
         baseline = pool.submit(evaluate, prepared[0]).result()
         records = [baseline] + list(pool.map(evaluate, prepared[1:]))
-    if spec:
-        base_metrics = baseline.get('metrics') if baseline['status'] == 'success' else None
-        for row in records[1:]:
-            if row['status'] == 'success':
-                row['constraint_violations'] += metric_violations(row['metrics'], base_metrics, spec)
-                if row['constraint_violations']:
-                    row['status'], row['error_type'] = 'rejected', 'constraints'
-        # A failed/rejected baseline leaves relative budgets unverified: do not rank candidates.
-        if baseline['status'] != 'success':
-            for row in records[1:]:
-                if row['status'] == 'success':
-                    row['status'], row['error_type'] = 'rejected', 'baseline_unavailable'
-    choices = summarize(records, effective)
+    choices = finalize_comparison(records, effective, spec)
     report = dict(schema_version=1, backend='bambu', source_path=str(source), source_sha256=digest,
                   slicer_path=r.binary, slicer_version=version, print_spec=spec,
                   baseline_settings=effective, candidates=records, best_candidate=choices['winners']['fastest'],
                   estimate_only=True, source_unchanged=hashlib.sha256(source.read_bytes()).hexdigest() == digest,
                   created_at=datetime.now(timezone.utc).isoformat(), **choices)
-    (destination / 'comparison.json').write_text(json.dumps(report, indent=2, allow_nan=False))
+    write_comparison(destination, report)
     return report
 
 

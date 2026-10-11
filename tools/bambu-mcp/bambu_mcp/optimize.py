@@ -18,6 +18,14 @@ MIN_GAIN = 0.005
 DEFAULT_STAGES = ["orientation", "support", "infill", "shells", "layer_height"]
 
 
+def _history_entry(stage, variant, metrics, candidate_score, violations=()):
+    bad = list(violations)
+    return dict(stage=stage, overrides=variant.overrides, rotation=variant.object_rotation,
+                flags=variant.flags, time_s=metrics.time_s, filament_g=metrics.filament_g,
+                ok=metrics.ok, error=metrics.error or "; ".join(bad), score=candidate_score,
+                run_id=metrics.run_id, constraint_violations=bad)
+
+
 def floor(key: str, functional: bool) -> int:
     """Lowest value the search may try. Functional parts keep the catalog floor; otherwise half of it."""
     f = CATALOG[key]["floor"]
@@ -265,9 +273,7 @@ def optimize(runner: Runner, source, base_variant: Variant, o: Objective, stages
             bad = breaches(c)
             s = score(m, base, o) if feasible(m, base, o) and not bad else float("-inf")
             scored.append(s)
-            res.history.append({"stage": stage, "overrides": c.overrides, "rotation": c.object_rotation,
-                                "flags": c.flags, "time_s": m.time_s, "filament_g": m.filament_g,
-                                "ok": m.ok, "error": m.error or "; ".join(bad), "score": s, "run_id": m.run_id, "constraint_violations": bad})
+            res.history.append(_history_entry(stage, c, m, s, bad))
             if s > best_s + MIN_GAIN:  # ignore noise-level wins (placement jitter)
                 best_i, best_s = i, s
         if best_i is not None:
@@ -288,10 +294,7 @@ def optimize(runner: Runner, source, base_variant: Variant, o: Objective, stages
                     mm = runner.evaluate(source, merged, **kw)
                     used += 1
                     ms2 = score(mm, base, o) if feasible(mm, base, o) else float("-inf")
-                    res.history.append({"stage": stage + "+combined", "overrides": merged.overrides,
-                                        "rotation": merged.object_rotation, "flags": merged.flags,
-                                        "time_s": mm.time_s, "filament_g": mm.filament_g, "ok": mm.ok,
-                                        "error": mm.error, "score": ms2, "run_id": mm.run_id})
+                    res.history.append(_history_entry(stage + "+combined", merged, mm, ms2))
                     if ms2 > cur_s + MIN_GAIN:
                         cur, cur_m, cur_s = merged, mm, ms2
             res.best, res.best_metrics = cur, cur_m

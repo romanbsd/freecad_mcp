@@ -1,4 +1,5 @@
 import json
+import sys
 import os
 from pathlib import Path
 import pytest
@@ -9,7 +10,7 @@ from test_slicer_pipeline import project, slicer
 @pytest.fixture
 def owned_python():
     configured = os.environ.get('FREECAD_BAMBU_BACKEND_PYTHON')
-    python = Path(configured) if configured else Path(__file__).resolve().parents[1]/'tools/bambu-mcp/.venv/bin/python'
+    python = Path(configured) if configured else Path(sys.executable)
     if not python.is_file():
         if configured:
             pytest.fail('Configured FREECAD_BAMBU_BACKEND_PYTHON is not a file')

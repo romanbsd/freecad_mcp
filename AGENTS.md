@@ -87,29 +87,27 @@ reads and `rg` when coverage is missing or stale.
 
 ## Environments and optional tools
 
-- Keep root FreeCAD bridge (`mcp<2`) and `tools/bambu-mcp` (FastMCP 4/MCP 2)
-  virtual environments separate until the bridge API is migrated. This is a
-  current dependency conflict; subprocesses can share an environment once the
-  APIs are compatible. The bridge calls the owned backend through a
-  JSON worker; use `backend_python` to select its interpreter explicitly.
-- Install the owned tool from this checkout, not a sibling BambuStudio tree:
+- Use one root environment for the FastMCP 4 bridge and owned Bambu server:
 
   ```bash
-  cd tools/bambu-mcp
-  uv venv --python 3.12
-  uv pip install -e '.[test,validation]'
+  uv sync --locked --extra validation
+  uv run --locked --extra validation python src/freecad_bridge.py
   ```
 
-  `validation` is optional; omit it if independent mesh checks are unnecessary.
-  Configure `BAMBU_STUDIO_BIN` for the installed executable and `BAMBU_MCP_HOME`
-  for cache/session storage. Recreate venvs after moving the package.
+  `validation` is optional. The uv workspace installs `tools/bambu-mcp` into
+  `.venv`; nested tool venvs are unnecessary for this checkout. The bridge mounts
+  Bambu tools as `bambu_...`; standalone `.venv/bin/bambu-mcp` is also available.
+  Comparison workers default to the current interpreter; `backend_python` is
+  only needed for an explicitly different installation. Configure
+  `BAMBU_STUDIO_BIN` and `BAMBU_MCP_HOME` for executable/cache locations.
 - `project_validate(session_id)` checks the source copy in a bounded lib3mf
   subprocess, excluding working variant edits. Inspect `geometry_valid`, strict
   compliance and vendor warnings separately. Bambu vendor warnings are advisory;
   this tool does not certify self-intersection freedom or strength.
-- Keep Tweaker/stl-fit and numerical experiment dependencies in separate provider
-  environments. Do not add NumPy/SciPy/Trimesh/Optuna to the bridge or shared core
-  merely to run an experiment. Shared core is stdlib-only and MIT; the standalone
+- Provider dependencies can share the root environment when compatible; use
+  optional extras or a disposable probe environment for experiments. Do not add
+  NumPy/SciPy/Trimesh/Optuna to base dependencies or the shared core merely to
+  run an experiment. Shared core is stdlib-only and MIT; the standalone
   `bambu_mcp` subtree retains AGPL licensing.
 - Consult [tool-evaluation.md](docs/bambu-mcp/tool-evaluation.md) before proposing
   another optimizer/repair/parser integration. Require representative failures or
@@ -126,6 +124,12 @@ reads and `rg` when coverage is missing or stale.
 - Resolve settings through `bambu_mcp.settings.resolve_settings`. Inspection can
   request partial results; slicing is strict. `snapshot_presets` supplies the
   same flattened inputs to optimizer/comparison checks, cache keys and slicing.
+- Encode CLI/project setting strings through `print_pipeline_core.settings`; preserve
+  public numeric values with `normalize_settings`. Catalog validation stays separate.
+- Finalize comparison budgets/rankings and write reports through
+  `print_pipeline_core.report`. Reuse the runner's validated artifact result;
+  retain total plate counts so single-plate comparisons cannot accept a selected
+  plate from a multi-plate output. Every fresh cache lookup revalidates the files.
 - Use `print_pipeline_core.process.run_bounded` for provider and slicer processes.
   Its returned output is a diagnostic preview; parse successful provider JSON
   from the complete bounded log file.
@@ -137,19 +141,18 @@ root, with the environments installed:
 
 ```bash
 # Standalone unit/schema checks; no installed slicer needed.
-tools/bambu-mcp/.venv/bin/python -m pytest tools/bambu-mcp/tests -m 'not slow'
+.venv/bin/python -m pytest tools/bambu-mcp/tests -m 'not slow'
 
-# Root/shared contracts and bridge API compatibility in the mcp<2 environment.
-FREECAD_BAMBU_BACKEND_PYTHON="$PWD/tools/bambu-mcp/.venv/bin/python" \
-  .venv/bin/python -m pytest tests/test_slicer_pipeline.py \
+# Root/shared contracts and the actual FastMCP protocol.
+.venv/bin/python -m pytest tests/test_slicer_pipeline.py \
   tests/test_unified_print_pipeline.py tests/test_orientation_candidates.py \
-  tests/test_print_workflow_bridge.py tests/test_bridge.py tests/test_framing.py \
+  tests/test_print_workflow_bridge.py tests/test_bridge.py tests/test_bridge_mcp.py tests/test_framing.py \
   tests/test_parametric_logic.py tests/test_printability.py \
   tests/test_manufacturing_export.py
 
 # Real Bambu integration for CLI/preset/3MF/optimizer changes.
-PRINT_VALIDATION_PYTHON="$PWD/tools/bambu-mcp/.venv/bin/python" \
-  tools/bambu-mcp/.venv/bin/python -m pytest tools/bambu-mcp/tests -m slow
+PRINT_VALIDATION_PYTHON="$PWD/.venv/bin/python" \
+  .venv/bin/python -m pytest tools/bambu-mcp/tests -m slow
 ```
 
 - Optional real-provider tests use JSON argv environment variables:

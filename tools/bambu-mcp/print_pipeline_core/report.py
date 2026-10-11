@@ -1,6 +1,7 @@
 """Measured Pareto alternatives with conservative, explicit quality tradeoffs (MIT)."""
 import math
-from .spec import equivalent, number
+import json
+from .spec import equivalent, metric_violations, number
 
 
 def summarize(records, baseline_settings):
@@ -48,3 +49,23 @@ def summarize(records, baseline_settings):
             alternatives.append(row)
     return dict(winners=dict(fastest=fastest['name'], least_material=light['name'], conservative=conservative['name']),
                 pareto=sorted(pareto), alternatives=alternatives)
+
+
+def finalize_comparison(records, baseline_settings, spec):
+    """Apply measured budgets before ranking either comparison backend."""
+    baseline = records[0]
+    if spec is not None:
+        for row in records[1:]:
+            if row['status'] != 'success':
+                continue
+            if baseline['status'] != 'success':
+                row.update(status='rejected', error_type='baseline_unavailable')
+                continue
+            row['constraint_violations'] += metric_violations(row['metrics'], baseline['metrics'], spec)
+            if row['constraint_violations']:
+                row.update(status='rejected', error_type='constraints')
+    return summarize(records, baseline_settings)
+
+
+def write_comparison(destination, report):
+    (destination / 'comparison.json').write_text(json.dumps(report, indent=2, allow_nan=False))

@@ -4,6 +4,14 @@ MCP server that drives the **Bambu Studio CLI** to cut print time and filament u
 needed. Maintained in `freecad_mcp/tools/bambu-mcp` as a standalone server alongside FreeCAD MCP.
 See the [design and rationale](../../docs/bambu-mcp/optimizer-spec.md).
 
+## Workspace use
+
+For this repository, run `uv sync --locked --extra validation` from the root.
+Both the migrated FreeCAD bridge and this package run in root `.venv`.
+`src/freecad_bridge.py` mounts these tools as `bambu_...`, so a separate MCP
+connection is optional. Use root `.venv/bin/bambu-mcp` for standalone startup.
+The commands below are for an independent installation of this subtree.
+
 ## Install & register
 
 ```bash

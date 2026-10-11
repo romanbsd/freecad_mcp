@@ -1,33 +1,29 @@
 [project]
 name = "freecad-mcp"
 version = "0.1.0"
-description = "FreeCAD integration through the Model Context Protocol"
-authors = [
-    {name = "FreeCAD MCP Contributors", email = ""}
-]
-dependencies = [
-    "mcp-server>=1.2.0",
-    "httpx>=0.24.1"
-]
-readme = "README.md"
+description = "FreeCAD bridge and measured printing workflow through FastMCP"
+authors = [{name = "FreeCAD MCP Contributors"}]
 requires-python = ">=3.10"
+readme = "README.md"
 license = {text = "MIT"}
+dependencies = ["fastmcp>=4.1,<5", "bambu-mcp", "httpx>=0.24.1"]
 
-[build-system]
-requires = ["pdm-backend"]
-build-backend = "pdm.backend"
+[project.optional-dependencies]
+validation = ["bambu-mcp[validation]"]
 
-[project.scripts]
-freecad-mcp = "freecad_mcp.server:main"
-
-[tool.pdm.dev-dependencies]
-dev = [
-    "pytest>=7.4.0",
-    "black>=23.7.0",
-    "isort>=5.12.0",
-    "mypy>=1.5.1",
-]
+[dependency-groups]
+dev = ["pytest>=7.4", "black>=23.7", "isort>=5.12", "mypy>=1.5"]
 
 [project.urls]
-"Homepage" = "https://github.com/bonninr/freecad_mcp"
+Homepage = "https://github.com/bonninr/freecad_mcp"
 "Bug Tracker" = "https://github.com/bonninr/freecad_mcp/issues"
+
+# The desktop addon and bridge are run from this source checkout.
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["tools/bambu-mcp"]
+
+[tool.uv.sources]
+bambu-mcp = {workspace = true}

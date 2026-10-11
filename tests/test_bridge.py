@@ -12,7 +12,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 import freecad_bridge as fb
-from mcp.server.fastmcp import Image
+from fastmcp.utilities.types import Image
 
 _PNG = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"x" * 16).decode()
 
