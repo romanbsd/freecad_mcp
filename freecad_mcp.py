@@ -10,7 +10,13 @@ import traceback
 
 import FreeCAD as App
 import FreeCADGui as Gui
-from PySide import QtCore, QtGui
+try:
+    from PySide6 import QtCore, QtGui
+except ImportError:
+    try:
+        from PySide2 import QtCore, QtGui
+    except ImportError:
+        from PySide import QtCore, QtGui
 
 
 class MCPCommandError(RuntimeError):
@@ -101,10 +107,11 @@ class FreeCADMCPServer:
     NO_DOC = "no active document — create one first, e.g. App.newDocument() via the execute tool"
     NO_VIEW = "no active 3D view — open or create a document in the FreeCAD GUI first"
 
-    def __init__(self, host="localhost", port=9876):
+    def __init__(self, host="127.0.0.1", port=9876):
         self.host = host
         self.port = port
         self.running = False
+        self.on_error = None
         self.socket = None
         self.client = None
         self.buffer = b""
@@ -115,39 +122,44 @@ class FreeCADMCPServer:
         self._ns = {}
 
     def start(self):
-        self.running = True
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
+        if self.running:
+            return
         try:
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self.socket.bind((self.host, self.port))
             self.socket.listen(1)
             self.socket.setblocking(False)
             self.timer = QtCore.QTimer()
             self.timer.timeout.connect(self._process_server)
-            # ponytail: single client, polled on the GUI thread every 100ms.
-            # Calls are serialized and incur up to one tick of latency — fine
-            # for one agent; drop the interval or accept-in-loop if it matters.
-            self.timer.start(100)  # 100ms interval
+            # Requests stay serialized on the FreeCAD GUI thread.
+            self.timer.start(100)
+            self.running = True
             App.Console.PrintMessage(
                 f"FreeCAD MCP server started on {self.host}:{self.port}\n"
             )
-        except Exception as e:
-            App.Console.PrintError(f"Failed to start server: {str(e)}\n")
+        except Exception:
             self.stop()
+            raise
 
     def stop(self):
         self.running = False
-        if self.timer:
+        if self.timer is not None:
             self.timer.stop()
+            self.timer.deleteLater()
             self.timer = None
-        if self.socket:
-            self.socket.close()
-        if self.client:
-            self.client.close()
-        self.socket = None
-        self.client = None
-        App.Console.PrintMessage("FreeCAD MCP server stopped\n")
+        try:
+            if self.socket is not None:
+                self.socket.close()
+        finally:
+            self.socket = None
+            self._reset_client()
+
+    def _fail(self, error):
+        App.Console.PrintError(traceback.format_exc())
+        self.stop()
+        if self.on_error is not None:
+            self.on_error(str(error))
 
     def _process_server(self):
         if not self.running:
@@ -162,7 +174,8 @@ class FreeCADMCPServer:
                 except BlockingIOError:
                     pass
                 except Exception as e:
-                    App.Console.PrintError(f"Error accepting connection: {str(e)}\n")
+                    self._fail(e)
+                    return
 
             if self.client:
                 try:
@@ -185,7 +198,7 @@ class FreeCADMCPServer:
                     self._reset_client()
 
         except Exception as e:
-            App.Console.PrintError(f"Server error: {str(e)}\n")
+            self._fail(e)
 
     def _reset_client(self):
         if self.client:
@@ -1230,60 +1243,3 @@ class FreeCADMCPServer:
             view_info = {"error": str(e)}
 
         return {"document": doc_info, "objects": objects, "view": view_info}
-
-
-class FreeCADMCPPanel:
-    def __init__(self):
-        self.form = QtGui.QWidget()
-        self.form.setWindowTitle("FreeCAD MCP")
-
-        layout = QtGui.QVBoxLayout(self.form)
-
-        # Server status
-        self.status_label = QtGui.QLabel("Server: Stopped")
-        layout.addWidget(self.status_label)
-
-        # Start/Stop buttons
-        button_layout = QtGui.QHBoxLayout()
-        self.start_button = QtGui.QPushButton("Start Server")
-        self.stop_button = QtGui.QPushButton("Stop Server")
-        self.stop_button.setEnabled(False)
-
-        self.start_button.clicked.connect(self.start_server)
-        self.stop_button.clicked.connect(self.stop_server)
-
-        button_layout.addWidget(self.start_button)
-        button_layout.addWidget(self.stop_button)
-        layout.addLayout(button_layout)
-
-        # Server instance
-        self.server = None
-
-    def start_server(self):
-        if not self.server:
-            self.server = FreeCADMCPServer()
-            self.server.start()
-            self.status_label.setText("Server: Running")
-            self.start_button.setEnabled(False)
-            self.stop_button.setEnabled(True)
-
-    def stop_server(self):
-        if self.server:
-            self.server.stop()
-            self.server = None
-            self.status_label.setText("Server: Stopped")
-            self.start_button.setEnabled(True)
-            self.stop_button.setEnabled(False)
-
-
-# Module-level reference so the panel isn't garbage-collected while open.
-_panel = None
-
-
-def show_panel():
-    global _panel
-    if _panel is None:
-        _panel = FreeCADMCPPanel()
-    _panel.form.show()
-    _panel.form.raise_()
-    _panel.form.activateWindow()

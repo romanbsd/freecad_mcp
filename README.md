@@ -200,8 +200,34 @@ See `test_e2e.py` for a runnable version of this against a live FreeCAD.
 2. Place the `freecad_mcp` directory in your FreeCAD modules directory:
    - Windows: `%APPDATA%/FreeCAD/Mod/`
    - Linux: `~/.FreeCAD/Mod/`
-   - macOS: `~/Library/Preferences/FreeCAD/Mod/`
-3. Restart FreeCAD and select the "FreeCAD MCP" workbench from the workbench selector.
+   - macOS: `~/Library/Application Support/FreeCAD/v1-1/Mod/` for FreeCAD 1.1
+     (older versions may use `~/Library/Preferences/FreeCAD/Mod/`)
+   - The exact directory is `App.getUserAppDataDir() + "Mod/"` in FreeCAD's
+     Python console.
+3. Restart FreeCAD. A permanent `○ MCP` button appears at the right of the
+   status bar in every workbench; no MCP workbench or floating panel is needed.
+4. Click to start (`● MCP`, green) or stop. Right-click for Start/Stop,
+   Restart, and **Start automatically**. Auto-start is opt-in and defaults to off.
+
+The button shows amber while starting/stopping and red on failure; the tooltip
+includes the reason. Start retries after a failure. A running indicator means
+that the TCP listener is bound and the GUI-thread request timer is active.
+FreeCAD exit closes the listener and client socket.
+
+Preferences use `User parameter:BaseApp/Preferences/Mod/FreeCADMCP`:
+`AutoStart` (boolean, false), `BindAddress` (string, `127.0.0.1`), and `Port`
+(integer, `9876`). The external bridge still uses the same protocol and tools;
+match its host/port configuration if you change the listener preferences.
+
+The addon supports PySide6, PySide2, and the older FreeCAD `PySide` shim. The
+workbench-free `<other/>` manifest is recognized by Addon Manager from FreeCAD
+1.1 onward ([FreeCAD Addon Academy](https://freecad.github.io/Addon-Academy/Demos/New-Toolbar/)).
+A namespaced `freecad/mcp_status_control/init_gui.py` entry point supports
+FreeCAD 1.1.4's loader, which skips traditional `InitGui.py` for `<other/>`
+manifests ([loader source](https://github.com/FreeCAD/FreeCAD/blob/1.1.4/src/Gui/FreeCADGuiInit.py)).
+Both entry points share the same singleton bootstrap. Use the manual `Mod/`
+installation above on older versions; only FreeCAD 1.1.4 with PySide6 has been
+live-verified for this integration.
 
 ## Contributing
 
