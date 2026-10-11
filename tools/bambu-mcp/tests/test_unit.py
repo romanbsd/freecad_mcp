@@ -166,14 +166,18 @@ def test_identical_variants_slice_once(tmp_path, monkeypatch):
     src.write_bytes(b"x")
     calls = []
 
-    def fake_run(argv, cwd, **kw):
+    def fake_run(argv, cwd, timeout, **kw):
         calls.append(1)
         time.sleep(0.05)
         (Path(cwd) / "result.json").write_text(json.dumps({"return_code": 0, "sliced_plates": [
             {"id": 1, "total_predication": 10, "filaments": [{"total_used_g": 1}]}]}))
-        return type("P", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        import zipfile
+        with zipfile.ZipFile(Path(cwd) / 'out.3mf', 'w') as z:
+            z.writestr('Metadata/slice_info.config', '<config><plate><metadata key="prediction" value="10"/><metadata key="weight" value="1"/><metadata key="outside" value="false"/></plate></config>')
+            z.writestr('Metadata/plate_1.gcode', 'G1 X1 E1')
+        return (0, None, "", 0.05)
 
-    monkeypatch.setattr("bambu_mcp.runner.subprocess.run", fake_run)
+    monkeypatch.setattr("bambu_mcp.runner.run_bounded", fake_run)
     out = optimize.evaluate_batch(r, src, [Variant() for _ in range(4)], workers=4)
     assert all(m.ok and m.time_s == 10 for m in out) and len(calls) == 1
 

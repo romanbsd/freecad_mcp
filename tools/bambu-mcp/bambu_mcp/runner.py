@@ -15,6 +15,9 @@ from pydantic import BaseModel, Field
 
 from . import presets
 from .threemf import Package
+from print_pipeline_core.process import run_bounded
+from print_pipeline_core.artifacts import read_artifacts
+from print_pipeline_core.spec import merge_presets
 
 HOME = Path(os.environ.get("BAMBU_MCP_HOME", Path.home() / ".bambu-mcp"))
 
@@ -60,9 +63,12 @@ class Metrics(BaseModel):
     filament_g: float = Field(0.0, description="filament used, grams (sum over plates and filaments)")
     role_time_s: dict[str, float] = Field(default_factory=dict,
                                           description="print time per extrusion role (walls, infill, support...)")
+    toolpath_profiles: list[dict] = Field(default_factory=list,
+                                        description="bounded per-plate Bambu comment diagnostics; not mass or motion simulation")
     warnings: list[str] = Field(default_factory=list, description="slicer warnings")
     error: str = Field("", description="failure reason when ok=false")
     plates: int = Field(0, description="number of plates included")
+    outside: bool = Field(False, description="selected sliced artifact is outside its build plate")
     out_3mf: str = Field("", description="sliced 3MF path (reopenable in Bambu Studio)")
 
 
@@ -89,15 +95,15 @@ def parse_result(j: dict, plate: int = 0) -> Metrics:
 
 class Runner:
     def __init__(self, binary: str | None = None, home: Path = HOME):
-        self.binary = binary or find_binary()
-        self.home = home
+        self.binary = str(Path(binary or find_binary()).expanduser().resolve())
+        self.home = Path(home).expanduser().resolve()
         self.roots = [d for d in [presets.profiles_dir(self.binary)] if d] + presets.user_dirs()
         self._index = None
         self._version = None
         # ponytail: one Lock per distinct variant, never pruned (tens of bytes each); prune if a server lives for days
         self._locks: dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
-        (home / "runs").mkdir(parents=True, exist_ok=True)
+        (self.home / "runs").mkdir(parents=True, exist_ok=True)
 
     @property
     def index(self):
@@ -109,10 +115,12 @@ class Runner:
         """First line of --help, cached. Run from the cache dir: the CLI drops a result.json in its cwd."""
         if self._version is None:
             try:
-                r = subprocess.run([self.binary, "--help"], capture_output=True, text=True, timeout=30,
-                                   cwd=self.home)
-                self._version = next((l for l in (r.stdout + r.stderr).splitlines()
-                                      if l.startswith("BambuStudio-")), "?")
+                with tempfile.TemporaryDirectory(prefix='version-', dir=self.home) as td:
+                    code, failure, captured, elapsed = run_bounded([self.binary, '--help'], Path(td), 30, 1024*1024)
+                if failure:
+                    return f'? ({failure})'
+                self._version = next((l for l in captured.splitlines()
+                                      if l.startswith('BambuStudio-')), '?')
             except (OSError, subprocess.SubprocessError) as e:
                 return f"? ({e})"
         return self._version
@@ -154,6 +162,17 @@ class Runner:
         out.write_text(json.dumps(self._load_preset(kind, name_or_path)), encoding="utf-8")
         return str(out)
 
+    def effective_settings(self, source, variant, machine=None, process=None, filaments=None):
+        p = Package(source)
+        loaded = [(kind, self._load_preset(kind, name)) for kind, name in [('machine', machine), ('process', process)] + [('filament', f) for f in filaments or []] if name]
+        settings = merge_presets(p.project_settings(), loaded)
+        settings.update(variant.overrides)
+        objects = {oid: {**settings, **values, **variant.object_overrides.get(oid, {})}
+                   for oid, values in p.object_settings().items()}
+        for oid, values in variant.object_overrides.items():
+            objects.setdefault(oid, {**settings, **values})
+        return settings, objects
+
     def evaluate(self, source: Path, variant: Variant, machine: str | None = None,
                  process: str | None = None, filaments: list[str] | None = None,
                  timeout_s: int = 600) -> Metrics:
@@ -183,6 +202,18 @@ class Runner:
         except (OSError, ValueError, AttributeError, TypeError):
             res.unlink(missing_ok=True)  # corrupt / partial: treat as a miss
             return None
+        if m.ok:
+            try:
+                strict = read_artifacts(run / 'out.3mf', run, plate=plate, strict_single_plate=False)
+                m.time_s, m.filament_g = strict['seconds'], strict['total_grams']
+                m.role_time_s = strict['feature_seconds'] or {}
+                m.toolpath_profiles = strict['toolpath_profiles']
+                m.warnings = strict['warnings']
+                m.outside = strict['outside']
+                if m.outside:
+                    m.ok, m.error = False, 'outside_plate'
+            except (OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile, ET.ParseError) as exc:
+                m.ok, m.error = False, f'invalid sliced artifact: {exc}'
         if not m.ok and not failures:
             return None
         m.run_id, m.out_3mf = key, str(run / "out.3mf")
@@ -209,13 +240,14 @@ class Runner:
                 fils = [self._flatten("filament", f, Path(td)) for f in (filaments or [])]
                 argv = self.argv(variant, in_file, run, settings, fils, timeout_s)
                 (run / "cmd.json").write_text(json.dumps(argv))
-                r = subprocess.run(argv, cwd=run, capture_output=True, text=True, timeout=timeout_s + 30)
+                code, failure, tail, elapsed = run_bounded(argv, run, timeout_s)
+                if failure or code != 0:
+                    return Metrics(ok=False, run_id=key, error=f"{failure or 'exit'} (exit {code}): {tail[-2000:]}")
         except subprocess.TimeoutExpired:
             return Metrics(ok=False, run_id=key, error=f"timeout after {timeout_s}s")
         except (ValueError, KeyError, OSError, zipfile.BadZipFile, ET.ParseError) as e:
             return Metrics(ok=False, run_id=key, error=f"{type(e).__name__}: {e}")
         if not res.is_file():
-            tail = "\n".join((r.stdout + r.stderr).splitlines()[-15:])
-            return Metrics(ok=False, run_id=key, error=f"no result.json (exit {r.returncode}):\n{tail}")
+            return Metrics(ok=False, run_id=key, error=f"no result.json (exit {code}):\n{tail[-2000:]}")
         return self._cached(run, key, variant.plate, failures=True) or Metrics(
             ok=False, run_id=key, error="unreadable result.json")

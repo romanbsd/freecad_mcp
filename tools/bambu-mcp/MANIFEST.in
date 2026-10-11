@@ -1,0 +1,3 @@
+include LICENSE README.md
+recursive-include print_pipeline_core *.py LICENSE
+recursive-include tests *.py *.json *.3mf *.md

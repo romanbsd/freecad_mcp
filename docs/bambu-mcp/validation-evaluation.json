@@ -1,0 +1,1012 @@
+{
+  "schema_version": 1,
+  "validations": [
+    {
+      "file": "thin_shell.3mf",
+      "result": {
+        "status": "needs_attention",
+        "library_version": "2.5.0",
+        "strict_compliant": false,
+        "geometry_valid": true,
+        "warnings": [
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32935,
+            "message": "Invalid Attribute in namespace."
+          }
+        ],
+        "meshes": [
+          {
+            "id": 1,
+            "vertices": 8,
+            "triangles": 12,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 2,
+            "vertices": 8,
+            "triangles": 12,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 3,
+            "vertices": 8,
+            "triangles": 12,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 4,
+            "vertices": 8,
+            "triangles": 12,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 5,
+            "vertices": 8,
+            "triangles": 12,
+            "valid": true,
+            "manifold_and_oriented": true
+          }
+        ],
+        "limitations": [
+          "Mesh validity and manifold checks do not detect every self-intersection or certify printability.",
+          "Bambu vendor metadata may fail strict 3MF compliance. No file is rewritten."
+        ],
+        "warning_count": 8,
+        "strict_error": "Lib3MFException 5: Unknown Model Metadata.",
+        "source_sha256": "19e1bb767726dc08e3db6d3590205995909476d7353298fdd45bf1f51f5102f3",
+        "elapsed_seconds": 0.08330900012515485,
+        "read_only": true
+      },
+      "source_unchanged": true
+    },
+    {
+      "file": "narrow_footprint.3mf",
+      "result": {
+        "status": "needs_attention",
+        "library_version": "2.5.0",
+        "strict_compliant": false,
+        "geometry_valid": true,
+        "warnings": [
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32935,
+            "message": "Invalid Attribute in namespace."
+          }
+        ],
+        "meshes": [
+          {
+            "id": 1,
+            "vertices": 8,
+            "triangles": 12,
+            "valid": true,
+            "manifold_and_oriented": true
+          }
+        ],
+        "limitations": [
+          "Mesh validity and manifold checks do not detect every self-intersection or certify printability.",
+          "Bambu vendor metadata may fail strict 3MF compliance. No file is rewritten."
+        ],
+        "warning_count": 8,
+        "strict_error": "Lib3MFException 5: Unknown Model Metadata.",
+        "source_sha256": "426617b3b664b0b023331323d5670fbd5ac064a10d7a95bf8dd71f0964cb1fdd",
+        "elapsed_seconds": 0.06771758385002613,
+        "read_only": true
+      },
+      "source_unchanged": true
+    },
+    {
+      "file": "overhang_bracket.3mf",
+      "result": {
+        "status": "needs_attention",
+        "library_version": "2.5.0",
+        "strict_compliant": false,
+        "geometry_valid": true,
+        "warnings": [
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32935,
+            "message": "Invalid Attribute in namespace."
+          }
+        ],
+        "meshes": [
+          {
+            "id": 1,
+            "vertices": 8,
+            "triangles": 12,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 2,
+            "vertices": 8,
+            "triangles": 12,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 3,
+            "vertices": 8,
+            "triangles": 12,
+            "valid": true,
+            "manifold_and_oriented": true
+          }
+        ],
+        "limitations": [
+          "Mesh validity and manifold checks do not detect every self-intersection or certify printability.",
+          "Bambu vendor metadata may fail strict 3MF compliance. No file is rewritten."
+        ],
+        "warning_count": 8,
+        "strict_error": "Lib3MFException 5: Unknown Model Metadata.",
+        "source_sha256": "673c5a3270b948aa556547e49a72062e0c43dd7fed325c4cb6b5620793395ec1",
+        "elapsed_seconds": 0.06862824992276728,
+        "read_only": true
+      },
+      "source_unchanged": true
+    },
+    {
+      "file": "fitted_connector.3mf",
+      "result": {
+        "status": "needs_attention",
+        "library_version": "2.5.0",
+        "strict_compliant": false,
+        "geometry_valid": true,
+        "warnings": [
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32935,
+            "message": "Invalid Attribute in namespace."
+          }
+        ],
+        "meshes": [
+          {
+            "id": 1,
+            "vertices": 8,
+            "triangles": 12,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 2,
+            "vertices": 8,
+            "triangles": 12,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 3,
+            "vertices": 8,
+            "triangles": 12,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 4,
+            "vertices": 8,
+            "triangles": 12,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 5,
+            "vertices": 8,
+            "triangles": 12,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 6,
+            "vertices": 8,
+            "triangles": 12,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 7,
+            "vertices": 8,
+            "triangles": 12,
+            "valid": true,
+            "manifold_and_oriented": true
+          }
+        ],
+        "limitations": [
+          "Mesh validity and manifold checks do not detect every self-intersection or certify printability.",
+          "Bambu vendor metadata may fail strict 3MF compliance. No file is rewritten."
+        ],
+        "warning_count": 8,
+        "strict_error": "Lib3MFException 5: Unknown Model Metadata.",
+        "source_sha256": "f0d818babbaad67d49fe2c8f8fd3f43152845d0f8be094a8515a6144247acdce",
+        "elapsed_seconds": 0.06192349991761148,
+        "read_only": true
+      },
+      "source_unchanged": true
+    },
+    {
+      "file": "multicolor_assembly.3mf",
+      "result": {
+        "status": "needs_attention",
+        "library_version": "2.5.0",
+        "strict_compliant": false,
+        "geometry_valid": true,
+        "warnings": [
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32935,
+            "message": "Invalid Attribute in namespace."
+          }
+        ],
+        "meshes": [
+          {
+            "id": 1,
+            "vertices": 8,
+            "triangles": 12,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 2,
+            "vertices": 8,
+            "triangles": 12,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 3,
+            "vertices": 8,
+            "triangles": 12,
+            "valid": true,
+            "manifold_and_oriented": true
+          }
+        ],
+        "limitations": [
+          "Mesh validity and manifold checks do not detect every self-intersection or certify printability.",
+          "Bambu vendor metadata may fail strict 3MF compliance. No file is rewritten."
+        ],
+        "warning_count": 8,
+        "strict_error": "Lib3MFException 5: Unknown Model Metadata.",
+        "source_sha256": "56dfaf208852e94e0a2a999b03b8146a52f109e6211d12a9644990d77344df97",
+        "elapsed_seconds": 0.0878740840125829,
+        "read_only": true
+      },
+      "source_unchanged": true
+    },
+    {
+      "file": "RC_Mainline_1952_Bambu_Baseline.3mf",
+      "result": {
+        "status": "needs_attention",
+        "library_version": "2.5.0",
+        "strict_compliant": false,
+        "geometry_valid": true,
+        "warnings": [
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32935,
+            "message": "Invalid Attribute in namespace."
+          }
+        ],
+        "meshes": [
+          {
+            "id": 1,
+            "vertices": 112611,
+            "triangles": 225334,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 2,
+            "vertices": 28115,
+            "triangles": 56226,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 3,
+            "vertices": 20993,
+            "triangles": 41982,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 4,
+            "vertices": 17799,
+            "triangles": 35594,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 5,
+            "vertices": 17756,
+            "triangles": 35508,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 6,
+            "vertices": 61780,
+            "triangles": 123612,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 7,
+            "vertices": 5237,
+            "triangles": 10470,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 8,
+            "vertices": 8676,
+            "triangles": 17352,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 9,
+            "vertices": 81082,
+            "triangles": 162160,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 10,
+            "vertices": 5262,
+            "triangles": 10524,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 11,
+            "vertices": 28397,
+            "triangles": 56790,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 12,
+            "vertices": 8678,
+            "triangles": 17356,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 13,
+            "vertices": 81098,
+            "triangles": 162192,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 14,
+            "vertices": 5264,
+            "triangles": 10528,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 15,
+            "vertices": 28375,
+            "triangles": 56746,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 16,
+            "vertices": 19604,
+            "triangles": 39204,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 17,
+            "vertices": 14331,
+            "triangles": 28658,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 18,
+            "vertices": 4129,
+            "triangles": 8254,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 19,
+            "vertices": 2133,
+            "triangles": 4262,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 20,
+            "vertices": 4020,
+            "triangles": 8036,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 21,
+            "vertices": 2133,
+            "triangles": 4262,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 22,
+            "vertices": 4008,
+            "triangles": 8012,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 23,
+            "vertices": 1766,
+            "triangles": 3528,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 24,
+            "vertices": 1763,
+            "triangles": 3522,
+            "valid": true,
+            "manifold_and_oriented": true
+          },
+          {
+            "id": 25,
+            "vertices": 4008,
+            "triangles": 8012,
+            "valid": true,
+            "manifold_and_oriented": true
+          }
+        ],
+        "limitations": [
+          "Mesh validity and manifold checks do not detect every self-intersection or certify printability.",
+          "Bambu vendor metadata may fail strict 3MF compliance. No file is rewritten."
+        ],
+        "warning_count": 8,
+        "strict_error": "Lib3MFException 5: Unknown Model Metadata.",
+        "source_sha256": "b0dfce76a6cccad53f38eab4af47e0f8bdeff62166617969c10aa91c9c5e0264",
+        "elapsed_seconds": 4.178810459095985,
+        "read_only": true
+      },
+      "source_unchanged": true
+    },
+    {
+      "file": "rc_body_mount_bracket.3mf",
+      "result": {
+        "status": "needs_attention",
+        "library_version": "2.5.0",
+        "strict_compliant": false,
+        "geometry_valid": true,
+        "warnings": [
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32935,
+            "message": "Invalid Attribute in namespace."
+          },
+          {
+            "code": 32935,
+            "message": "Invalid Attribute in namespace."
+          },
+          {
+            "code": 32935,
+            "message": "Invalid Attribute in namespace."
+          },
+          {
+            "code": 32935,
+            "message": "Invalid Attribute in namespace."
+          }
+        ],
+        "meshes": [
+          {
+            "id": 1,
+            "vertices": 1588,
+            "triangles": 3196,
+            "valid": true,
+            "manifold_and_oriented": true
+          }
+        ],
+        "limitations": [
+          "Mesh validity and manifold checks do not detect every self-intersection or certify printability.",
+          "Bambu vendor metadata may fail strict 3MF compliance. No file is rewritten."
+        ],
+        "warning_count": 11,
+        "strict_error": "Lib3MFException 5: Unknown Model Metadata.",
+        "source_sha256": "3f4d65f3523b50a7ed94fea2f0fd0b933669bb7e73a8bab205b6a51b52ee3b44",
+        "elapsed_seconds": 0.07662350009195507,
+        "read_only": true
+      },
+      "source_unchanged": true
+    }
+  ],
+  "toolpath_profiles": [
+    {
+      "case": "thin_shell",
+      "profiles": [
+        {
+          "plate": 1,
+          "source": "Bambu G-code comments",
+          "complete": true,
+          "bytes_scanned": 377379,
+          "declared_layer_heights_mm": {
+            "0.2": 73,
+            "0.4": 1,
+            "0.200001": 20,
+            "0.199999": 8
+          },
+          "feature_blocks": {
+            "Custom": 2,
+            "Brim": 1,
+            "Outer wall": 189,
+            "Inner wall": 188,
+            "Bottom surface": 1,
+            "Internal solid infill": 5,
+            "Sparse infill": 3,
+            "Floating vertical shell": 4,
+            "Bridge": 1,
+            "Top surface": 2,
+            "Gap infill": 90
+          },
+          "min_declared_layer_height_mm": 0.199999,
+          "max_declared_layer_height_mm": 0.4,
+          "malformed_height_comments": 0,
+          "limitations": "Comment declarations and block counts; LAYER_HEIGHT may describe combined infill or support extrusion thickness. Not a nominal layer ladder, extrusion mass, executed motion, or physical quality."
+        }
+      ]
+    },
+    {
+      "case": "narrow_footprint",
+      "profiles": [
+        {
+          "plate": 1,
+          "source": "Bambu G-code comments",
+          "complete": true,
+          "bytes_scanned": 381399,
+          "declared_layer_heights_mm": {
+            "0.2": 72,
+            "0.200001": 128,
+            "0.199999": 32,
+            "0.199997": 18,
+            "0.4": 1
+          },
+          "feature_blocks": {
+            "Custom": 2,
+            "Brim": 1,
+            "Outer wall": 250,
+            "Inner wall": 249,
+            "Bottom surface": 1,
+            "Internal solid infill": 5,
+            "Sparse infill": 242,
+            "Floating vertical shell": 1,
+            "Bridge": 1,
+            "Top surface": 1,
+            "Gap infill": 1
+          },
+          "min_declared_layer_height_mm": 0.199997,
+          "max_declared_layer_height_mm": 0.4,
+          "malformed_height_comments": 0,
+          "limitations": "Comment declarations and block counts; LAYER_HEIGHT may describe combined infill or support extrusion thickness. Not a nominal layer ladder, extrusion mass, executed motion, or physical quality."
+        }
+      ]
+    },
+    {
+      "case": "overhang_bracket",
+      "profiles": [
+        {
+          "plate": 1,
+          "source": "Bambu G-code comments",
+          "complete": true,
+          "bytes_scanned": 1321593,
+          "declared_layer_heights_mm": {
+            "0.2": 72,
+            "0.4": 2,
+            "0.200001": 50,
+            "0.199999": 28
+          },
+          "feature_blocks": {
+            "Custom": 2,
+            "Support": 132,
+            "Brim": 1,
+            "Outer wall": 151,
+            "Inner wall": 150,
+            "Bottom surface": 1,
+            "Internal solid infill": 10,
+            "Sparse infill": 141,
+            "Floating vertical shell": 4,
+            "Bridge": 3,
+            "Top surface": 2,
+            "Gap infill": 1,
+            "Support interface": 2,
+            "Overhang wall": 2
+          },
+          "min_declared_layer_height_mm": 0.199999,
+          "max_declared_layer_height_mm": 0.4,
+          "malformed_height_comments": 0,
+          "limitations": "Comment declarations and block counts; LAYER_HEIGHT may describe combined infill or support extrusion thickness. Not a nominal layer ladder, extrusion mass, executed motion, or physical quality."
+        }
+      ]
+    },
+    {
+      "case": "fitted_connector",
+      "profiles": [
+        {
+          "plate": 1,
+          "source": "Bambu G-code comments",
+          "complete": true,
+          "bytes_scanned": 297140,
+          "declared_layer_heights_mm": {
+            "0.2": 61,
+            "0.4": 2,
+            "0.200001": 5
+          },
+          "feature_blocks": {
+            "Custom": 2,
+            "Brim": 1,
+            "Outer wall": 159,
+            "Inner wall": 157,
+            "Bottom surface": 2,
+            "Internal solid infill": 64,
+            "Sparse infill": 54,
+            "Floating vertical shell": 5,
+            "Bridge": 2,
+            "Top surface": 4,
+            "Gap infill": 2
+          },
+          "min_declared_layer_height_mm": 0.2,
+          "max_declared_layer_height_mm": 0.4,
+          "malformed_height_comments": 0,
+          "limitations": "Comment declarations and block counts; LAYER_HEIGHT may describe combined infill or support extrusion thickness. Not a nominal layer ladder, extrusion mass, executed motion, or physical quality."
+        }
+      ]
+    },
+    {
+      "case": "multicolor_assembly",
+      "profiles": [
+        {
+          "plate": 1,
+          "source": "Bambu G-code comments",
+          "complete": true,
+          "bytes_scanned": 329749,
+          "declared_layer_heights_mm": {
+            "0.2": 170,
+            "0.4": 2
+          },
+          "feature_blocks": {
+            "Custom": 2,
+            "Prime tower": 65,
+            "Brim": 1,
+            "Outer wall": 65,
+            "Inner wall": 63,
+            "Bottom surface": 1,
+            "Internal solid infill": 8,
+            "Sparse infill": 52,
+            "Floating vertical shell": 2,
+            "Bridge": 2,
+            "Top surface": 2
+          },
+          "min_declared_layer_height_mm": 0.2,
+          "max_declared_layer_height_mm": 0.4,
+          "malformed_height_comments": 0,
+          "limitations": "Comment declarations and block counts; LAYER_HEIGHT may describe combined infill or support extrusion thickness. Not a nominal layer ladder, extrusion mass, executed motion, or physical quality."
+        }
+      ]
+    }
+  ],
+  "defects": [
+    {
+      "mutation": "invalid_index",
+      "native_assembly_reader": "accepted",
+      "lib3mf": {
+        "status": "failed",
+        "library_version": "2.5.0",
+        "strict_compliant": false,
+        "geometry_valid": false,
+        "warnings": [],
+        "meshes": [],
+        "limitations": [
+          "Mesh validity and manifold checks do not detect every self-intersection or certify printability.",
+          "Bambu vendor metadata may fail strict 3MF compliance. No file is rewritten."
+        ],
+        "error": "Lib3MFException 5: Invalid model node index",
+        "source_sha256": "19ec41a62337b3374db9c8031e5c919e0d4f6ae00be489c54f6ee3f1bf78d284",
+        "elapsed_seconds": 0.0713980000000447,
+        "read_only": true
+      }
+    },
+    {
+      "mutation": "open_mesh",
+      "native_assembly_reader": "accepted",
+      "lib3mf": {
+        "status": "failed",
+        "library_version": "2.5.0",
+        "strict_compliant": false,
+        "geometry_valid": false,
+        "warnings": [
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32946,
+            "message": "Unknown Model Metadata."
+          },
+          {
+            "code": 32935,
+            "message": "Invalid Attribute in namespace."
+          }
+        ],
+        "meshes": [
+          {
+            "id": 1,
+            "vertices": 8,
+            "triangles": 11,
+            "valid": false,
+            "manifold_and_oriented": false
+          }
+        ],
+        "limitations": [
+          "Mesh validity and manifold checks do not detect every self-intersection or certify printability.",
+          "Bambu vendor metadata may fail strict 3MF compliance. No file is rewritten."
+        ],
+        "warning_count": 8,
+        "strict_error": "Lib3MFException 5: Unknown Model Metadata.",
+        "source_sha256": "e645a679a99a106b96891850383b78ffbe00eb977833b516fea8fd8c13b870af",
+        "elapsed_seconds": 0.08050908287987113,
+        "read_only": true
+      }
+    }
+  ],
+  "decisions": {
+    "lib3mf": "adopt optional read-only advisory validator; strict mode cannot gate Bambu files",
+    "gcodeparser": "reject Bambu motion interpretation; use bounded native comment diagnostics instead",
+    "nlopt": "defer CAD optimizer: numeric smoke matches a direct bound choice and proves no real CAD benefit",
+    "orca": "defer integration: no measured print calibration results or installed plugin host",
+    "cgal": "not executed; no demonstrated self-intersection or remeshing failure requiring another geometry adapter"
+  },
+  "optional_probe": {
+    "versions": {
+      "gcodeparser": "0.3.0",
+      "nlopt": "2.11.0",
+      "lib3mf": "2.5.0"
+    },
+    "gcodeparser": {
+      "input": "M620.1 E F523 T210",
+      "parsed_commands": [
+        [
+          "M",
+          620
+        ],
+        [
+          "T",
+          210
+        ]
+      ],
+      "compatible": false,
+      "reason": "Decimal M command becomes M620 and a spurious T210 tool-change command"
+    },
+    "nlopt": {
+      "status": "numerical_smoke_only",
+      "calls": 12,
+      "thickness_mm": 1.2,
+      "volume_mm3": 7283.711999999992,
+      "direct_bound_volume_mm3": 7283.711999999992,
+      "incremental_gain_percent": 0.0,
+      "limitations": "Analytical hollow-box objective with a hypothetical thickness floor; no FreeCAD geometry, loads, physical prints or slicer optimization."
+    }
+  }
+}

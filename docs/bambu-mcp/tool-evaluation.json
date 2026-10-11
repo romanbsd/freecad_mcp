@@ -1,0 +1,3484 @@
+{
+  "schema_version": 1,
+  "estimate_only": true,
+  "slicer_version": "BambuStudio-02.08.02.61:",
+  "tweaker_source_sha256": "edc8599e233c11c266165f8c0c6b936d69247c197fde05a407095b65a04cc3cd",
+  "versions": {
+    "numpy": "2.5.4",
+    "trimesh": "5.1.1",
+    "shapely": "2.2.0",
+    "scipy": "1.18.1",
+    "optuna": "5.0.0"
+  },
+  "geometry": {
+    "thin_shell": {
+      "tweaker": [
+        {
+          "rotation_matrix": [
+            [
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "heuristic_score": 0.48474411906252274
+        },
+        {
+          "rotation_matrix": [
+            [
+              6.123233995736766e-17,
+              0.0,
+              -1.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              1.0,
+              0.0,
+              6.123233995736766e-17
+            ]
+          ],
+          "heuristic_score": 1.3426983650415483
+        },
+        {
+          "rotation_matrix": [
+            [
+              6.123233995736766e-17,
+              0.0,
+              1.0
+            ],
+            [
+              -0.0,
+              1.0,
+              0.0
+            ],
+            [
+              -1.0,
+              -0.0,
+              6.123233995736766e-17
+            ]
+          ],
+          "heuristic_score": 1.3426983650415483
+        },
+        {
+          "rotation_matrix": [
+            [
+              1.0,
+              0.0,
+              -0.0
+            ],
+            [
+              -0.0,
+              6.123233995736766e-17,
+              -1.0
+            ],
+            [
+              0.0,
+              1.0,
+              6.123233995736766e-17
+            ]
+          ],
+          "heuristic_score": 1.506755723720624
+        }
+      ],
+      "trimesh": [
+        {
+          "rotation_matrix": [
+            [
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "heuristic_score": -0.37281827032254056
+        },
+        {
+          "rotation_matrix": [
+            [
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              -1.0,
+              0.0
+            ],
+            [
+              -0.0,
+              -0.0,
+              -1.0
+            ]
+          ],
+          "heuristic_score": -0.27808730788064756
+        },
+        {
+          "rotation_matrix": [
+            [
+              -1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              -0.0,
+              1.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0
+            ]
+          ],
+          "heuristic_score": -0.11908091524043293
+        },
+        {
+          "rotation_matrix": [
+            [
+              1.0,
+              -0.0,
+              0.0
+            ],
+            [
+              -0.0,
+              0.0,
+              1.0
+            ],
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ]
+          ],
+          "heuristic_score": -0.11908091524043293
+        }
+      ],
+      "tweaker_seconds": 0.01216766587458551,
+      "trimesh_seconds": 0.004786374978721142,
+      "watertight": true,
+      "volume": 11712.0,
+      "triangles": 60,
+      "brim_fits_at_current_origin": false
+    },
+    "narrow_footprint": {
+      "tweaker": [
+        {
+          "rotation_matrix": [
+            [
+              6.123233995736766e-17,
+              0.0,
+              -1.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              1.0,
+              0.0,
+              6.123233995736766e-17
+            ]
+          ],
+          "heuristic_score": 0.00543942010560923
+        },
+        {
+          "rotation_matrix": [
+            [
+              6.123233995736766e-17,
+              0.0,
+              1.0
+            ],
+            [
+              -0.0,
+              1.0,
+              0.0
+            ],
+            [
+              -1.0,
+              -0.0,
+              6.123233995736766e-17
+            ]
+          ],
+          "heuristic_score": 0.00543942010560923
+        },
+        {
+          "rotation_matrix": [
+            [
+              1.0,
+              0.0,
+              -0.0
+            ],
+            [
+              -0.0,
+              6.123233995736766e-17,
+              -1.0
+            ],
+            [
+              0.0,
+              1.0,
+              6.123233995736766e-17
+            ]
+          ],
+          "heuristic_score": 0.0063980796469573446
+        },
+        {
+          "rotation_matrix": [
+            [
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              6.123233995736766e-17,
+              1.0
+            ],
+            [
+              0.0,
+              -1.0,
+              6.123233995736766e-17
+            ]
+          ],
+          "heuristic_score": 0.0063980796469573446
+        }
+      ],
+      "trimesh": [
+        {
+          "rotation_matrix": [
+            [
+              0.0,
+              -1.0,
+              0.0
+            ],
+            [
+              -0.0,
+              0.0,
+              1.0
+            ],
+            [
+              -1.0,
+              -0.0,
+              -0.0
+            ]
+          ],
+          "heuristic_score": -0.29216293060453413
+        },
+        {
+          "rotation_matrix": [
+            [
+              -0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              -0.0,
+              1.0
+            ],
+            [
+              1.0,
+              0.0,
+              0.0
+            ]
+          ],
+          "heuristic_score": -0.2921629306045334
+        },
+        {
+          "rotation_matrix": [
+            [
+              -1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              -0.0,
+              1.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0
+            ]
+          ],
+          "heuristic_score": -0.2018449096784281
+        },
+        {
+          "rotation_matrix": [
+            [
+              1.0,
+              -0.0,
+              0.0
+            ],
+            [
+              -0.0,
+              0.0,
+              1.0
+            ],
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ]
+          ],
+          "heuristic_score": -0.2018449096784281
+        }
+      ],
+      "tweaker_seconds": 0.010866499971598387,
+      "trimesh_seconds": 0.002386749954894185,
+      "watertight": true,
+      "volume": 2400.0,
+      "triangles": 12,
+      "brim_fits_at_current_origin": false
+    },
+    "overhang_bracket": {
+      "tweaker": [
+        {
+          "rotation_matrix": [
+            [
+              1.0,
+              0.0,
+              -0.0
+            ],
+            [
+              -0.0,
+              6.123233995736766e-17,
+              -1.0
+            ],
+            [
+              0.0,
+              1.0,
+              6.123233995736766e-17
+            ]
+          ],
+          "heuristic_score": 0.00630058265638031
+        },
+        {
+          "rotation_matrix": [
+            [
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              6.123233995736766e-17,
+              1.0
+            ],
+            [
+              0.0,
+              -1.0,
+              6.123233995736766e-17
+            ]
+          ],
+          "heuristic_score": 0.00630058265638031
+        },
+        {
+          "rotation_matrix": [
+            [
+              6.123233995736766e-17,
+              0.0,
+              -1.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              1.0,
+              0.0,
+              6.123233995736766e-17
+            ]
+          ],
+          "heuristic_score": 0.11274756953699315
+        },
+        {
+          "rotation_matrix": [
+            [
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              -1.0,
+              1.2246467991473532e-16
+            ],
+            [
+              0.0,
+              -1.2246467991473532e-16,
+              -1.0
+            ]
+          ],
+          "heuristic_score": 1.125292098475993
+        }
+      ],
+      "trimesh": [
+        {
+          "rotation_matrix": [
+            [
+              -1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              -0.0,
+              1.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0
+            ]
+          ],
+          "heuristic_score": -0.23551584380797147
+        },
+        {
+          "rotation_matrix": [
+            [
+              1.0,
+              -0.0,
+              0.0
+            ],
+            [
+              -0.0,
+              0.0,
+              1.0
+            ],
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ]
+          ],
+          "heuristic_score": -0.23551584380797147
+        },
+        {
+          "rotation_matrix": [
+            [
+              -0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              -0.0,
+              1.0
+            ],
+            [
+              1.0,
+              0.0,
+              0.0
+            ]
+          ],
+          "heuristic_score": -0.19150452811140686
+        },
+        {
+          "rotation_matrix": [
+            [
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              -1.0,
+              0.0
+            ],
+            [
+              -0.0,
+              -0.0,
+              -1.0
+            ]
+          ],
+          "heuristic_score": -0.12393238369085574
+        }
+      ],
+      "tweaker_seconds": 0.010688416892662644,
+      "trimesh_seconds": 0.0021771250758320093,
+      "watertight": true,
+      "volume": 5520.0,
+      "triangles": 36,
+      "brim_fits_at_current_origin": false
+    },
+    "fitted_connector": {
+      "tweaker": [
+        {
+          "rotation_matrix": [
+            [
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              6.123233995736766e-17,
+              1.0
+            ],
+            [
+              0.0,
+              -1.0,
+              6.123233995736766e-17
+            ]
+          ],
+          "heuristic_score": 0.26399774558788863
+        },
+        {
+          "rotation_matrix": [
+            [
+              1.0,
+              0.0,
+              -0.0
+            ],
+            [
+              -0.0,
+              6.123233995736766e-17,
+              -1.0
+            ],
+            [
+              0.0,
+              1.0,
+              6.123233995736766e-17
+            ]
+          ],
+          "heuristic_score": 0.26399774565051903
+        },
+        {
+          "rotation_matrix": [
+            [
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "heuristic_score": 0.36020678581926635
+        },
+        {
+          "rotation_matrix": [
+            [
+              6.123233995736766e-17,
+              0.0,
+              1.0
+            ],
+            [
+              -0.0,
+              1.0,
+              0.0
+            ],
+            [
+              -1.0,
+              -0.0,
+              6.123233995736766e-17
+            ]
+          ],
+          "heuristic_score": 0.9706722104797643
+        }
+      ],
+      "trimesh": [
+        {
+          "rotation_matrix": [
+            [
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "heuristic_score": -0.2693421494198822
+        },
+        {
+          "rotation_matrix": [
+            [
+              1.0,
+              -0.0,
+              0.0
+            ],
+            [
+              -0.0,
+              0.0,
+              1.0
+            ],
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ]
+          ],
+          "heuristic_score": -0.22819728266396533
+        },
+        {
+          "rotation_matrix": [
+            [
+              -1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              -0.0,
+              1.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0
+            ]
+          ],
+          "heuristic_score": -0.2281972826639653
+        },
+        {
+          "rotation_matrix": [
+            [
+              -0.0,
+              -1.0,
+              0.0
+            ],
+            [
+              -0.9965457582448797,
+              0.0,
+              0.08304547985373997
+            ],
+            [
+              -0.08304547985373997,
+              0.0,
+              -0.9965457582448797
+            ]
+          ],
+          "heuristic_score": -0.18929082633497626
+        }
+      ],
+      "tweaker_seconds": 0.00738933403044939,
+      "trimesh_seconds": 0.001998959109187126,
+      "watertight": true,
+      "volume": 2006.72,
+      "triangles": 84,
+      "brim_fits_at_current_origin": false
+    },
+    "multicolor_assembly": {
+      "tweaker": [
+        {
+          "rotation_matrix": [
+            [
+              1.0,
+              0.0,
+              -0.0
+            ],
+            [
+              -0.0,
+              6.123233995736766e-17,
+              -1.0
+            ],
+            [
+              0.0,
+              1.0,
+              6.123233995736766e-17
+            ]
+          ],
+          "heuristic_score": 0.00696216237782999
+        },
+        {
+          "rotation_matrix": [
+            [
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              6.123233995736766e-17,
+              1.0
+            ],
+            [
+              0.0,
+              -1.0,
+              6.123233995736766e-17
+            ]
+          ],
+          "heuristic_score": 0.00696216237782999
+        },
+        {
+          "rotation_matrix": [
+            [
+              6.123233995736766e-17,
+              0.0,
+              -1.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              1.0,
+              0.0,
+              6.123233995736766e-17
+            ]
+          ],
+          "heuristic_score": 0.3665736574963393
+        },
+        {
+          "rotation_matrix": [
+            [
+              6.123233995736766e-17,
+              0.0,
+              1.0
+            ],
+            [
+              -0.0,
+              1.0,
+              0.0
+            ],
+            [
+              -1.0,
+              -0.0,
+              6.123233995736766e-17
+            ]
+          ],
+          "heuristic_score": 0.3665736574963393
+        }
+      ],
+      "trimesh": [
+        {
+          "rotation_matrix": [
+            [
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "heuristic_score": -0.35434948596113297
+        },
+        {
+          "rotation_matrix": [
+            [
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              -1.0,
+              0.0
+            ],
+            [
+              -0.0,
+              -0.0,
+              -1.0
+            ]
+          ],
+          "heuristic_score": -0.35434948596113297
+        },
+        {
+          "rotation_matrix": [
+            [
+              1.0,
+              -0.0,
+              0.0
+            ],
+            [
+              -0.0,
+              0.0,
+              1.0
+            ],
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ]
+          ],
+          "heuristic_score": -0.09999957400555404
+        },
+        {
+          "rotation_matrix": [
+            [
+              -1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              -0.0,
+              1.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0
+            ]
+          ],
+          "heuristic_score": -0.09999957400555402
+        }
+      ],
+      "tweaker_seconds": 0.008840833092108369,
+      "trimesh_seconds": 0.001420874847099185,
+      "watertight": true,
+      "volume": 4800.0,
+      "triangles": 36,
+      "brim_fits_at_current_origin": false
+    }
+  },
+  "geometry_worker_seconds": 0.710578375030309,
+  "search_worker_seconds": 0.18860645918175578,
+  "orientation": {
+    "thin_shell": {
+      "best": {
+        "baseline": {
+          "name": "baseline",
+          "seconds": 1184.0,
+          "grams": 13.92
+        },
+        "axis": {
+          "name": "axis_2",
+          "seconds": 1184.0,
+          "grams": 13.92
+        },
+        "tweaker": {
+          "name": "tweaker_0",
+          "seconds": 1184.0,
+          "grams": 13.92
+        },
+        "trimesh": {
+          "name": "trimesh_0",
+          "seconds": 1184.0,
+          "grams": 13.92
+        }
+      },
+      "provider_wall_seconds": 0.08014225005172193,
+      "slicing_wall_seconds": 1.5147019159048796,
+      "source_sha256": "8b7e86d692b8ec50f9bda9aae4b5062339934eab9b16ad359471037860694be3",
+      "source_unchanged": true,
+      "pareto": [
+        "axis_2",
+        "baseline",
+        "trimesh_0",
+        "trimesh_1",
+        "tweaker_0"
+      ],
+      "candidates": [
+        {
+          "name": "baseline",
+          "status": "success",
+          "metrics": {
+            "seconds": 1184.0,
+            "total_grams": 13.92,
+            "outside": false,
+            "layers": 100,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 76.64192199707031,
+              "Bridge": 101.0455093383789,
+              "Brim": 44.27188491821289,
+              "Custom": 34.638893127441406,
+              "Gap infill": 116.70508575439453,
+              "Inner wall": 234.89707946777344,
+              "Internal solid infill": 169.20590209960938,
+              "Outer wall": 253.08045959472656,
+              "Sparse infill": 10.13018798828125,
+              "Top surface": 62.26995086669922,
+              "Travel": 97.23947143554688,
+              "Undefined": 81.7740707397461
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "axis_0",
+          "status": "rejected",
+          "metrics": {
+            "seconds": 1805.0,
+            "total_grams": 13.91,
+            "outside": false,
+            "layers": 200,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 45.7267951965332,
+              "Bridge": 156.32022094726562,
+              "Brim": 36.365806579589844,
+              "Custom": 34.71276092529297,
+              "Gap infill": 232.58706665039062,
+              "Inner wall": 446.7430114746094,
+              "Internal solid infill": 189.69534301757812,
+              "Outer wall": 471.12103271484375,
+              "Overhang wall": 2.2271997928619385,
+              "Sparse infill": 16.862476348876953,
+              "Top surface": 56.93952560424805,
+              "Travel": 132.17189025878906,
+              "Undefined": 116.63185119628906
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [
+            "time exceeds allowed increase"
+          ],
+          "error": null
+        },
+        {
+          "name": "axis_1",
+          "status": "rejected",
+          "metrics": {
+            "seconds": 2274.0,
+            "total_grams": 14.04,
+            "outside": false,
+            "layers": 300,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 31.452180862426758,
+              "Bridge": 102.88002014160156,
+              "Brim": 28.422513961791992,
+              "Custom": 34.74913024902344,
+              "Gap infill": 342.9446716308594,
+              "Inner wall": 676.0441284179688,
+              "Internal solid infill": 130.4788360595703,
+              "Outer wall": 715.85205078125,
+              "Overhang wall": 1.427200198173523,
+              "Sparse infill": 14.154243469238281,
+              "Top surface": 37.1252555847168,
+              "Travel": 174.76275634765625,
+              "Undefined": 159.16639709472656
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [
+            "time exceeds allowed increase"
+          ],
+          "error": null
+        },
+        {
+          "name": "axis_2",
+          "status": "success",
+          "metrics": {
+            "seconds": 1184.0,
+            "total_grams": 13.92,
+            "outside": false,
+            "layers": 100,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 76.64188385009766,
+              "Bridge": 101.04740905761719,
+              "Brim": 44.43453598022461,
+              "Custom": 34.810340881347656,
+              "Gap infill": 115.2872314453125,
+              "Inner wall": 232.05470275878906,
+              "Internal solid infill": 169.22683715820312,
+              "Outer wall": 250.3029327392578,
+              "Sparse infill": 10.096559524536133,
+              "Top surface": 62.26986312866211,
+              "Travel": 104.16670989990234,
+              "Undefined": 88.52911376953125
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "tweaker_0",
+          "status": "success",
+          "metrics": {
+            "seconds": 1184.0,
+            "total_grams": 13.92,
+            "outside": false,
+            "layers": 100,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 76.64192199707031,
+              "Bridge": 101.0455093383789,
+              "Brim": 44.27188491821289,
+              "Custom": 34.638893127441406,
+              "Gap infill": 116.70508575439453,
+              "Inner wall": 234.89707946777344,
+              "Internal solid infill": 169.20590209960938,
+              "Outer wall": 253.08045959472656,
+              "Sparse infill": 10.13018798828125,
+              "Top surface": 62.26995086669922,
+              "Travel": 97.23947143554688,
+              "Undefined": 81.7740707397461
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "tweaker_1",
+          "status": "rejected",
+          "metrics": {
+            "seconds": 2289.0,
+            "total_grams": 14.04,
+            "outside": false,
+            "layers": 300,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 31.427833557128906,
+              "Bridge": 102.90652465820312,
+              "Brim": 28.422513961791992,
+              "Custom": 34.74913024902344,
+              "Gap infill": 359.12200927734375,
+              "Inner wall": 674.5968017578125,
+              "Internal solid infill": 130.5577850341797,
+              "Outer wall": 714.393310546875,
+              "Overhang wall": 1.427200198173523,
+              "Sparse infill": 14.093212127685547,
+              "Top surface": 37.1263313293457,
+              "Travel": 176.2799072265625,
+              "Undefined": 160.6835479736328
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [
+            "time exceeds allowed increase"
+          ],
+          "error": null
+        },
+        {
+          "name": "tweaker_2",
+          "status": "rejected",
+          "metrics": {
+            "seconds": 2274.0,
+            "total_grams": 14.04,
+            "outside": false,
+            "layers": 300,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 31.42794418334961,
+              "Bridge": 102.87996673583984,
+              "Brim": 28.422513961791992,
+              "Custom": 34.74913024902344,
+              "Gap infill": 342.9446716308594,
+              "Inner wall": 676.0321044921875,
+              "Internal solid infill": 130.4674072265625,
+              "Outer wall": 715.8399047851562,
+              "Overhang wall": 1.427200198173523,
+              "Sparse infill": 14.120451927185059,
+              "Top surface": 37.12525939941406,
+              "Travel": 174.8011474609375,
+              "Undefined": 159.2047882080078
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [
+            "time exceeds allowed increase"
+          ],
+          "error": null
+        },
+        {
+          "name": "tweaker_3",
+          "status": "rejected",
+          "metrics": {
+            "seconds": 1805.0,
+            "total_grams": 13.91,
+            "outside": false,
+            "layers": 200,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 45.7267951965332,
+              "Bridge": 156.32022094726562,
+              "Brim": 36.365806579589844,
+              "Custom": 34.71276092529297,
+              "Gap infill": 232.58706665039062,
+              "Inner wall": 446.7430114746094,
+              "Internal solid infill": 189.69534301757812,
+              "Outer wall": 471.12103271484375,
+              "Overhang wall": 2.2271997928619385,
+              "Sparse infill": 16.862476348876953,
+              "Top surface": 56.93952560424805,
+              "Travel": 132.17189025878906,
+              "Undefined": 116.63185119628906
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [
+            "time exceeds allowed increase"
+          ],
+          "error": null
+        },
+        {
+          "name": "trimesh_0",
+          "status": "success",
+          "metrics": {
+            "seconds": 1184.0,
+            "total_grams": 13.92,
+            "outside": false,
+            "layers": 100,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 76.64192199707031,
+              "Bridge": 101.0455093383789,
+              "Brim": 44.27188491821289,
+              "Custom": 34.638893127441406,
+              "Gap infill": 116.70508575439453,
+              "Inner wall": 234.89707946777344,
+              "Internal solid infill": 169.20590209960938,
+              "Outer wall": 253.08045959472656,
+              "Sparse infill": 10.13018798828125,
+              "Top surface": 62.26995086669922,
+              "Travel": 97.23947143554688,
+              "Undefined": 81.7740707397461
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "trimesh_1",
+          "status": "success",
+          "metrics": {
+            "seconds": 1211.0,
+            "total_grams": 13.88,
+            "outside": false,
+            "layers": 100,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bridge": 222.51609802246094,
+              "Brim": 44.38783264160156,
+              "Custom": 34.762901306152344,
+              "Gap infill": 119.7159652709961,
+              "Inner wall": 235.879150390625,
+              "Internal solid infill": 164.17800903320312,
+              "Outer wall": 254.44784545898438,
+              "Sparse infill": 13.169151306152344,
+              "Top surface": 46.73823547363281,
+              "Travel": 91.70389556884766,
+              "Undefined": 76.11448669433594
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "trimesh_2",
+          "status": "rejected",
+          "metrics": {
+            "seconds": 1804.0,
+            "total_grams": 13.91,
+            "outside": false,
+            "layers": 200,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 45.72685623168945,
+              "Bridge": 156.27114868164062,
+              "Brim": 36.36581039428711,
+              "Custom": 34.71276092529297,
+              "Gap infill": 233.6715087890625,
+              "Inner wall": 443.4039611816406,
+              "Internal solid infill": 189.60621643066406,
+              "Outer wall": 470.2738037109375,
+              "Overhang wall": 2.2271997928619385,
+              "Sparse infill": 16.811058044433594,
+              "Top surface": 56.94141387939453,
+              "Travel": 133.84095764160156,
+              "Undefined": 118.30091857910156
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [
+            "time exceeds allowed increase"
+          ],
+          "error": null
+        },
+        {
+          "name": "trimesh_3",
+          "status": "rejected",
+          "metrics": {
+            "seconds": 1803.0,
+            "total_grams": 13.91,
+            "outside": false,
+            "layers": 200,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 45.726837158203125,
+              "Bridge": 156.27085876464844,
+              "Brim": 36.365806579589844,
+              "Custom": 34.71276092529297,
+              "Gap infill": 233.6715087890625,
+              "Inner wall": 443.4578552246094,
+              "Internal solid infill": 189.6496124267578,
+              "Outer wall": 470.3287048339844,
+              "Overhang wall": 2.2271997928619385,
+              "Sparse infill": 16.929166793823242,
+              "Top surface": 53.94141387939453,
+              "Travel": 136.1265869140625,
+              "Undefined": 120.58655548095703
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [
+            "time exceeds allowed increase"
+          ],
+          "error": null
+        }
+      ]
+    },
+    "narrow_footprint": {
+      "best": {
+        "baseline": {
+          "name": "baseline",
+          "seconds": 1039.0,
+          "grams": 1.85
+        },
+        "axis": {
+          "name": "axis_1",
+          "seconds": 326.0,
+          "grams": 1.85
+        },
+        "tweaker": {
+          "name": "tweaker_0",
+          "seconds": 326.0,
+          "grams": 1.85
+        },
+        "trimesh": {
+          "name": "trimesh_0",
+          "seconds": 323.0,
+          "grams": 1.85
+        }
+      },
+      "provider_wall_seconds": 0.12189020798541605,
+      "slicing_wall_seconds": 1.1628947909921408,
+      "source_sha256": "f7d9b834bb570e907e80efaa46e0f4e7d1159e7f60965e07d8cb760487d2c683",
+      "source_unchanged": true,
+      "pareto": [
+        "trimesh_0",
+        "trimesh_1"
+      ],
+      "candidates": [
+        {
+          "name": "baseline",
+          "status": "success",
+          "metrics": {
+            "seconds": 1039.0,
+            "total_grams": 1.85,
+            "outside": false,
+            "layers": 250,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 2.585928201675415,
+              "Bridge": 1.5109565258026123,
+              "Brim": 9.986943244934082,
+              "Custom": 34.65156555175781,
+              "Gap infill": 0.04345127195119858,
+              "Inner wall": 288.08221435546875,
+              "Internal solid infill": 18.941749572753906,
+              "Outer wall": 348.4035949707031,
+              "Sparse infill": 251.5473175048828,
+              "Top surface": 4.159320831298828,
+              "Travel": 95.23845672607422,
+              "Undefined": 79.70552062988281
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "axis_0",
+          "status": "success",
+          "metrics": {
+            "seconds": 359.0,
+            "total_grams": 1.92,
+            "outside": false,
+            "layers": 40,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 16.908193588256836,
+              "Bridge": 10.586857795715332,
+              "Brim": 26.833843231201172,
+              "Custom": 34.79351806640625,
+              "Inner wall": 66.63726806640625,
+              "Internal solid infill": 28.288307189941406,
+              "Outer wall": 72.36016082763672,
+              "Sparse infill": 74.6484375,
+              "Top surface": 10.689377784729004,
+              "Travel": 33.82318878173828,
+              "Undefined": 18.19251251220703
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "axis_1",
+          "status": "success",
+          "metrics": {
+            "seconds": 326.0,
+            "total_grams": 1.85,
+            "outside": false,
+            "layers": 30,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 20.853567123413086,
+              "Bridge": 14.889727592468262,
+              "Brim": 27.578205108642578,
+              "Custom": 34.67070770263672,
+              "Inner wall": 46.173824310302734,
+              "Internal solid infill": 44.95782470703125,
+              "Outer wall": 50.4207878112793,
+              "Sparse infill": 52.49662780761719,
+              "Top surface": 12.888509750366211,
+              "Travel": 36.978981018066406,
+              "Undefined": 21.471004486083984
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "axis_2",
+          "status": "success",
+          "metrics": {
+            "seconds": 1045.0,
+            "total_grams": 1.85,
+            "outside": false,
+            "layers": 250,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 2.58594012260437,
+              "Bridge": 1.5021098852157593,
+              "Brim": 9.989038467407227,
+              "Custom": 34.61619567871094,
+              "Gap infill": 0.04340290278196335,
+              "Inner wall": 288.0982666015625,
+              "Internal solid infill": 19.016075134277344,
+              "Outer wall": 348.4224853515625,
+              "Sparse infill": 251.5208282470703,
+              "Top surface": 4.1592183113098145,
+              "Travel": 100.93054962158203,
+              "Undefined": 85.43265533447266
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "tweaker_0",
+          "status": "success",
+          "metrics": {
+            "seconds": 326.0,
+            "total_grams": 1.85,
+            "outside": false,
+            "layers": 30,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 20.853567123413086,
+              "Bridge": 14.889727592468262,
+              "Brim": 27.578205108642578,
+              "Custom": 34.67070770263672,
+              "Inner wall": 46.173824310302734,
+              "Internal solid infill": 44.95782470703125,
+              "Outer wall": 50.4207878112793,
+              "Sparse infill": 52.49662780761719,
+              "Top surface": 12.888509750366211,
+              "Travel": 36.978981018066406,
+              "Undefined": 21.471004486083984
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "tweaker_1",
+          "status": "success",
+          "metrics": {
+            "seconds": 326.0,
+            "total_grams": 1.85,
+            "outside": false,
+            "layers": 30,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 20.853567123413086,
+              "Bridge": 14.889727592468262,
+              "Brim": 27.578205108642578,
+              "Custom": 34.67070770263672,
+              "Inner wall": 46.173824310302734,
+              "Internal solid infill": 44.95782470703125,
+              "Outer wall": 50.4207878112793,
+              "Sparse infill": 52.49662780761719,
+              "Top surface": 12.888509750366211,
+              "Travel": 36.978981018066406,
+              "Undefined": 21.471004486083984
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "tweaker_2",
+          "status": "success",
+          "metrics": {
+            "seconds": 359.0,
+            "total_grams": 1.92,
+            "outside": false,
+            "layers": 40,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 16.908193588256836,
+              "Bridge": 10.586857795715332,
+              "Brim": 26.833843231201172,
+              "Custom": 34.79351806640625,
+              "Inner wall": 66.63726806640625,
+              "Internal solid infill": 28.288307189941406,
+              "Outer wall": 72.36016082763672,
+              "Sparse infill": 74.6484375,
+              "Top surface": 10.689377784729004,
+              "Travel": 33.82318878173828,
+              "Undefined": 18.19251251220703
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "tweaker_3",
+          "status": "success",
+          "metrics": {
+            "seconds": 359.0,
+            "total_grams": 1.92,
+            "outside": false,
+            "layers": 40,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 16.908193588256836,
+              "Bridge": 10.586857795715332,
+              "Brim": 26.833843231201172,
+              "Custom": 34.79351806640625,
+              "Inner wall": 66.63726806640625,
+              "Internal solid infill": 28.288307189941406,
+              "Outer wall": 72.36016082763672,
+              "Sparse infill": 74.6484375,
+              "Top surface": 10.689377784729004,
+              "Travel": 33.82318878173828,
+              "Undefined": 18.19251251220703
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "trimesh_0",
+          "status": "success",
+          "metrics": {
+            "seconds": 323.0,
+            "total_grams": 1.85,
+            "outside": false,
+            "layers": 30,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 20.853410720825195,
+              "Bridge": 14.889776229858398,
+              "Brim": 27.66105842590332,
+              "Custom": 34.7921142578125,
+              "Inner wall": 46.77960205078125,
+              "Internal solid infill": 45.03871536254883,
+              "Outer wall": 51.04076385498047,
+              "Sparse infill": 53.06095886230469,
+              "Top surface": 12.88851547241211,
+              "Travel": 32.12702941894531,
+              "Undefined": 16.49774742126465
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "trimesh_1",
+          "status": "success",
+          "metrics": {
+            "seconds": 323.0,
+            "total_grams": 1.85,
+            "outside": false,
+            "layers": 30,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 20.853410720825195,
+              "Bridge": 14.889776229858398,
+              "Brim": 27.66105842590332,
+              "Custom": 34.7921142578125,
+              "Inner wall": 46.77960205078125,
+              "Internal solid infill": 45.03871536254883,
+              "Outer wall": 51.04076385498047,
+              "Sparse infill": 53.06095886230469,
+              "Top surface": 12.88851547241211,
+              "Travel": 32.12702941894531,
+              "Undefined": 16.49774742126465
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "trimesh_2",
+          "status": "success",
+          "metrics": {
+            "seconds": 359.0,
+            "total_grams": 1.92,
+            "outside": false,
+            "layers": 40,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 16.908193588256836,
+              "Bridge": 10.586857795715332,
+              "Brim": 26.833843231201172,
+              "Custom": 34.79351806640625,
+              "Inner wall": 66.63726806640625,
+              "Internal solid infill": 28.288307189941406,
+              "Outer wall": 72.36016082763672,
+              "Sparse infill": 74.6484375,
+              "Top surface": 10.689377784729004,
+              "Travel": 33.82318878173828,
+              "Undefined": 18.19251251220703
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "trimesh_3",
+          "status": "success",
+          "metrics": {
+            "seconds": 359.0,
+            "total_grams": 1.92,
+            "outside": false,
+            "layers": 40,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 16.908193588256836,
+              "Bridge": 10.586857795715332,
+              "Brim": 26.833843231201172,
+              "Custom": 34.79351806640625,
+              "Inner wall": 66.63726806640625,
+              "Internal solid infill": 28.288307189941406,
+              "Outer wall": 72.36016082763672,
+              "Sparse infill": 74.6484375,
+              "Top surface": 10.689377784729004,
+              "Travel": 33.82318878173828,
+              "Undefined": 18.19251251220703
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        }
+      ]
+    },
+    "overhang_bracket": {
+      "best": {
+        "baseline": {
+          "name": "baseline",
+          "seconds": 1618.0,
+          "grams": 6.42
+        },
+        "axis": {
+          "name": "axis_0",
+          "seconds": 819.0,
+          "grams": 4.76
+        },
+        "tweaker": {
+          "name": "tweaker_1",
+          "seconds": 814.0,
+          "grams": 4.76
+        },
+        "trimesh": {
+          "name": "trimesh_1",
+          "seconds": 814.0,
+          "grams": 4.76
+        }
+      },
+      "provider_wall_seconds": 0.12665383284911513,
+      "slicing_wall_seconds": 4.1235443751793355,
+      "source_sha256": "ba1dc1139784864ddc1146987a5e7f46eff9019afe9ffaa816693cbd292523b6",
+      "source_unchanged": true,
+      "pareto": [
+        "trimesh_1",
+        "tweaker_1",
+        "tweaker_2"
+      ],
+      "candidates": [
+        {
+          "name": "baseline",
+          "status": "success",
+          "metrics": {
+            "seconds": 1618.0,
+            "total_grams": 6.42,
+            "outside": false,
+            "layers": 150,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 24.134111404418945,
+              "Bridge": 74.1763687133789,
+              "Brim": 15.860315322875977,
+              "Custom": 34.689422607421875,
+              "Gap infill": 0.08408471941947937,
+              "Inner wall": 213.766357421875,
+              "Internal solid infill": 102.70952606201172,
+              "Outer wall": 241.04164123535156,
+              "Overhang wall": 9.940545082092285,
+              "Sparse infill": 139.4392852783203,
+              "Support": 428.8283996582031,
+              "Support interface": 16.622648239135742,
+              "Top surface": 28.496145248413086,
+              "Travel": 304.2734069824219,
+              "Undefined": 288.73052978515625
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "axis_0",
+          "status": "success",
+          "metrics": {
+            "seconds": 819.0,
+            "total_grams": 4.76,
+            "outside": false,
+            "layers": 100,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 16.228294372558594,
+              "Brim": 40.117332458496094,
+              "Custom": 34.71247863769531,
+              "Inner wall": 222.24765014648438,
+              "Internal solid infill": 21.2703800201416,
+              "Outer wall": 235.89466857910156,
+              "Sparse infill": 168.70059204101562,
+              "Top surface": 14.792549133300781,
+              "Travel": 80.8706283569336,
+              "Undefined": 65.30167388916016
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "axis_1",
+          "status": "success",
+          "metrics": {
+            "seconds": 1507.0,
+            "total_grams": 6.07,
+            "outside": false,
+            "layers": 150,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 6.536511421203613,
+              "Bridge": 49.65421676635742,
+              "Brim": 26.21181297302246,
+              "Custom": 34.65991973876953,
+              "Inner wall": 240.56048583984375,
+              "Internal solid infill": 53.99031066894531,
+              "Outer wall": 279.7227783203125,
+              "Overhang wall": 1.8944004774093628,
+              "Sparse infill": 164.92506408691406,
+              "Support": 335.31524658203125,
+              "Support interface": 14.949960708618164,
+              "Top surface": 17.864765167236328,
+              "Travel": 296.57025146484375,
+              "Undefined": 281.0273742675781
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "axis_2",
+          "status": "success",
+          "metrics": {
+            "seconds": 1603.0,
+            "total_grams": 6.36,
+            "outside": false,
+            "layers": 150,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 24.158315658569336,
+              "Bridge": 74.15921020507812,
+              "Brim": 17.618738174438477,
+              "Custom": 34.70829772949219,
+              "Gap infill": 0.08629844337701797,
+              "Inner wall": 217.44435119628906,
+              "Internal solid infill": 99.98661804199219,
+              "Outer wall": 244.96653747558594,
+              "Overhang wall": 9.940545082092285,
+              "Sparse infill": 141.17398071289062,
+              "Support": 410.7143859863281,
+              "Support interface": 16.615463256835938,
+              "Top surface": 28.585933685302734,
+              "Travel": 298.9112548828125,
+              "Undefined": 283.33734130859375
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "tweaker_0",
+          "status": "success",
+          "metrics": {
+            "seconds": 819.0,
+            "total_grams": 4.76,
+            "outside": false,
+            "layers": 100,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 16.228294372558594,
+              "Brim": 40.117332458496094,
+              "Custom": 34.71247863769531,
+              "Inner wall": 222.24765014648438,
+              "Internal solid infill": 21.2703800201416,
+              "Outer wall": 235.89466857910156,
+              "Sparse infill": 168.70059204101562,
+              "Top surface": 14.792549133300781,
+              "Travel": 80.8706283569336,
+              "Undefined": 65.30167388916016
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "tweaker_1",
+          "status": "success",
+          "metrics": {
+            "seconds": 814.0,
+            "total_grams": 4.76,
+            "outside": false,
+            "layers": 100,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 16.228422164916992,
+              "Brim": 40.11732482910156,
+              "Custom": 34.71247863769531,
+              "Inner wall": 222.90574645996094,
+              "Internal solid infill": 21.15534210205078,
+              "Outer wall": 236.55807495117188,
+              "Sparse infill": 164.85108947753906,
+              "Top surface": 11.792526245117188,
+              "Travel": 81.37938690185547,
+              "Undefined": 65.81043243408203
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "tweaker_2",
+          "status": "success",
+          "metrics": {
+            "seconds": 1157.0,
+            "total_grams": 4.6,
+            "outside": false,
+            "layers": 150,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 24.15827178955078,
+              "Bridge": 24.07522201538086,
+              "Brim": 24.387659072875977,
+              "Custom": 34.687538146972656,
+              "Gap infill": 0.0715266689658165,
+              "Inner wall": 311.8202209472656,
+              "Internal solid infill": 62.579734802246094,
+              "Outer wall": 356.4334411621094,
+              "Sparse infill": 188.06333923339844,
+              "Top surface": 21.642370223999023,
+              "Travel": 124.8095474243164,
+              "Undefined": 109.26531219482422
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "tweaker_3",
+          "status": "success",
+          "metrics": {
+            "seconds": 1618.0,
+            "total_grams": 6.42,
+            "outside": false,
+            "layers": 150,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 24.15791893005371,
+              "Bridge": 74.176513671875,
+              "Brim": 15.858277320861816,
+              "Custom": 34.689422607421875,
+              "Gap infill": 0.08494547009468079,
+              "Inner wall": 213.75830078125,
+              "Internal solid infill": 99.64665222167969,
+              "Outer wall": 244.03424072265625,
+              "Overhang wall": 9.940545082092285,
+              "Sparse infill": 139.45921325683594,
+              "Support": 428.6203918457031,
+              "Support interface": 16.622663497924805,
+              "Top surface": 28.498098373413086,
+              "Travel": 304.4736328125,
+              "Undefined": 288.9307556152344
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "trimesh_0",
+          "status": "success",
+          "metrics": {
+            "seconds": 818.0,
+            "total_grams": 4.76,
+            "outside": false,
+            "layers": 100,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 16.268539428710938,
+              "Brim": 40.017845153808594,
+              "Custom": 34.71031188964844,
+              "Inner wall": 222.24862670898438,
+              "Internal solid infill": 21.202377319335938,
+              "Outer wall": 235.90187072753906,
+              "Sparse infill": 168.70059204101562,
+              "Top surface": 14.739463806152344,
+              "Travel": 80.68464660644531,
+              "Undefined": 65.11785888671875
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "trimesh_1",
+          "status": "success",
+          "metrics": {
+            "seconds": 814.0,
+            "total_grams": 4.76,
+            "outside": false,
+            "layers": 100,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 16.228422164916992,
+              "Brim": 40.11732482910156,
+              "Custom": 34.71247863769531,
+              "Inner wall": 222.90574645996094,
+              "Internal solid infill": 21.15534210205078,
+              "Outer wall": 236.55807495117188,
+              "Sparse infill": 164.85108947753906,
+              "Top surface": 11.792526245117188,
+              "Travel": 81.37938690185547,
+              "Undefined": 65.81043243408203
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "trimesh_2",
+          "status": "success",
+          "metrics": {
+            "seconds": 1158.0,
+            "total_grams": 4.6,
+            "outside": false,
+            "layers": 150,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 24.134159088134766,
+              "Bridge": 24.080902099609375,
+              "Brim": 24.37873649597168,
+              "Custom": 34.71607208251953,
+              "Gap infill": 0.07164746522903442,
+              "Inner wall": 314.79071044921875,
+              "Internal solid infill": 62.56081008911133,
+              "Outer wall": 356.35968017578125,
+              "Sparse infill": 188.0164031982422,
+              "Top surface": 18.6540470123291,
+              "Travel": 126.20526885986328,
+              "Undefined": 110.63277435302734
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "trimesh_3",
+          "status": "success",
+          "metrics": {
+            "seconds": 1618.0,
+            "total_grams": 6.42,
+            "outside": false,
+            "layers": 150,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 24.15791893005371,
+              "Bridge": 74.176513671875,
+              "Brim": 15.858277320861816,
+              "Custom": 34.689422607421875,
+              "Gap infill": 0.08494547009468079,
+              "Inner wall": 213.75830078125,
+              "Internal solid infill": 99.64665222167969,
+              "Outer wall": 244.03424072265625,
+              "Overhang wall": 9.940545082092285,
+              "Sparse infill": 139.45921325683594,
+              "Support": 428.6203918457031,
+              "Support interface": 16.622663497924805,
+              "Top surface": 28.498098373413086,
+              "Travel": 304.4736328125,
+              "Undefined": 288.9307556152344
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        }
+      ]
+    },
+    "fitted_connector": {
+      "best": {
+        "baseline": {
+          "name": "baseline",
+          "seconds": 517.0,
+          "grams": 1.93
+        },
+        "axis": {
+          "name": "axis_0",
+          "seconds": 498.0,
+          "grams": 1.86
+        },
+        "tweaker": {
+          "name": "tweaker_0",
+          "seconds": 497.0,
+          "grams": 1.86
+        },
+        "trimesh": {
+          "name": "trimesh_1",
+          "seconds": 497.0,
+          "grams": 1.86
+        }
+      },
+      "provider_wall_seconds": 0.15503470785915852,
+      "slicing_wall_seconds": 1.921549707883969,
+      "source_sha256": "c3cbc2337ab25311f306244d2c6ff66a236de5d2f9b7cc88b2543ca30deb413c",
+      "source_unchanged": true,
+      "pareto": [
+        "trimesh_1",
+        "trimesh_2",
+        "tweaker_0"
+      ],
+      "candidates": [
+        {
+          "name": "baseline",
+          "status": "success",
+          "metrics": {
+            "seconds": 517.0,
+            "total_grams": 1.93,
+            "outside": false,
+            "layers": 65,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 14.264863014221191,
+              "Bridge": 9.827706336975098,
+              "Brim": 27.810049057006836,
+              "Custom": 34.6416015625,
+              "Gap infill": 0.08280143141746521,
+              "Inner wall": 102.12361907958984,
+              "Internal solid infill": 75.91893768310547,
+              "Outer wall": 120.78462219238281,
+              "Sparse infill": 63.78281021118164,
+              "Top surface": 13.800015449523926,
+              "Travel": 69.4798583984375,
+              "Undefined": 53.98368453979492
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "axis_0",
+          "status": "success",
+          "metrics": {
+            "seconds": 498.0,
+            "total_grams": 1.86,
+            "outside": false,
+            "layers": 60,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 8.506096839904785,
+              "Bridge": 12.917923927307129,
+              "Brim": 24.496074676513672,
+              "Custom": 34.61785888671875,
+              "Gap infill": 0.014724564738571644,
+              "Inner wall": 103.11137390136719,
+              "Internal solid infill": 53.76054763793945,
+              "Outer wall": 120.46564483642578,
+              "Overhang wall": 4.566482067108154,
+              "Sparse infill": 75.39523315429688,
+              "Top surface": 11.20475959777832,
+              "Travel": 65.19441223144531,
+              "Undefined": 49.7211799621582
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse; It seems object fitted_connector has floating cantilever. Please re-orient the object or enable support generation.",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse",
+              "It seems object fitted_connector has floating cantilever. Please re-orient the object or enable support generation."
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "axis_1",
+          "status": "failed",
+          "metrics": null,
+          "constraint_violations": [],
+          "error": "exit (exit 156): [2026-10-11 14:04:29.501048] [0x00000001ee0ae180] [trace]   Initializing StaticPrintConfigs\nrun found error, exit\n"
+        },
+        {
+          "name": "axis_2",
+          "status": "success",
+          "metrics": {
+            "seconds": 515.0,
+            "total_grams": 1.93,
+            "outside": false,
+            "layers": 65,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 14.264762878417969,
+              "Bridge": 9.90699577331543,
+              "Brim": 27.746923446655273,
+              "Custom": 34.69895935058594,
+              "Gap infill": 0.08163472265005112,
+              "Inner wall": 102.16526794433594,
+              "Internal solid infill": 75.05416107177734,
+              "Outer wall": 120.8349838256836,
+              "Sparse infill": 63.62478256225586,
+              "Top surface": 13.658735275268555,
+              "Travel": 68.90819549560547,
+              "Undefined": 53.3538932800293
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "tweaker_0",
+          "status": "success",
+          "metrics": {
+            "seconds": 497.0,
+            "total_grams": 1.86,
+            "outside": false,
+            "layers": 60,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 8.506096839904785,
+              "Bridge": 13.08865737915039,
+              "Brim": 24.49234962463379,
+              "Custom": 34.66956329345703,
+              "Gap infill": 0.18214218318462372,
+              "Inner wall": 103.38885498046875,
+              "Internal solid infill": 54.198448181152344,
+              "Outer wall": 120.86248016357422,
+              "Overhang wall": 4.566492080688477,
+              "Sparse infill": 74.05353546142578,
+              "Top surface": 14.074174880981445,
+              "Travel": 61.060306549072266,
+              "Undefined": 45.536170959472656
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse; It seems object fitted_connector has floating cantilever. Please re-orient the object or enable support generation.",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse",
+              "It seems object fitted_connector has floating cantilever. Please re-orient the object or enable support generation."
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "tweaker_1",
+          "status": "success",
+          "metrics": {
+            "seconds": 498.0,
+            "total_grams": 1.86,
+            "outside": false,
+            "layers": 60,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 8.506096839904785,
+              "Bridge": 12.917923927307129,
+              "Brim": 24.496074676513672,
+              "Custom": 34.61785888671875,
+              "Gap infill": 0.014724564738571644,
+              "Inner wall": 103.11137390136719,
+              "Internal solid infill": 53.76054763793945,
+              "Outer wall": 120.46564483642578,
+              "Overhang wall": 4.566482067108154,
+              "Sparse infill": 75.39523315429688,
+              "Top surface": 11.20475959777832,
+              "Travel": 65.19441223144531,
+              "Undefined": 49.7211799621582
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse; It seems object fitted_connector has floating cantilever. Please re-orient the object or enable support generation.",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse",
+              "It seems object fitted_connector has floating cantilever. Please re-orient the object or enable support generation."
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "tweaker_2",
+          "status": "success",
+          "metrics": {
+            "seconds": 517.0,
+            "total_grams": 1.93,
+            "outside": false,
+            "layers": 65,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 14.264863014221191,
+              "Bridge": 9.827706336975098,
+              "Brim": 27.810049057006836,
+              "Custom": 34.6416015625,
+              "Gap infill": 0.08280143141746521,
+              "Inner wall": 102.12361907958984,
+              "Internal solid infill": 75.91893768310547,
+              "Outer wall": 120.78462219238281,
+              "Sparse infill": 63.78281021118164,
+              "Top surface": 13.800015449523926,
+              "Travel": 69.4798583984375,
+              "Undefined": 53.98368453979492
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "tweaker_3",
+          "status": "failed",
+          "metrics": null,
+          "constraint_violations": [],
+          "error": "exit (exit 156): [2026-10-11 14:04:30.255782] [0x00000001ee0ae180] [trace]   Initializing StaticPrintConfigs\nrun found error, exit\n"
+        },
+        {
+          "name": "trimesh_0",
+          "status": "success",
+          "metrics": {
+            "seconds": 517.0,
+            "total_grams": 1.93,
+            "outside": false,
+            "layers": 65,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 14.264863014221191,
+              "Bridge": 9.827706336975098,
+              "Brim": 27.810049057006836,
+              "Custom": 34.6416015625,
+              "Gap infill": 0.08280143141746521,
+              "Inner wall": 102.12361907958984,
+              "Internal solid infill": 75.91893768310547,
+              "Outer wall": 120.78462219238281,
+              "Sparse infill": 63.78281021118164,
+              "Top surface": 13.800015449523926,
+              "Travel": 69.4798583984375,
+              "Undefined": 53.98368453979492
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse"
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "trimesh_1",
+          "status": "success",
+          "metrics": {
+            "seconds": 497.0,
+            "total_grams": 1.86,
+            "outside": false,
+            "layers": 60,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 8.506096839904785,
+              "Bridge": 13.08865737915039,
+              "Brim": 24.49234962463379,
+              "Custom": 34.66956329345703,
+              "Gap infill": 0.18214218318462372,
+              "Inner wall": 103.38885498046875,
+              "Internal solid infill": 54.198448181152344,
+              "Outer wall": 120.86248016357422,
+              "Overhang wall": 4.566492080688477,
+              "Sparse infill": 74.05353546142578,
+              "Top surface": 14.074174880981445,
+              "Travel": 61.060306549072266,
+              "Undefined": 45.536170959472656
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse; It seems object fitted_connector has floating cantilever. Please re-orient the object or enable support generation.",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse",
+              "It seems object fitted_connector has floating cantilever. Please re-orient the object or enable support generation."
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "trimesh_2",
+          "status": "success",
+          "metrics": {
+            "seconds": 497.0,
+            "total_grams": 1.86,
+            "outside": false,
+            "layers": 60,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 8.506048202514648,
+              "Bridge": 13.013656616210938,
+              "Brim": 24.498695373535156,
+              "Custom": 34.68687438964844,
+              "Gap infill": 0.07352590560913086,
+              "Inner wall": 103.17410278320312,
+              "Internal solid infill": 56.9832649230957,
+              "Outer wall": 120.74091339111328,
+              "Overhang wall": 4.566482067108154,
+              "Sparse infill": 74.60975646972656,
+              "Top surface": 11.045539855957031,
+              "Travel": 61.3880500793457,
+              "Undefined": 45.84660339355469
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse; It seems object fitted_connector has floating cantilever. Please re-orient the object or enable support generation.",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse",
+              "It seems object fitted_connector has floating cantilever. Please re-orient the object or enable support generation."
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "trimesh_3",
+          "status": "success",
+          "metrics": {
+            "seconds": 549.0,
+            "total_grams": 1.89,
+            "outside": false,
+            "layers": 68,
+            "filament_changes": 0,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bridge": 26.626667022705078,
+              "Brim": 16.499406814575195,
+              "Custom": 34.55052185058594,
+              "Gap infill": 1.8181049823760986,
+              "Inner wall": 98.71744537353516,
+              "Internal solid infill": 75.48756408691406,
+              "Outer wall": 121.99942779541016,
+              "Overhang wall": 27.202869415283203,
+              "Sparse infill": 63.887996673583984,
+              "Top surface": 20.51076316833496,
+              "Travel": 78.08206176757812,
+              "Undefined": 62.64492416381836
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "not_support_traditional_timelapse; not_support_traditional_timelapse; It seems object fitted_connector has floating regions. Please re-orient the object or enable support generation.",
+            "warnings": [
+              "not_support_traditional_timelapse",
+              "not_support_traditional_timelapse",
+              "It seems object fitted_connector has floating regions. Please re-orient the object or enable support generation."
+            ],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        }
+      ]
+    },
+    "multicolor_assembly": {
+      "best": {
+        "baseline": {
+          "name": "baseline",
+          "seconds": 3341.0,
+          "grams": 16.17
+        },
+        "axis": {
+          "name": "axis_2",
+          "seconds": 3340.0,
+          "grams": 16.17
+        },
+        "tweaker": null,
+        "trimesh": {
+          "name": "trimesh_0",
+          "seconds": 3341.0,
+          "grams": 16.17
+        }
+      },
+      "provider_wall_seconds": 0.19970320793800056,
+      "slicing_wall_seconds": 4.150787374936044,
+      "source_sha256": "812ee8dd141a0a667e44ce67a70e8f78bae88014964393670668fd5866a1a578",
+      "source_unchanged": true,
+      "pareto": [
+        "axis_2",
+        "trimesh_1"
+      ],
+      "candidates": [
+        {
+          "name": "baseline",
+          "status": "success",
+          "metrics": {
+            "seconds": 3341.0,
+            "total_grams": 16.17,
+            "outside": false,
+            "layers": 40,
+            "filament_changes": 24,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 24.134552001953125,
+              "Bridge": 23.213884353637695,
+              "Brim": 24.47022247314453,
+              "Custom": 34.85100555419922,
+              "Flush": 2302.458984375,
+              "Inner wall": 32.903656005859375,
+              "Internal solid infill": 54.68489456176758,
+              "Outer wall": 41.84751510620117,
+              "Prime tower": 359.8183288574219,
+              "Sparse infill": 63.59281539916992,
+              "Top surface": 17.00735092163086,
+              "Travel": 377.6963806152344,
+              "Undefined": 362.1391906738281
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "",
+            "warnings": [],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "axis_0",
+          "status": "rejected",
+          "metrics": {
+            "seconds": 12120.0,
+            "total_grams": 53.44,
+            "outside": false,
+            "layers": 100,
+            "filament_changes": 99,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 13.100375175476074,
+              "Bridge": 6.688750743865967,
+              "Brim": 19.5925235748291,
+              "Custom": 34.71497344970703,
+              "Flush": 9256.4697265625,
+              "Inner wall": 79.99991607666016,
+              "Internal solid infill": 26.572221755981445,
+              "Outer wall": 103.5526123046875,
+              "Prime tower": 1098.329833984375,
+              "Sparse infill": 115.00477600097656,
+              "Top surface": 8.983951568603516,
+              "Travel": 1372.4844970703125,
+              "Undefined": 1356.968505859375
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "",
+            "warnings": [],
+            "plates": 1
+          },
+          "constraint_violations": [
+            "time exceeds allowed increase",
+            "material exceeds allowed increase"
+          ],
+          "error": null
+        },
+        {
+          "name": "axis_1",
+          "status": "rejected",
+          "metrics": {
+            "seconds": 9497.0,
+            "total_grams": 40.6,
+            "outside": false,
+            "layers": 150,
+            "filament_changes": 74,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 8.93480396270752,
+              "Bridge": 5.7582621574401855,
+              "Brim": 15.572952270507812,
+              "Custom": 34.74347686767578,
+              "Flush": 6919.96630859375,
+              "Inner wall": 185.98110961914062,
+              "Internal solid infill": 23.915714263916016,
+              "Outer wall": 216.8550262451172,
+              "Prime tower": 838.037353515625,
+              "Sparse infill": 203.9127960205078,
+              "Top surface": 6.0386271476745605,
+              "Travel": 1052.89013671875,
+              "Undefined": 1037.3350830078125
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "",
+            "warnings": [],
+            "plates": 1
+          },
+          "constraint_violations": [
+            "time exceeds allowed increase",
+            "material exceeds allowed increase"
+          ],
+          "error": null
+        },
+        {
+          "name": "axis_2",
+          "status": "success",
+          "metrics": {
+            "seconds": 3340.0,
+            "total_grams": 16.17,
+            "outside": false,
+            "layers": 40,
+            "filament_changes": 24,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 24.158689498901367,
+              "Bridge": 23.213850021362305,
+              "Brim": 24.419275283813477,
+              "Custom": 34.79456329345703,
+              "Flush": 2302.458984375,
+              "Inner wall": 32.890625,
+              "Internal solid infill": 54.684688568115234,
+              "Outer wall": 41.8350944519043,
+              "Prime tower": 359.8183288574219,
+              "Sparse infill": 63.56916046142578,
+              "Top surface": 17.00733757019043,
+              "Travel": 377.270263671875,
+              "Undefined": 361.7695007324219
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "",
+            "warnings": [],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "tweaker_0",
+          "status": "rejected",
+          "metrics": {
+            "seconds": 12120.0,
+            "total_grams": 53.44,
+            "outside": false,
+            "layers": 100,
+            "filament_changes": 99,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 13.100375175476074,
+              "Bridge": 6.688750743865967,
+              "Brim": 19.5925235748291,
+              "Custom": 34.71497344970703,
+              "Flush": 9256.4697265625,
+              "Inner wall": 79.99991607666016,
+              "Internal solid infill": 26.572221755981445,
+              "Outer wall": 103.5526123046875,
+              "Prime tower": 1098.329833984375,
+              "Sparse infill": 115.00477600097656,
+              "Top surface": 8.983951568603516,
+              "Travel": 1372.4844970703125,
+              "Undefined": 1356.968505859375
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "",
+            "warnings": [],
+            "plates": 1
+          },
+          "constraint_violations": [
+            "time exceeds allowed increase",
+            "material exceeds allowed increase"
+          ],
+          "error": null
+        },
+        {
+          "name": "tweaker_1",
+          "status": "rejected",
+          "metrics": {
+            "seconds": 12119.0,
+            "total_grams": 53.44,
+            "outside": false,
+            "layers": 100,
+            "filament_changes": 99,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 13.140076637268066,
+              "Bridge": 6.696512222290039,
+              "Brim": 19.592571258544922,
+              "Custom": 34.709228515625,
+              "Flush": 9256.4697265625,
+              "Inner wall": 78.98053741455078,
+              "Internal solid infill": 26.564184188842773,
+              "Outer wall": 103.73316192626953,
+              "Prime tower": 1098.329833984375,
+              "Sparse infill": 114.82406616210938,
+              "Top surface": 9.028696060180664,
+              "Travel": 1372.8089599609375,
+              "Undefined": 1357.2987060546875
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "",
+            "warnings": [],
+            "plates": 1
+          },
+          "constraint_violations": [
+            "time exceeds allowed increase",
+            "material exceeds allowed increase"
+          ],
+          "error": null
+        },
+        {
+          "name": "tweaker_2",
+          "status": "rejected",
+          "metrics": {
+            "seconds": 9578.0,
+            "total_grams": 42.91,
+            "outside": false,
+            "layers": 150,
+            "filament_changes": 74,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 8.273585319519043,
+              "Bridge": 3.2395191192626953,
+              "Brim": 15.509875297546387,
+              "Custom": 34.84888458251953,
+              "Flush": 6947.712890625,
+              "Inner wall": 114.35932922363281,
+              "Internal solid infill": 13.680254936218262,
+              "Outer wall": 141.28807067871094,
+              "Prime tower": 1049.802001953125,
+              "Sparse infill": 132.89199829101562,
+              "Top surface": 6.509979248046875,
+              "Travel": 1126.0478515625,
+              "Undefined": 1110.4927978515625
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "",
+            "warnings": [],
+            "plates": 1
+          },
+          "constraint_violations": [
+            "time exceeds allowed increase",
+            "material exceeds allowed increase"
+          ],
+          "error": null
+        },
+        {
+          "name": "tweaker_3",
+          "status": "rejected",
+          "metrics": {
+            "seconds": 9497.0,
+            "total_grams": 40.6,
+            "outside": false,
+            "layers": 150,
+            "filament_changes": 74,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 8.929683685302734,
+              "Bridge": 5.7582621574401855,
+              "Brim": 15.572952270507812,
+              "Custom": 34.74347686767578,
+              "Flush": 6919.96630859375,
+              "Inner wall": 185.98110961914062,
+              "Internal solid infill": 23.915660858154297,
+              "Outer wall": 216.8550262451172,
+              "Prime tower": 838.037353515625,
+              "Sparse infill": 203.91278076171875,
+              "Top surface": 6.0386271476745605,
+              "Travel": 1052.8978271484375,
+              "Undefined": 1037.3427734375
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "",
+            "warnings": [],
+            "plates": 1
+          },
+          "constraint_violations": [
+            "time exceeds allowed increase",
+            "material exceeds allowed increase"
+          ],
+          "error": null
+        },
+        {
+          "name": "trimesh_0",
+          "status": "success",
+          "metrics": {
+            "seconds": 3341.0,
+            "total_grams": 16.17,
+            "outside": false,
+            "layers": 40,
+            "filament_changes": 24,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 24.134552001953125,
+              "Bridge": 23.213884353637695,
+              "Brim": 24.47022247314453,
+              "Custom": 34.85100555419922,
+              "Flush": 2302.458984375,
+              "Inner wall": 32.903656005859375,
+              "Internal solid infill": 54.68489456176758,
+              "Outer wall": 41.84751510620117,
+              "Prime tower": 359.8183288574219,
+              "Sparse infill": 63.59281539916992,
+              "Top surface": 17.00735092163086,
+              "Travel": 377.6963806152344,
+              "Undefined": 362.1391906738281
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "",
+            "warnings": [],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "trimesh_1",
+          "status": "success",
+          "metrics": {
+            "seconds": 3410.0,
+            "total_grams": 16.08,
+            "outside": false,
+            "layers": 40,
+            "filament_changes": 25,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 27.075637817382812,
+              "Bridge": 23.97313117980957,
+              "Brim": 24.38817596435547,
+              "Custom": 34.741783142089844,
+              "Flush": 2381.49169921875,
+              "Inner wall": 39.97102737426758,
+              "Internal solid infill": 53.74772644042969,
+              "Outer wall": 48.62199401855469,
+              "Prime tower": 321.94012451171875,
+              "Sparse infill": 76.30459594726562,
+              "Top surface": 17.864755630493164,
+              "Travel": 375.99169921875,
+              "Undefined": 360.4488220214844
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "",
+            "warnings": [],
+            "plates": 1
+          },
+          "constraint_violations": [],
+          "error": null
+        },
+        {
+          "name": "trimesh_2",
+          "status": "rejected",
+          "metrics": {
+            "seconds": 12119.0,
+            "total_grams": 53.44,
+            "outside": false,
+            "layers": 100,
+            "filament_changes": 99,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 13.119808197021484,
+              "Bridge": 6.696518898010254,
+              "Brim": 19.592571258544922,
+              "Custom": 34.709228515625,
+              "Flush": 9256.4697265625,
+              "Inner wall": 78.98052978515625,
+              "Internal solid infill": 26.564237594604492,
+              "Outer wall": 103.73316192626953,
+              "Prime tower": 1098.329833984375,
+              "Sparse infill": 114.82406616210938,
+              "Top surface": 9.02868366241455,
+              "Travel": 1372.8197021484375,
+              "Undefined": 1357.3094482421875
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "",
+            "warnings": [],
+            "plates": 1
+          },
+          "constraint_violations": [
+            "time exceeds allowed increase",
+            "material exceeds allowed increase"
+          ],
+          "error": null
+        },
+        {
+          "name": "trimesh_3",
+          "status": "rejected",
+          "metrics": {
+            "seconds": 12120.0,
+            "total_grams": 53.44,
+            "outside": false,
+            "layers": 100,
+            "filament_changes": 99,
+            "model_grams": null,
+            "support_grams": null,
+            "purge_grams": null,
+            "tower_grams": null,
+            "feature_seconds": {
+              "Bottom surface": 13.102124214172363,
+              "Bridge": 6.654825210571289,
+              "Brim": 19.592573165893555,
+              "Custom": 34.709228515625,
+              "Flush": 9256.4697265625,
+              "Inner wall": 78.98257446289062,
+              "Internal solid infill": 26.272369384765625,
+              "Outer wall": 103.78164672851562,
+              "Prime tower": 1098.329833984375,
+              "Sparse infill": 114.92253875732422,
+              "Top surface": 8.985116004943848,
+              "Travel": 1374.231201171875,
+              "Undefined": 1358.720947265625
+            },
+            "slicer_version": "02.08.02.61",
+            "warning_message": "",
+            "warnings": [],
+            "plates": 1
+          },
+          "constraint_violations": [
+            "time exceeds allowed increase",
+            "material exceeds allowed increase"
+          ],
+          "error": null
+        }
+      ]
+    }
+  },
+  "search": {
+    "thin_shell": {
+      "greedy": {
+        "seconds": 902.0,
+        "grams": 14.28,
+        "slices": 8,
+        "wall_seconds": 1.79457762488164,
+        "overrides": {
+          "layer_height": "0.28"
+        }
+      },
+      "optuna": [
+        {
+          "seed": 1,
+          "unique_evaluations": 8,
+          "asks": 9,
+          "planner_seconds": 0.011289707850664854,
+          "best": {
+            "seconds": 902.0,
+            "grams": 14.28
+          },
+          "score": 1.177499114945313,
+          "greedy_score": 1.177499114945313,
+          "score_gain_pct": 0.0
+        },
+        {
+          "seed": 7,
+          "unique_evaluations": 8,
+          "asks": 9,
+          "planner_seconds": 0.0029041250236332417,
+          "best": {
+            "seconds": 902.0,
+            "grams": 14.28
+          },
+          "score": 1.177499114945313,
+          "greedy_score": 1.177499114945313,
+          "score_gain_pct": 0.0
+        },
+        {
+          "seed": 42,
+          "unique_evaluations": 8,
+          "asks": 8,
+          "planner_seconds": 0.002363665960729122,
+          "best": {
+            "seconds": 902.0,
+            "grams": 14.28
+          },
+          "score": 1.177499114945313,
+          "greedy_score": 1.177499114945313,
+          "score_gain_pct": 0.0
+        }
+      ],
+      "exhaustive_best": {
+        "choice": [
+          10,
+          "grid",
+          0.28
+        ],
+        "score": 1.177499114945313,
+        "seconds": 902.0,
+        "grams": 14.28
+      }
+    },
+    "overhang_bracket": {
+      "greedy": {
+        "seconds": 1249.0,
+        "grams": 6.8,
+        "slices": 8,
+        "wall_seconds": 2.5531970001757145,
+        "overrides": {
+          "sparse_infill_density": "10%",
+          "layer_height": "0.28"
+        }
+      },
+      "optuna": [
+        {
+          "seed": 1,
+          "unique_evaluations": 8,
+          "asks": 11,
+          "planner_seconds": 0.004357459023594856,
+          "best": {
+            "seconds": 1250.0,
+            "grams": 6.86
+          },
+          "score": 1.1509840233236153,
+          "greedy_score": 1.1549088682710873,
+          "score_gain_pct": -0.33984022941546677
+        },
+        {
+          "seed": 7,
+          "unique_evaluations": 8,
+          "asks": 11,
+          "planner_seconds": 0.003700749948620796,
+          "best": {
+            "seconds": 1246.0,
+            "grams": 6.69
+          },
+          "score": 1.16298972856639,
+          "greedy_score": 1.1549088682710873,
+          "score_gain_pct": 0.6996967914359997
+        },
+        {
+          "seed": 42,
+          "unique_evaluations": 8,
+          "asks": 8,
+          "planner_seconds": 0.002333916025236249,
+          "best": {
+            "seconds": 1247.0,
+            "grams": 6.76
+          },
+          "score": 1.1583900770132343,
+          "greedy_score": 1.1549088682710873,
+          "score_gain_pct": 0.30142713748126937
+        }
+      ],
+      "exhaustive_best": {
+        "choice": [
+          10,
+          "adaptivecubic",
+          0.28
+        ],
+        "score": 1.16298972856639,
+        "seconds": 1246.0,
+        "grams": 6.69
+      }
+    },
+    "multicolor_assembly": {
+      "greedy": {
+        "seconds": 2393.0,
+        "grams": 12.35,
+        "slices": 9,
+        "wall_seconds": 1.0628032078966498,
+        "overrides": {
+          "sparse_infill_density": "10%",
+          "sparse_infill_pattern": "adaptivecubic",
+          "layer_height": "0.28"
+        }
+      },
+      "optuna": [
+        {
+          "seed": 1,
+          "unique_evaluations": 9,
+          "asks": 14,
+          "planner_seconds": 0.004973415983840823,
+          "best": {
+            "seconds": 2393.0,
+            "grams": 12.35
+          },
+          "score": 1.3614179683997354,
+          "greedy_score": 1.3614179683997354,
+          "score_gain_pct": 0.0
+        },
+        {
+          "seed": 7,
+          "unique_evaluations": 9,
+          "asks": 11,
+          "planner_seconds": 0.0038610841147601604,
+          "best": {
+            "seconds": 2393.0,
+            "grams": 12.35
+          },
+          "score": 1.3614179683997354,
+          "greedy_score": 1.3614179683997354,
+          "score_gain_pct": 0.0
+        },
+        {
+          "seed": 42,
+          "unique_evaluations": 9,
+          "asks": 9,
+          "planner_seconds": 0.0026232500094920397,
+          "best": {
+            "seconds": 2393.0,
+            "grams": 12.35
+          },
+          "score": 1.3614179683997354,
+          "greedy_score": 1.3614179683997354,
+          "score_gain_pct": 0.0
+        }
+      ],
+      "exhaustive_best": {
+        "choice": [
+          10,
+          "adaptivecubic",
+          0.28
+        ],
+        "score": 1.3614179683997354,
+        "seconds": 2393.0,
+        "grams": 12.35
+      }
+    }
+  }
+}

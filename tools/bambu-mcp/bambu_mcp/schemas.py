@@ -127,6 +127,7 @@ class OptimizeResult(BaseModel):
     applied: bool = Field(description="best variant became the session's working variant")
     slices_used: int
     history: list[HistoryEntry]
+    report: dict[str, Any] = Field(default_factory=dict, description="fastest, least-material, conservative alternatives and resolved print specification")
 
 
 class ExportResult(BaseModel):

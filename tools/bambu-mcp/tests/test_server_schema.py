@@ -6,7 +6,7 @@ from fastmcp import Client
 
 from bambu_mcp.server import mcp
 
-READ_ONLY = {"studio_info", "presets_list", "parameters_catalog", "project_inspect", "compare"}
+READ_ONLY = {"studio_info", "presets_list", "parameters_catalog", "project_inspect", "project_validate", "compare"}
 
 
 @pytest.fixture(scope="module")

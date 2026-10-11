@@ -26,6 +26,7 @@ if a tool loses any of these.
 |---|---|
 | `studio_info`, `presets_list`, `parameters_catalog` | environment, preset names, tunable knobs |
 | `project_open`, `project_inspect` | open .3mf (embedded settings) or mesh + presets; list objects |
+| `project_validate` | optional read-only lib3mf check of source mesh validity/manifoldness; separate strict compliance and vendor warnings |
 | `settings_set` / `settings_reset` | global or per-object overrides (validated; G-code keys refused) |
 | `object_transform`, `orient`, `arrange` | per-object rotation + drop to bed, auto-orient, auto-arrange |
 | `slice`, `evaluate_batch`, `compare` | time / grams / per-role time; parallel; cached by variant hash |
@@ -33,6 +34,20 @@ if a tool loses any of these.
 | `export`, `open_in_studio` | write sliced 3MF; open in the GUI |
 
 The source file is never modified; each session works on a copy.
+
+For independent geometry inspection, install `uv pip install -e '.[validation]'`
+in the server environment and call `project_validate(session_id)`. It inspects the
+session source, excluding pending variant changes, in a bounded subprocess.
+`geometry_valid` covers lib3mf validity/manifold checks; it does not certify
+self-intersection freedom or printability. Valid Bambu projects commonly return
+`needs_attention` because vendor metadata fails strict compliance. This advisory
+result never rejects a slice or changes optimizer ranking.
+
+Slice metrics and comparison reports include per-plate `toolpath_profiles` from
+Bambu comments: declared extrusion heights and feature-block counts, with a
+`complete` flag and a 64 MiB scan limit. Heights can include combined infill or
+support thickness and are not the nominal layer ladder. Counts are neither mass
+nor simulated motion. See [measured tool evaluations](../../docs/bambu-mcp/tool-evaluation.md).
 
 ## Test
 
@@ -75,3 +90,17 @@ Reinstall from this directory into a fresh virtual environment; do not move an o
 (editable installs and launchers embed absolute paths). Update any MCP registration
 pointing at `BambuStudio/tools/bambu-mcp` to this checkout. The command remains
 `bambu-mcp`; `BAMBU_MCP_HOME` and existing run caches remain compatible.
+
+## Unified print pipeline
+
+See [the shared specification and workflow](../../docs/bambu-mcp/unified-pipeline.md).
+`compare_project` compares native whole-assembly projects with presets, cached
+parallel slices, strict plate/G-code checks, and fastest/least-material/conservative
+alternatives. Session `optimize(print_spec=...)` uses the same specification and
+returns additional alternatives in `report`. The FreeCAD bridge selects this
+backend with `compare_print_candidates(backend="bambu", print_spec=...)`.
+
+Shared `print_pipeline_core` modules are MIT-licensed (their LICENSE is bundled),
+while `bambu_mcp` and the imported calibration fixture retain the subtree's AGPL
+license. Unit CI exercises legacy and cross-process comparison contracts. The
+slow suite also runs the five-case native-project benchmark corpus.

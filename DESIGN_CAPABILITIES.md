@@ -170,6 +170,11 @@ guarantee sufficient wall thickness or a physical press fit.
 
 ### Optional orientation candidates
 
+`backend="tweaker3-python"` optionally returns multiple ranked poses from one
+upstream API invocation. Use `[python, /checkout/Tweaker.py]` as the executable;
+the existing `tweaker3` CLI adapter is preserved. See
+[`tool-evaluation.md`](docs/bambu-mcp/tool-evaluation.md) for measured adoption decisions.
+
 `suggest_print_orientations(stl_path, backend, executable=None,
 build_volume=None, timeout=120, seed=42, samples=5000, max_candidates=4)` runs
 on the bridge host, outside FreeCAD's GUI thread. Supply an STL envelope of the
@@ -249,3 +254,15 @@ tests compare analytical profile volumes, interpolated points, guide boundaries,
 curvature and tangents; exercise rollback and reopen/rebuild; and verify section
 coordinates, calibration, seam alignment, colors and native 3MF reimport.
 The serializer tests independently inspect ZIP/XML and cover atomic failure.
+
+### Unified comparison backend and print specification
+
+`compare_print_candidates` now also accepts `backend="bambu"`, `print_spec`,
+`workers`, and `backend_python`. The compatibility default remains `legacy`.
+The owned backend adds fully resolved presets, immutable preset snapshots, cached
+parallel slicing, and the same whole-assembly and strict artifact validation.
+Both backends return fastest, least-material and conservative alternatives with
+setting differences and trade-offs. `inspect_printability(print_spec=...)` uses
+`min_wall_mm` as its sampled threshold. See the [versioned contract and
+benchmarks](docs/bambu-mcp/unified-pipeline.md) for enforced constraints and the
+geometry/preview requirements that remain explicitly unverified.

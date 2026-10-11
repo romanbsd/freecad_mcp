@@ -4,21 +4,26 @@ version = "0.1.0"
 description = "MCP server that drives the Bambu Studio CLI to optimize print time and material use"
 requires-python = ">=3.10"
 readme = "README.md"
-license = {text = "AGPL-3.0-only"}
+license = "AGPL-3.0-only"
+license-files = ["LICENSE", "print_pipeline_core/LICENSE"]
 dependencies = ["fastmcp>=4.1", "mcp", "pydantic>=2"]
 
 [project.optional-dependencies]
 test = ["pytest"]
+validation = ["lib3mf==2.5.0"]
 
 [project.scripts]
 bambu-mcp = "bambu_mcp.server:main"
 
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["bambu_mcp"]
+packages = ["bambu_mcp", "print_pipeline_core"]
+
+[tool.setuptools.package-data]
+print_pipeline_core = ["LICENSE"]
 
 [tool.pytest.ini_options]
 markers = ["slow: needs a Bambu Studio binary"]

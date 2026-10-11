@@ -6,11 +6,7 @@ import json
 import math
 import os
 from pathlib import Path
-import re
-import selectors
-import signal
-import subprocess
-import time
+import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -20,179 +16,23 @@ MAX_ASSEMBLY_VERTEX_VISITS = 6000000
 
 CORE = 'http://schemas.microsoft.com/3dmanufacturing/core/2015/02'
 PROD = 'http://schemas.microsoft.com/3dmanufacturing/production/2015/06'
-ALLOWED_SETTINGS = {
-    'layer_height': (0.05, 0.6), 'wall_loops': (1, 20),
-    'sparse_infill_density': (0, 100), 'enable_support': None,
-    'support_type': ('normal(auto)', 'tree(auto)', 'normal(manual)', 'tree(manual)'),
-    'support_threshold_angle': (0, 90), 'support_base_pattern_spacing': (0.1, 20),
-    'top_shell_layers': (0, 30), 'top_shell_thickness': (0, 10),
-    'top_color_penetration_layers': (0, 30), 'support_on_build_plate_only': None,
-}
-_INTEGER = {'wall_loops', 'top_shell_layers', 'top_color_penetration_layers'}
+from print_pipeline_core.candidates import ALLOWED_SETTINGS, _validate, _numeric
+from print_pipeline_core import assembly as _assembly
+from print_pipeline_core.artifacts import read_artifacts
+from print_pipeline_core.process import run_bounded
 
-
-def _numeric(value):
-    return isinstance(value, (float, int)) and not isinstance(value, bool) and math.isfinite(value)
-
-
-def _validate(candidates):
-    if not isinstance(candidates, list) or not 1 <= len(candidates) <= 12:
-        raise ValueError('candidates must contain 1..12 entries')
-    names = {'baseline'}
-    result = []
-    for candidate in candidates:
-        if not isinstance(candidate, dict) or set(candidate) - {'name', 'settings', 'rotation', 'rotation_matrix'}:
-            raise ValueError('Unsupported candidate fields')
-        name = candidate.get('name')
-        if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', name) or name in names:
-            raise ValueError('Candidate names must be unique safe names, excluding baseline')
-        names.add(name)
-        settings = candidate.get('settings', {})
-        if not isinstance(settings, dict):
-            raise ValueError('settings must be a dictionary')
-        for key, value in settings.items():
-            if key not in ALLOWED_SETTINGS:
-                raise ValueError('Unsupported print setting: ' + key)
-            constraint = ALLOWED_SETTINGS[key]
-            if constraint is None:
-                valid = isinstance(value, bool) or isinstance(value, int) and value in (0, 1) or value in ('0', '1')
-            elif key == 'support_type':
-                valid = value in constraint
-            else:
-                valid = _numeric(value) and constraint[0] <= value <= constraint[1]
-                if key in _INTEGER:
-                    valid = valid and int(value) == value
-            if not valid:
-                raise ValueError('Invalid value for ' + key)
-        if 'rotation' in candidate and 'rotation_matrix' in candidate:
-            raise ValueError('Specify only one rotation representation')
-        matrix = None
-        if 'rotation' in candidate:
-            angles = candidate['rotation']
-            if not isinstance(angles, (list, tuple)) or len(angles) != 3 or not all(_numeric(v) for v in angles):
-                raise ValueError('rotation requires three finite angles in degrees')
-            x, y, z = (math.radians(v) for v in angles)
-            sx, cx, sy, cy, sz, cz = math.sin(x), math.cos(x), math.sin(y), math.cos(y), math.sin(z), math.cos(z)
-            matrix = [[cz*cy, cz*sy*sx-sz*cx, cz*sy*cx+sz*sx], [sz*cy, sz*sy*sx+cz*cx, sz*sy*cx-cz*sx], [-sy, cy*sx, cy*cx]]
-        elif 'rotation_matrix' in candidate:
-            matrix = candidate['rotation_matrix']
-            if not isinstance(matrix, (list, tuple)) or len(matrix) != 3 or any(not isinstance(row, (list, tuple)) or len(row) != 3 or not all(_numeric(v) for v in row) for row in matrix):
-                raise ValueError('rotation_matrix requires a finite 3x3 matrix')
-        if matrix is not None:
-            for i in range(3):
-                for j in range(3):
-                    if abs(sum(matrix[i][k]*matrix[j][k] for k in range(3)) - (i == j)) > 1e-6:
-                        raise ValueError('rotation_matrix must be orthonormal')
-            det = sum(matrix[0][i]*(matrix[1][(i+1)%3]*matrix[2][(i+2)%3]-matrix[1][(i+2)%3]*matrix[2][(i+1)%3]) for i in range(3))
-            if abs(det - 1) > 1e-6:
-                raise ValueError('rotation_matrix must not mirror or scale')
-        result.append({'name': name, 'settings': dict(settings), 'rotation_matrix': matrix})
-    return result
-
-
-def _identity():
-    return [[1.,0.,0.,0.], [0.,1.,0.,0.], [0.,0.,1.,0.], [0.,0.,0.,1.]]
-
-
-def _transform(text):
-    if text is None:
-        return _identity()
-    values = [float(v) for v in text.split()]
-    if len(values) != 12 or not all(math.isfinite(v) for v in values):
-        raise ValueError('Invalid model placement')
-    return [[values[c*3+r] for c in range(4)] for r in range(3)] + [[0.,0.,0.,1.]]
-
-
-def _multiply(a, b):
-    return [[sum(a[r][k]*b[k][c] for k in range(4)) for c in range(4)] for r in range(4)]
-
-
-def _point(matrix, xyz):
-    return [sum(matrix[r][c]*xyz[c] for c in range(3))+matrix[r][3] for r in range(3)]
+_identity = _assembly._identity
+_transform = _assembly._transform
+_multiply = _assembly._multiply
+_point = _assembly._point
 
 
 def _rotate_project(entries, matrix):
-    # Keep component and mesh bytes intact; transform the one build item as an assembly.
-    trees = {}
-    def tree(path):
-        if path not in trees:
-            trees[path] = ET.fromstring(entries[path])
-        return trees[path]
-    root = tree('3D/3dmodel.model')
-    if root.get('unit', 'millimeter') != 'millimeter':
-        raise ValueError('Orientation requires millimeter units')
-    items = root.findall('{%s}build/{%s}item' % (CORE, CORE))
-    if len(items) != 1:
-        raise ValueError('Orientation requires one whole assembly build item')
-    bounds = [[math.inf]*3, [-math.inf]*3]
-    object_visits = vertex_visits = 0
-    def visit(path, oid, placement, ancestors):
-        nonlocal object_visits, vertex_visits
-        object_visits += 1
-        if object_visits > MAX_ASSEMBLY_OBJECT_VISITS:
-            raise ValueError(f'Assembly exceeds {MAX_ASSEMBLY_OBJECT_VISITS} object visits')
-        key = (path, oid)
-        if key in ancestors or len(ancestors) > 64:
-            raise ValueError('Cyclic or excessively nested model components')
-        obj = tree(path).find("{%s}resources/{%s}object[@id='%s']" % (CORE, CORE, oid))
-        if obj is None:
-            raise ValueError('Missing component object')
-        for vertex in obj.iterfind('{%s}mesh/{%s}vertices/{%s}vertex' % (CORE, CORE, CORE)):
-            vertex_visits += 1
-            if vertex_visits > MAX_ASSEMBLY_VERTEX_VISITS:
-                raise ValueError(f'Assembly exceeds {MAX_ASSEMBLY_VERTEX_VISITS} vertex visits')
-            p = _point(placement, [float(vertex.get(k)) for k in ('x','y','z')])
-            if not all(math.isfinite(v) for v in p):
-                raise ValueError('Nonfinite mesh vertex')
-            for i in range(3):
-                bounds[0][i] = min(bounds[0][i], p[i]); bounds[1][i] = max(bounds[1][i], p[i])
-        for comp in obj.iterfind('{%s}components/{%s}component' % (CORE, CORE)):
-            child = comp.get('{%s}path' % PROD, path).lstrip('/')
-            visit(child, comp.get('objectid'), _multiply(placement, _transform(comp.get('transform'))), ancestors | {key})
-    item = items[0]
-    original = _transform(item.get('transform'))
-    visit('3D/3dmodel.model', item.get('objectid'), original, set())
-    if not all(math.isfinite(v) for row in bounds for v in row):
-        raise ValueError('Assembly has no vertices')
-    center = [(a+b)/2 for a,b in zip(*bounds)]
-    rotation = [list(row)+[0.] for row in matrix]+[[0.,0.,0.,1.]]
-    for i in range(3):
-        rotation[i][3] = center[i]-sum(matrix[i][j]*center[j] for j in range(3))
-    # Measure exact rotated vertices, rather than bounding-box corners.
-    transformed = _multiply(rotation, original)
-    bounds = [[math.inf]*3, [-math.inf]*3]
-    visit('3D/3dmodel.model', item.get('objectid'), transformed, set())
-    transformed[2][3] -= bounds[0][2]
-    item.set('transform', ' '.join(format(transformed[r][c], '.17g') for c in range(4) for r in range(3)))
-    # Preserve original namespace prefixes (requiredextensions refers to p).
-    ET.register_namespace('', CORE); ET.register_namespace('p', PROD)
-    ET.register_namespace('BambuStudio', 'http://schemas.bambulab.com/package/2021')
-    entries['3D/3dmodel.model'] = ET.tostring(root, encoding='utf-8', xml_declaration=True)
+    return _assembly._rotate_project(entries, matrix, MAX_ASSEMBLY_OBJECT_VISITS, MAX_ASSEMBLY_VERTEX_VISITS)
 
 
 def _read_project(path):
-    """Read only native millimeter projects containing one assembly build item."""
-    try:
-        with zipfile.ZipFile(path) as archive:
-            infos = archive.infolist()
-            if len({i.filename for i in infos}) != len(infos) or sum(i.file_size for i in infos) > MAX_ARCHIVE_BYTES:
-                raise ValueError('Duplicate or oversized 3MF entries')
-            entries = {i.filename: archive.read(i) for i in infos}
-        for key in ('Metadata/project_settings.config', 'Metadata/model_settings.config', '3D/3dmodel.model'):
-            if key not in entries:
-                raise ValueError('Input must be a native Bambu project with filament/part settings')
-        settings = json.loads(entries['Metadata/project_settings.config'])
-        if not isinstance(settings, dict):
-            raise ValueError('Invalid project settings')
-        ET.fromstring(entries['Metadata/model_settings.config'])
-        # Validate every referenced object and placement even for an unchanged baseline.
-        try:
-            _rotate_project(dict(entries), [[1,0,0],[0,1,0],[0,0,1]])
-        except (KeyError, TypeError, ET.ParseError, OverflowError) as exc:
-            raise ValueError('Invalid native assembly: ' + str(exc)) from exc
-        return entries, settings
-    except (zipfile.BadZipFile, ET.ParseError) as exc:
-        raise ValueError("Invalid native Bambu project: " + str(exc)) from exc
+    return _assembly._read_project(path, MAX_ARCHIVE_BYTES, MAX_ASSEMBLY_OBJECT_VISITS, MAX_ASSEMBLY_VERTEX_VISITS)
 
 
 def _positive(value, field, strictly_positive=False):
@@ -205,112 +45,31 @@ def _positive(value, field, strictly_positive=False):
 
 
 def _parse_result(path, directory):
-    with zipfile.ZipFile(path) as archive:
-        infos = archive.infolist()
-        if len({i.filename for i in infos}) != len(infos) or sum(i.file_size for i in infos) > MAX_ARCHIVE_BYTES:
-            raise ValueError('Duplicate or oversized sliced 3MF entries')
-        if archive.getinfo('Metadata/slice_info.config').file_size > 1024*1024:
-            raise ValueError('Oversized slicing metadata')
-        root = ET.fromstring(archive.read('Metadata/slice_info.config'))
-        version = next((v.get('value') for v in root.findall('header/header_item') if v.get('key') == 'X-BBL-Client-Version'), None)
-        plates = root.findall('plate')
-        if len(plates) != 1:
-            raise ValueError('Expected exactly one sliced plate')
-        metadata = {m.get('key'):m.get('value') for m in plates[0].findall('metadata')}
-        outside = metadata.get('outside')
-        if outside not in ('true','false'):
-            raise ValueError('Missing or invalid plate-boundary status')
-        result = {'seconds': _positive(float(metadata['prediction']), 'prediction', True), 'total_grams': _positive(float(metadata['weight']), 'weight', True), 'outside': outside == 'true',
-                  'filament_changes': None, 'layers': None, 'model_grams': None, 'support_grams': None, 'purge_grams': None, 'tower_grams': None, 'feature_seconds': None, 'slicer_version': version}
-        gcode = next((n for n in archive.namelist() if re.fullmatch(r'Metadata/plate_\d+\.gcode', n)), None)
-        if not gcode or archive.getinfo(gcode).file_size == 0:
-            raise ValueError('Missing or empty sliced G-code artifact')
-        with archive.open(gcode) as stream:
-            header = stream.read(65536).decode('utf-8', errors='replace')
-        for field, pattern in [('layers', r';\s*total layer number\s*:\s*(\d+)'), ('filament_changes', r';\s*total filament change(?: times)?\s*[:=]\s*(\d+)')]:
-            match = re.search(pattern, header, re.I)
-            if match:
-                result[field] = int(match.group(1))
-    raw_path = directory / 'result.json'
-    if raw_path.exists():
-        if raw_path.stat().st_size > 16*1024*1024:
-            raise ValueError('Oversized slicer result document')
-        raw = json.loads(raw_path.read_text())
-        if not isinstance(raw, dict):
-            raise ValueError('Invalid slicer result document')
-        if isinstance(raw.get('return_code'), bool) or raw.get('return_code') != 0:
-            raise ValueError('Slicer result reports failure')
-        sliced = raw.get('sliced_plates')
-        if not isinstance(sliced, list) or len(sliced) != 1:
-            raise ValueError('Invalid sliced_plates')
-        plate = sliced[0]
-        if not isinstance(plate, dict):
-            raise ValueError('Invalid sliced plate')
-        if 'filament_change_times' in plate:
-            value = _positive(plate['filament_change_times'], 'filament changes')
-            if int(value) != value:
-                raise ValueError('Invalid filament changes')
-            result['filament_changes'] = int(value)
-        features = plate.get('feature_type_times')
-        if features is not None:
-            if not isinstance(features, dict):
-                raise ValueError('Invalid feature time breakdown')
-            result['feature_seconds'] = {k:_positive(v, 'feature time') for k,v in features.items()}
-        result['warning_message'] = plate.get('warning_message', '')
-    # main_used_g includes support; do not falsely label it model-only mass.
-    return result
+    return read_artifacts(path, directory, MAX_ARCHIVE_BYTES)
 
 
 MAX_LOG_BYTES = 4*1024*1024
 
 
 def _run_slicer(argv, directory, timeout):
-    """POSIX-only bounded pipe capture, including a deadline after parent exit."""
-    started = time.monotonic()
-    process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
-    head, tail, total, error = b'', b'', 0, None
-    selector = selectors.DefaultSelector()
-    selector.register(process.stdout, selectors.EVENT_READ)
-    try:
-        with (directory/'slicer.log').open('wb') as log:
-            while selector.get_map() or process.poll() is None:
-                remaining = timeout-(time.monotonic()-started)
-                if remaining <= 0:
-                    error = 'timeout'; break
-                events = selector.select(min(remaining, 0.1))
-                for key, _ in events:
-                    chunk = os.read(key.fileobj.fileno(), 65536)
-                    if not chunk:
-                        selector.unregister(key.fileobj); continue
-                    head = (head+chunk)[:16384]
-                    tail = (tail+chunk)[-16384:]
-                    allowed = max(0, MAX_LOG_BYTES-total)
-                    log.write(chunk[:allowed])
-                    total += len(chunk)
-                    if total > MAX_LOG_BYTES:
-                        error = 'log_limit'; break
-                if error:
-                    break
-    finally:
-        if error or process.poll() is None:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        process.wait()
-        selector.close()
-        process.stdout.close()
-    captured = head if total <= 16384 else head+b'\n[log truncated; tail follows]\n'+tail
-    return process.returncode, error, captured.decode('utf-8', errors='replace'), time.monotonic()-started
+    return run_bounded(argv, directory, timeout, MAX_LOG_BYTES)
 
 
-def compare_print_candidates(project_path, output_dir, candidates, slicer_path=None, timeout=300):
+def compare_print_candidates(project_path, output_dir, candidates, slicer_path=None, timeout=300,
+                             backend='legacy', print_spec=None, workers=2, backend_python=None):
     """Compare baseline plus candidates. No scale, printing, or arbitrary CLI arguments.
 
     Input is a native Bambu 3MF with one assembly build item in millimeters,
     even for settings-only comparisons. Source bytes are never modified. Metrics
     are slicer estimates, not physical validation. Missing mass breakdowns are null.
     """
+    if backend not in ('legacy', 'bambu'):
+        raise ValueError('backend must be legacy or bambu')
+    if backend == 'bambu':
+        return _compare_owned(project_path, output_dir, candidates, slicer_path, timeout,
+                              print_spec, workers, backend_python)
+    from print_pipeline_core.spec import resolve_spec, violations, metric_violations
+    from print_pipeline_core.report import summarize
     if os.name != 'posix':
         raise ValueError('Slicer subprocess backend currently requires POSIX process groups')
     validated = _validate(candidates)
@@ -325,6 +84,12 @@ def compare_print_candidates(project_path, output_dir, candidates, slicer_path=N
         raise ValueError('Oversized input 3MF file')
     digest = hashlib.sha256(source_bytes).hexdigest()
     entries, settings = _read_project(io.BytesIO(source_bytes))
+    spec = resolve_spec(print_spec, settings) if print_spec is not None else None
+    if spec and (spec['machine_preset'] or spec['process_preset'] or spec['filament_presets']):
+        raise ValueError('Preset selection requires backend=bambu')
+    per_object = ET.fromstring(entries['Metadata/model_settings.config'])
+    object_settings = {o.get('id'): {m.get('key'): m.get('value') for m in o.findall('metadata')}
+                       for o in per_object.findall('object')}
     executable = Path(slicer_path or '/Applications/BambuStudio.app/Contents/MacOS/BambuStudio').expanduser().resolve(strict=True)
     if not executable.is_file() or not os.access(executable, os.X_OK):
         raise ValueError('Slicer must be an executable file')
@@ -349,6 +114,17 @@ def compare_print_candidates(project_path, output_dir, candidates, slicer_path=N
             copied['Metadata/project_settings.config'] = json.dumps(modified).encode()
         record = dict(candidate, status='failed', directory=str(directory), started_at=datetime.now(timezone.utc).isoformat())
         records.append(record)
+        effective = {**settings, **candidate['settings']}
+        record['effective_settings'] = effective
+        record['constraint_violations'] = []
+        if spec:
+            bad = violations(effective, settings, spec, candidate['rotation_matrix'] is not None)
+            for oid, stored in object_settings.items():
+                bad += [f'object {oid}: {x}' for x in violations({**effective, **stored}, {**settings, **stored}, spec)]
+            record['constraint_violations'] = bad
+            if bad:
+                record.update(status='rejected', error_type='constraints')
+                continue
         try:
             input_path = directory / 'input.3mf'
             with zipfile.ZipFile(input_path, 'w', zipfile.ZIP_DEFLATED) as archive:
@@ -375,11 +151,55 @@ def compare_print_candidates(project_path, output_dir, candidates, slicer_path=N
         except (ValueError, KeyError, TypeError, OSError, zipfile.BadZipFile, ET.ParseError, OverflowError) as exc:
             record['error_type'] = 'malformed_output' if 'output_path' in record else 'invalid_project'
             record['error'] = str(exc)
+    if spec:
+        baseline = records[0]
+        for row in records[1:]:
+            if row['status'] == 'success':
+                if baseline['status'] != 'success':
+                    row.update(status='rejected', error_type='baseline_unavailable')
+                else:
+                    row['constraint_violations'] += metric_violations(row['metrics'], baseline['metrics'], spec)
+                    if row['constraint_violations']:
+                        row.update(status='rejected', error_type='constraints')
     successful = [r for r in records if r['status'] == 'success']
     best = min(successful, key=lambda r:r['metrics']['seconds']) if successful else None
     report = {'source_path': str(source), 'source_sha256': digest, 'slicer_path': str(executable), 'candidates': records,
               'best_candidate': best['name'] if best else None, 'estimate_only': True,
               'created_at': datetime.now(timezone.utc).isoformat(), 'timeout_seconds': timeout,
               'source_unchanged': hashlib.sha256(source.read_bytes()).hexdigest() == digest}
+    report.update(schema_version=1, backend='legacy', print_spec=spec, baseline_settings=settings,
+                  **summarize(records, settings))
     (destination/'comparison.json').write_text(json.dumps(report, indent=2))
     return report
+
+
+def _compare_owned(project_path, output_dir, candidates, slicer_path, timeout, print_spec, workers, backend_python):
+    """Explicit JSON process boundary: no Bambu dependencies in FreeCAD's Python runtime."""
+    if not _numeric(timeout) or not 1 <= timeout <= 3600:
+        raise ValueError('Bambu backend timeout must be finite and within 1..3600 seconds')
+    if isinstance(workers, bool) or not isinstance(workers, int) or not 1 <= workers <= 8:
+        raise ValueError('workers must be in 1..8')
+    # Preserve the venv interpreter symlink: resolving it would select the base Python environment.
+    python = Path(backend_python or Path(__file__).resolve().parent / 'tools/bambu-mcp/.venv/bin/python').expanduser().absolute()
+    if not python.is_file():
+        raise ValueError('Install tools/bambu-mcp or supply backend_python')
+    request = dict(project_path=str(Path(project_path).expanduser().resolve()),
+                   output_dir=str(Path(output_dir).expanduser().resolve()), candidates=candidates,
+                   slicer_path=str(Path(slicer_path).expanduser().resolve()) if slicer_path else None, timeout=timeout,
+                   print_spec=print_spec, workers=workers)
+    # Includes baseline plus bounded waves, worker startup, preset resolution and artifact validation.
+    limit = timeout * (1 + math.ceil(len(candidates) / workers)) + 60
+    with tempfile.TemporaryDirectory(prefix='freecad-bambu-') as td:
+        directory = Path(td)
+        req, response = directory/'request.json', directory/'response.json'
+        req.write_text(json.dumps(request, allow_nan=False))
+        code, failure, log, elapsed = run_bounded([str(python), '-m', 'bambu_mcp.pipeline',
+                                                  '--request', str(req), '--response', str(response)], directory, limit)
+        if failure or code or not response.is_file():
+            raise RuntimeError(f'Bambu backend {failure or "failed"}: {log[-2000:]}')
+        if response.stat().st_size > 16*1024*1024:
+            raise ValueError('Oversized Bambu backend report')
+        result = json.loads(response.read_text())
+        if not result['ok']:
+            raise ValueError(result['error'])
+        return result['report']

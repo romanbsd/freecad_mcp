@@ -8,7 +8,7 @@ import zipfile
 import pytest
 import slicer_pipeline as sp
 
-MODEL = '''<model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" unit="millimeter"><resources><object id="1"><mesh><vertices><vertex x="0" y="0" z="0"/><vertex x="10" y="0" z="0"/><vertex x="0" y="20" z="0"/><vertex x="0" y="0" z="5"/></vertices><triangles><triangle v1="0" v2="1" v3="2"/></triangles></mesh></object><object id="2"><components><component objectid="1"/></components></object></resources><build><item objectid="2" transform="1 0 0 0 1 0 0 0 1 100 100 5"/></build></model>'''
+MODEL = '''<model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" unit="millimeter"><metadata name="Application">BambuStudio-02.08.02.61</metadata><resources><object id="1"><mesh><vertices><vertex x="0" y="0" z="0"/><vertex x="10" y="0" z="0"/><vertex x="0" y="20" z="0"/><vertex x="0" y="0" z="5"/></vertices><triangles><triangle v1="0" v2="1" v3="2"/></triangles></mesh></object><object id="2"><components><component objectid="1"/></components></object></resources><build><item objectid="2" transform="1 0 0 0 1 0 0 0 1 100 100 5"/></build></model>'''
 PARTS = '<config><object id="2"><part id="1"><metadata key="extruder" value="2"/></part></object></config>'
 
 
@@ -246,5 +246,16 @@ def test_repeated_subassemblies_have_shared_work_budget(project,slicer,tmp_path,
 def test_vertex_work_budget_is_shared_between_bounds_passes(project,slicer,tmp_path,monkeypatch):
     monkeypatch.setattr(sp,'MAX_ASSEMBLY_VERTEX_VISITS',7)
     with pytest.raises(ValueError,match='Assembly exceeds 7 vertex visits'):
+        sp.compare_print_candidates(project,tmp_path/'results',[{'name':'candidate'}],slicer)
+    assert not (tmp_path/'results').exists()
+
+
+def test_settings_only_3mf_without_native_origin_rejected_before_execution(project,slicer,tmp_path):
+    with zipfile.ZipFile(project) as z:
+        entries={n:z.read(n) for n in z.namelist()}
+    entries['3D/3dmodel.model']=MODEL.replace('<metadata name="Application">BambuStudio-02.08.02.61</metadata>','').encode()
+    with zipfile.ZipFile(project,'w') as z:
+        for name,data in entries.items():z.writestr(name,data)
+    with pytest.raises(ValueError,match='export it from Bambu Studio'):
         sp.compare_print_candidates(project,tmp_path/'results',[{'name':'candidate'}],slicer)
     assert not (tmp_path/'results').exists()

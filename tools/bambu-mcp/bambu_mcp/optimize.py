@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from .catalog import CATALOG
 from .runner import Metrics, Runner, Variant
 from .threemf import Package
+from print_pipeline_core.spec import resolve_spec, violations as spec_violations
+from print_pipeline_core.report import summarize
 
 AXIS_POSES = [(90, 0, 0), (-90, 0, 0), (0, 90, 0), (0, -90, 0), (180, 0, 0)]
 MIN_GAIN = 0.005
@@ -28,10 +30,11 @@ class Objective:
     max_time_increase_pct: float = 10.0
     max_material_increase_pct: float = 10.0
     functional: bool = True       # floors: 2 walls, 3 top layers, 10% infill, no lightning
-    max_layer_height: float = 0.28
+    max_layer_height: float | None = None  # legacy .28 without a spec; resolved nozzle bound with one
     keep_supports: str = "auto"    # auto | required | forbidden
     locked_keys: tuple = ()
     locked_objects: tuple = ()
+    specification: dict | None = None
 
 
 def score(m: Metrics, base: Metrics, o: Objective) -> float:
@@ -72,7 +75,7 @@ def _violations(settings: dict, o: Objective) -> list[str]:
     if o.functional and settings.get("sparse_infill_pattern") == "lightning":
         bad.append("lightning infill in a functional part")
     h = _pct(settings.get("layer_height", ""))
-    if h is not None and h > o.max_layer_height + 1e-9:
+    if h is not None and h > (o.max_layer_height if o.max_layer_height is not None else .28) + 1e-9:
         bad.append(f"layer_height={settings['layer_height']} above max {o.max_layer_height}")
     return bad
 
@@ -159,8 +162,17 @@ def candidates(stage: str, cur: Variant, source, o: Objective) -> list[Variant]:
             add(wall_loops=w)
         add(top_shell_layers=floor("top_shell_layers", o.functional))
     elif stage == "layer_height":
-        for h in (0.2, 0.24, 0.28):
-            if h <= o.max_layer_height:
+        heights = (0.2, 0.24, 0.28)
+        if o.specification:
+            nozzle = o.specification['nozzle_mm']
+            heights = [round(nozzle * f, 4) for f in (.5, .6, .7)]
+            heights = [h for h in heights if h >= o.specification['bounds']['min_layer_height']]
+            cap = o.max_layer_height if o.max_layer_height is not None else o.specification['max_layer_height']
+            heights = [h for h in heights if h <= cap]
+            if not heights and cap >= o.specification['bounds']['min_layer_height']:
+                heights = [cap]
+        for h in heights:
+            if h <= (o.max_layer_height if o.max_layer_height is not None else o.specification['max_layer_height'] if o.specification else .28):
                 add(layer_height=h)
     elif stage == "adhesion":
         if not o.functional:  # brim removal can cost bed adhesion; slicing cannot tell
@@ -175,16 +187,57 @@ class Result:
     baseline: Metrics
     best: Variant
     best_metrics: Metrics
+    report: dict = field(default_factory=dict)
     history: list = field(default_factory=list)   # [{stage, overrides, rotation, flags, time_s, filament_g, ok, error, score, run_id}]
 
 
 def optimize(runner: Runner, source, base_variant: Variant, o: Objective, stages=None, max_slices: int = 40,
-             workers: int = 2, progress=None, **kw) -> Result:
+             workers: int = 2, progress=None, print_spec=None, **kw) -> Result:
+    effective_base, object_base = None, {}
+    if print_spec is not None:
+        if not isinstance(print_spec, dict):
+            raise ValueError('print_spec must be a dictionary')
+        for key, argument in [('machine_preset', 'machine'), ('process_preset', 'process'), ('filament_presets', 'filaments')]:
+            if print_spec.get(key) and print_spec[key] != kw.get(argument):
+                raise ValueError('Select matching presets in project_open before optimizing')
+        effective_base, object_base = runner.effective_settings(source, base_variant, **{k: kw.get(k) for k in ('machine','process','filaments')})
+        inherited = dict(functional=o.functional, keep_supports=o.keep_supports,
+                         max_time_increase_pct=o.max_time_increase_pct,
+                         max_material_increase_pct=o.max_material_increase_pct)
+        if o.keep_supports != 'auto' and print_spec.get('keep_supports', o.keep_supports) not in ('auto', o.keep_supports):
+            raise ValueError('Conflicting explicit keep_supports requirements')
+        inherited.update(print_spec)
+        inherited['keep_supports'] = o.keep_supports if o.keep_supports != 'auto' else inherited['keep_supports']
+        o.specification = resolve_spec(inherited, effective_base)
+        for key in ('max_time_increase_pct', 'max_material_increase_pct'):
+            o.specification[key] = min(getattr(o, key), o.specification[key])
+        o.functional = o.specification['functional']
+        o.max_layer_height = min(o.max_layer_height, o.specification['max_layer_height']) if o.max_layer_height is not None else o.specification['max_layer_height']
+        if o.max_layer_height < o.specification['bounds']['min_layer_height']:
+            raise ValueError('max_layer_height is below the resolved printer minimum')
+        o.locked_keys = tuple(set(o.locked_keys) | set(o.specification['locked_keys']))
+        o.locked_objects = tuple(set(map(str, o.locked_objects)) | set(map(str, o.specification['locked_objects'])))
+        o.keep_supports = o.specification['keep_supports']
+        o.max_time_increase_pct = o.specification['max_time_increase_pct']
+        o.max_material_increase_pct = o.specification['max_material_increase_pct']
+    elif o.max_layer_height is None:
+        o.max_layer_height = .28
+    def breaches(v):
+        bad = violations(v, base_variant, source, o)
+        if o.specification:
+            eff, objs = runner.effective_settings(source, v, **{k: kw.get(k) for k in ('machine','process','filaments')})
+            bad += spec_violations(eff, effective_base, o.specification, v.object_rotation != base_variant.object_rotation)
+            for oid, settings in objs.items():
+                bad += [f'object {oid}: {x}' for x in spec_violations(settings, object_base.get(oid, effective_base), o.specification)]
+        return bad
     if o.locked_objects and base_variant.flags.get("orient") == 1:
         raise ValueError("auto-orient (orient=1) rotates every object, which conflicts with locked_objects; "
                          "turn it off first (orient enable=false)")
     if o.keep_supports in ("required", "forbidden"):  # pin it; the baseline already reflects the pin
         base_variant = _with(base_variant, enable_support=int(o.keep_supports == "required"))
+    baseline_errors = breaches(base_variant) if o.specification else []
+    if baseline_errors:
+        raise ValueError('Baseline conflicts with print specification: ' + '; '.join(baseline_errors))
     base = runner.evaluate(source, base_variant, **kw)
     if not base.ok:
         raise RuntimeError(f"baseline slice failed: {base.error}")
@@ -202,12 +255,12 @@ def optimize(runner: Runner, source, base_variant: Variant, o: Objective, stages
         cur_s0 = cur_s
         scored = []
         for i, (c, m) in enumerate(zip(cands, ms)):
-            bad = violations(c, base_variant, source, o)
+            bad = breaches(c)
             s = score(m, base, o) if feasible(m, base, o) and not bad else float("-inf")
             scored.append(s)
             res.history.append({"stage": stage, "overrides": c.overrides, "rotation": c.object_rotation,
                                 "flags": c.flags, "time_s": m.time_s, "filament_g": m.filament_g,
-                                "ok": m.ok, "error": m.error or "; ".join(bad), "score": s, "run_id": m.run_id})
+                                "ok": m.ok, "error": m.error or "; ".join(bad), "score": s, "run_id": m.run_id, "constraint_violations": bad})
             if s > best_s + MIN_GAIN:  # ignore noise-level wins (placement jitter)
                 best_i, best_s = i, s
         if best_i is not None:
@@ -224,7 +277,7 @@ def optimize(runner: Runner, source, base_variant: Variant, o: Objective, stages
                     _merge_into(merged, cands[j], start)
                     touched |= k
                     n += 1
-                if n > 1 and not violations(merged, base_variant, source, o):
+                if n > 1 and not breaches(merged):
                     mm = runner.evaluate(source, merged, **kw)
                     used += 1
                     ms2 = score(mm, base, o) if feasible(mm, base, o) else float("-inf")
@@ -239,4 +292,16 @@ def optimize(runner: Runner, source, base_variant: Variant, o: Objective, stages
             progress(used, max_slices, stage)
         if used >= max_slices:
             break
+    baseline_settings = effective_base or Package(source).project_settings()
+    baseline_settings = {**baseline_settings, **base_variant.overrides}
+    records = [dict(name='baseline', status='success', settings={}, metrics=dict(seconds=base.time_s, total_grams=base.filament_g), run_id=base.run_id)]
+    for i, h in enumerate(res.history):
+        records.append(dict(name=f"{h['stage']}:{i}", status='success' if h['ok'] and h['score'] != float('-inf') else 'rejected',
+                            settings=h['overrides'], rotation=h['rotation'] if h['rotation'] != base_variant.object_rotation else {},
+                            metrics=dict(seconds=h['time_s'], total_grams=h['filament_g']), run_id=h['run_id']))
+    res.report = summarize(records, baseline_settings)
+    by_name = {r['name']: r['run_id'] for r in records}
+    for row in res.report['alternatives']:
+        row['run_id'] = by_name[row['name']]
+    res.report['print_spec'] = o.specification
     return res

@@ -24,8 +24,32 @@ MAX_STL_BYTES = 16 * 1024 * 1024
 MAX_VERTICES = 300000
 SOURCES = {
     "tweaker3": "https://github.com/ChristophSchranz/Tweaker-3",
+    "tweaker3-python": "https://github.com/ChristophSchranz/Tweaker-3",
     "stl-fit": "https://github.com/khromov/stl-fit",
 }
+
+# Isolated provider worker: no optional/GPL dependency is imported by the bridge.
+_TWEAKER_PY_HELPER = '''
+import sys, json, contextlib
+if sys.argv[1]: sys.path.insert(0, sys.argv[1])
+import numpy as np
+from FileHandler import FileHandler
+from MeshTweaker import Tweak
+np.random.seed(int(sys.argv[4]))
+with contextlib.redirect_stdout(sys.stderr):
+    objects = FileHandler().load_mesh(sys.argv[2])
+    if len(objects) != 1: raise ValueError('Envelope must contain one flattened assembly mesh')
+    content = next(iter(objects.values()))['mesh']
+    tweak = Tweak(content, extended_mode=True, verbose=False, min_volume=True)
+    rows = []
+    for result in tweak.all_orientations:
+        # Tweaker uses row vectors; bridge matrices use column vectors.
+        matrix = np.asarray(tweak.euler(result[:3])[2]).T
+        if any(np.allclose(matrix, r['rotation_matrix'], atol=1e-6, rtol=0) for r in rows): continue
+        rows.append(dict(rotation_matrix=matrix.tolist(), heuristic_score=float(result[6])))
+        if len(rows) >= int(sys.argv[3]): break
+print('FREECAD_ORIENTATION_JSON=' + json.dumps(rows, allow_nan=False))
+'''
 
 # Uses upstream library signatures, intentionally bypassing stl_fit.py's
 # iterative scale-down loop. Nothing from the upstream implementation is vendored.
@@ -195,6 +219,8 @@ def suggest_print_orientations(stl_path, backend, executable=None,
     """Suggest rotations using an explicitly configured optional external tool.
 
     tweaker3: executable is a command or argv prefix (e.g. [python, Tweaker.py]).
+    tweaker3-python: [python, /checkout/Tweaker.py] exposes multiple ranked poses;
+    [python] uses installed upstream top-level FileHandler/MeshTweaker modules.
     stl-fit: executable is [python, /checkout/stl_fit.py], or [python] with the
     upstream stl_fit_lib installed. Only cubic envelopes are supported by this
     adapter; search failure is not proof that fitting is mathematically impossible.
@@ -202,7 +228,7 @@ def suggest_print_orientations(stl_path, backend, executable=None,
     ValueError; unavailable/failed optional backends return structured status.
     """
     if backend not in SOURCES:
-        raise ValueError("backend must be tweaker3 or stl-fit")
+        raise ValueError("backend must be tweaker3, tweaker3-python or stl-fit")
     volume = list(build_volume if build_volume is not None else [256, 256, 256])
     if len(volume) != 3:
         raise ValueError("build_volume must contain three dimensions")
@@ -235,11 +261,14 @@ def suggest_print_orientations(stl_path, backend, executable=None,
             # Preserve interpreter symlinks: resolving venv/bin/python would
             # select the base interpreter and lose its installed dependencies.
             argv[i] = os.path.abspath(arg)
-    if backend == 'stl-fit':
+    if backend in ('stl-fit', 'tweaker3-python'):
         if len(argv) not in (1, 2) or (len(argv) == 2 and not argv[1].endswith('.py')):
-            raise ValueError("stl-fit requires [python] or [python, path/to/stl_fit.py]")
+            raise ValueError(backend + " requires [python] or [python, path/to/provider.py]")
         module_dir = str(Path(argv[1]).parent) if len(argv) == 2 else ''
-        result['limitations'].append('Cubic build volume only; upstream CLI auto-scaling is bypassed.')
+        if backend == 'stl-fit':
+            result['limitations'].append('Cubic build volume only; upstream CLI auto-scaling is bypassed.')
+        else:
+            result['limitations'].append('samples is unused by Tweaker; the API uses its extended search with a seeded NumPy RNG.')
     else:
         result['limitations'].append('Tweaker returns one heuristic orientation; seed/samples are not supported by its CLI.')
     try:
@@ -262,12 +291,12 @@ def suggest_print_orientations(stl_path, backend, executable=None,
                     raw_candidates[0]['heuristic_score'] = float(score.group(1))
             else:
                 helper = Path(directory) / 'orientation_helper.py'
-                helper.write_text(_STL_FIT_HELPER)
-                text = _run([argv[0], str(helper), module_dir, str(copied), str(volume[0]),
-                             str(seed), str(samples), str(max_candidates)], directory, timeout)
+                helper.write_text(_STL_FIT_HELPER if backend == 'stl-fit' else _TWEAKER_PY_HELPER)
+                args = [str(volume[0]), str(seed), str(samples), str(max_candidates)] if backend == 'stl-fit' else [str(max_candidates), str(seed)]
+                text = _run([argv[0], str(helper), module_dir, str(copied), *args], directory, timeout)
                 lines = [line for line in text.splitlines() if line.startswith('FREECAD_ORIENTATION_JSON=')]
                 if len(lines) != 1:
-                    raise ValueError("stl-fit helper returned no unique candidate JSON")
+                    raise ValueError(backend + " helper returned no unique candidate JSON")
                 raw_candidates = json.loads(lines[0].split('=', 1)[1])
             if not isinstance(raw_candidates, list) or not raw_candidates or len(raw_candidates) > max_candidates:
                 raise ValueError("Backend returned an invalid candidate count")

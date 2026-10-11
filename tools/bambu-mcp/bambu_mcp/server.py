@@ -201,6 +201,15 @@ def project_inspect(session_id: SessionId) -> ProjectSummary:
     return ProjectSummary(**_summary(sess(session_id)))
 
 
+@mcp.tool(annotations=_ann("Validate source geometry", read_only=True))
+def project_validate(session_id: SessionId) -> dict:
+    """Read-only lib3mf inspection of the session source meshes, excluding working variant changes.
+    Requires the optional validation extra. Bambu metadata warnings are advisory; this does not certify
+    printability or change optimization rankings. Runs in a bounded subprocess."""
+    from print_pipeline_core.validation import validate_file
+    return validate_file(sess(session_id).source)
+
+
 # ---- editing -------------------------------------------------------------------------------------
 @mcp.tool(annotations=_ann("Set settings"))
 def settings_set(
@@ -370,7 +379,7 @@ async def optimize(
                                       "no lightning); false = prototype quality")] = True,
     max_time_increase_pct: Annotated[float, Field(ge=0, le=100, description="reject variants slower than this")] = 10,
     max_material_increase_pct: Annotated[float, Field(ge=0, le=100, description="reject heavier variants")] = 10,
-    max_layer_height: Annotated[float, Field(gt=0, le=1, description="mm")] = 0.28,
+    max_layer_height: Annotated[float | None, Field(gt=0, le=1, description="mm; default .28 without print_spec, nozzle bounds with one")] = None,
     keep_supports: Annotated[Literal["auto", "required", "forbidden"], Field(
         description="auto = slicer decides; forbidden = supports off")] = "auto",
     locked_keys: Annotated[list[str] | None, Field(description="settings the search must not change")] = None,
@@ -380,6 +389,7 @@ async def optimize(
     plate: Annotated[int, Field(ge=0, description="plate number; 0 = all")] = 0,
     apply: Annotated[bool, Field(description="make the best variant the session's working variant")] = True,
     workers: Annotated[int, Field(ge=1, le=8, description="parallel slicer processes")] = 2,
+    print_spec: Annotated[dict | None, Field(description="shared print specification; selected presets must match project_open")] = None,
 ) -> OptimizeResult:
     """Staged greedy search over orientation, supports, infill, shells and layer height (adhesion is opt-in via
     `stages`; brim removal is only tried when functional=false). Winners on different knobs within a stage are
@@ -398,7 +408,7 @@ async def optimize(
         fut.add_done_callback(lambda f: f.exception() and log.warning("progress report failed: %s", f.exception()))
 
     res = await asyncio.to_thread(opt.optimize, runner(), s.source, base, o, stages, max_slices, workers, prog,
-                                  **_kw(s))
+                                  print_spec=print_spec, **_kw(s))
     b, m = res.baseline, res.best_metrics
     with s.lock:
         if apply:
@@ -410,7 +420,7 @@ async def optimize(
         time_saved_pct=round(100 * (1 - m.time_s / b.time_s), 1) if b.time_s else 0.0,
         material_saved_pct=round(100 * (1 - m.filament_g / b.filament_g), 1) if b.filament_g else 0.0,
         best_variant=VariantOut.of(res.best), applied=apply, slices_used=len(res.history) + 1,
-        history=[HistoryEntry(stage=h["stage"], overrides=h["overrides"],
+        report=res.report, history=[HistoryEntry(stage=h["stage"], overrides=h["overrides"],
                               rotation={k: list(v) for k, v in h["rotation"].items()}, flags=h["flags"],
                               ok=h["ok"], error=h["error"], time_s=h["time_s"], filament_g=h["filament_g"],
                               score=None if not math.isfinite(h["score"]) else round(h["score"], 4),
@@ -461,6 +471,23 @@ def open_in_studio(
     subprocess.Popen([runner().binary, str(p)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      start_new_session=True)
     return LaunchResult(launched=True)
+
+
+@mcp.tool(annotations=_ann("Compare native assembly project", idempotent=False))
+def compare_project(
+    project_path: Annotated[str, Field(description="native Bambu 3MF with one whole-assembly build item")],
+    output_dir: Annotated[str, Field(description="new, nonexistent directory for artifacts and comparison.json")],
+    candidates: Annotated[list[dict], Field(min_length=1, max_length=12, description="named settings and whole-assembly rotation candidates")],
+    print_spec: Annotated[dict | None, Field(description="shared version-1 printer, material and quality constraints")] = None,
+    workers: Annotated[int, Field(ge=1, le=8, description="parallel slicer processes")] = 2,
+    timeout_s: Annotated[int, Field(ge=10, le=3600, description="per-slice time limit in seconds")] = 300,
+) -> dict:
+    """Compare baseline and native-assembly candidates using shared constraints, strict artifact/plate checks,
+    cached parallel slicing, and fastest/least-material/conservative alternatives. Preserves assembly colors
+    and relative placement; returns estimate-only evidence and does not print."""
+    from .pipeline import compare_project as compare_native
+    return compare_native(project_path, output_dir, candidates, runner().binary, timeout_s,
+                          print_spec, workers, runner().home)
 
 
 @mcp.resource("bambu://catalog", mime_type="application/json")

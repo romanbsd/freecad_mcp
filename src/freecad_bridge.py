@@ -619,11 +619,21 @@ async def inspect_surface(component_id: str, feature_id: str = None, samples: in
 async def inspect_printability(component_id: str, feature_id: str = None,
                                min_wall: float = .8, samples_per_face: int = 5,
                                build_direction: list[float] = None,
-                               overhang_angle: float = 45, max_samples: int = 2000) -> Any:
+                               overhang_angle: float = 45, max_samples: int = 2000,
+                               print_spec: dict = None) -> Any:
     """Read-only sampled BRep thickness/overhang/island preflight in millimeters.
 
     Reports unresolved regions; a sampled minimum is not a proven global minimum.
+    A shared print_spec.min_wall_mm replaces the sampling threshold when supplied.
     """
+    if print_spec is not None:
+        from print_pipeline_core.spec import number
+        if not isinstance(print_spec, dict):
+            raise ValueError('print_spec must be a dictionary')
+        if print_spec.get('min_wall_mm') is not None:
+            min_wall = number(print_spec['min_wall_mm'])
+            if min_wall <= 0:
+                raise ValueError('min_wall_mm must be positive')
     return await _request({"type": "inspect_printability", "params": {
         "component_id": component_id, "feature_id": feature_id, "min_wall": min_wall,
         "samples_per_face": samples_per_face, "build_direction": build_direction,
@@ -668,6 +678,9 @@ async def suggest_print_orientations(stl_path: str, backend: str, executable: li
                                       max_candidates: int = 4) -> Any:
     """Run an optional local Tweaker-3/stl-fit adapter on a copied envelope STL.
 
+    backend="tweaker3-python" exposes multiple ranked poses via the upstream API;
+    executable=[python, /checkout/Tweaker.py]. The existing tweaker3 CLI is unchanged.
+
     Returns original-size rigid matrices, not print-time savings. Dependencies
     must be installed separately. Apply one matrix to the whole native assembly.
     """
@@ -678,18 +691,22 @@ async def suggest_print_orientations(stl_path: str, backend: str, executable: li
 
 @mcp.tool()
 async def compare_print_candidates(project_path: str, output_dir: str, candidates: list[dict],
-                                    slicer_path: str = None, timeout: float = 300) -> Any:
+                                    slicer_path: str = None, timeout: float = 300,
+                                    backend: str = "legacy", print_spec: dict = None,
+                                    workers: int = 2, backend_python: str = None) -> Any:
     """Measure local BambuStudio native-3MF candidates against an automatic baseline.
 
     Input requires one whole assembly build item in millimeters.
     Preserves source and colors. Candidates have name, print settings, and optional
     rotation degrees or rotation_matrix from suggest_print_orientations. Isolates
     artifacts, bounds execution time, rejects failed/outside-plate results, and
-    reports unavailable cost buckets as null. Does not send a print job.
+    reports unavailable cost buckets as null. backend="bambu" adds presets, cache and
+    parallel evaluation; print_spec is the versioned shared print specification.
+    Returns fastest, least-material and conservative alternatives. Does not send a print job.
     """
     from slicer_pipeline import compare_print_candidates as compare
     return await asyncio.to_thread(compare, project_path, output_dir, candidates,
-                                   slicer_path, timeout)
+                                   slicer_path, timeout, backend, print_spec, workers, backend_python)
 
 
 @mcp.tool()

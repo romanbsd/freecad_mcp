@@ -36,3 +36,28 @@ def test_local_orientation_matrix_reaches_real_compare_entrypoint(envelope, proj
     assert compared["candidates"][1]["metrics"]["seconds"] == 80
     assert compared["candidates"][1]["rotation_matrix"] == matrix
     assert compared["source_unchanged"] is True
+
+
+def test_shared_print_spec_reaches_geometric_preflight(monkeypatch):
+    async def fake(payload):
+        assert payload['type']=='inspect_printability'
+        assert payload['params']['min_wall']==1.2
+        return {'status':'success','result':{'min_observed_wall_mm':.7,'findings':[{'kind':'thin_wall','actual_mm':.7,'threshold_mm':1.2}]}}
+    monkeypatch.setattr(fb,'send_to_freecad',fake)
+    result=asyncio.run(fb.inspect_printability('component://D/C',print_spec={'min_wall_mm':1.2}))
+    assert result['findings'][0]['threshold_mm']==1.2
+    assert result['min_observed_wall_mm']==.7
+
+
+def test_bridge_owned_backend_uses_real_json_worker(project,slicer,tmp_path,monkeypatch):
+    text=slicer.read_text().replace("mode=folder.name", "mode='normal'")
+    text=text.replace("print('warning: preset missing')", "(folder/'result.json').write_text(json.dumps({'return_code':0,'sliced_plates':[{'id':1,'total_predication':seconds,'filaments':[{'total_used_g':42.5}]}]}))")
+    slicer.write_text(text)
+    monkeypatch.setenv('BAMBU_MCP_HOME',str(tmp_path/'cache'))
+    result=asyncio.run(fb.compare_print_candidates(str(project),str(tmp_path/'result'),
+        [{'name':'coarse','settings':{'layer_height':.28}}],str(slicer),backend='bambu',print_spec={'nozzle_mm':.4},workers=2))
+    assert result['backend']=='bambu'
+    assert result['winners']['fastest']=='coarse'
+    assert result['candidates'][1]['metrics']['seconds']==80
+    assert result['candidates'][1]['metrics']['total_grams']==42.5
+    assert result['source_unchanged'] is True

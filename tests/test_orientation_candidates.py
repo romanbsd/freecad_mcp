@@ -175,7 +175,8 @@ def test_configured_interpreter_symlink_preserves_venv(envelope, tmp_path, monke
     assert result['status'] == 'success'
 
 
-@pytest.mark.parametrize('backend, variable', [('tweaker3', 'FREECAD_TWEAKER_ARGV'), ('stl-fit', 'FREECAD_STL_FIT_ARGV')])
+@pytest.mark.parametrize('backend, variable', [('tweaker3', 'FREECAD_TWEAKER_ARGV'), ('stl-fit', 'FREECAD_STL_FIT_ARGV'),
+                                               ('tweaker3-python', 'FREECAD_TWEAKER_PYTHON_ARGV')])
 def test_actual_optional_orientation_providers(tmp_path, backend, variable):
     """Opt-in conformance: env variables contain JSON command argv arrays.
 
@@ -235,3 +236,38 @@ def test_input_byte_budget_checked_by_bounded_read(envelope, monkeypatch):
     monkeypatch.setattr(oc, 'MAX_STL_BYTES', 10)
     with pytest.raises(ValueError, match='STL exceeds 10 bytes; export a coarser envelope'):
         oc._vertices(envelope)
+
+
+def test_tweaker_python_worker_returns_multiple_independently_validated_poses(envelope, tmp_path):
+    (tmp_path/'numpy.py').write_text('''
+class Array:
+ def __init__(self, data): self.data=data
+ @property
+ def T(self): return Array([list(row) for row in zip(*self.data)])
+ def tolist(self): return self.data
+def asarray(data): return Array(data)
+def allclose(a,b,**kw): return a.data==b
+class Random:
+ def seed(self,n): assert n==42
+random=Random()
+''')
+    (tmp_path/'FileHandler.py').write_text('''
+class FileHandler:
+ def load_mesh(self,path): return {0:{'mesh':[]}}
+''')
+    (tmp_path/'MeshTweaker.py').write_text('''
+class Tweak:
+ def __init__(self,content,**kw):
+  assert kw=={'extended_mode':True,'verbose':False,'min_volume':True}
+  self.all_orientations=[[1,0,0,0,0,0,1],[1,0,0,0,0,0,1],[0,1,0,0,0,0,2]]
+ def euler(self,row):
+  return [None,None,[[0,-1,0],[1,0,0],[0,0,1]] if row[0] else [[1,0,0],[0,1,0],[0,0,1]]]
+''')
+    provider=tmp_path/'Tweaker.py';provider.write_text('raise RuntimeError("CLI should not run")')
+    data=envelope.read_bytes()
+    result=oc.suggest_print_orientations(envelope,'tweaker3-python',[sys.executable,str(provider)],max_candidates=2)
+    assert result['status']=='success',result
+    assert [c['extents_mm'] for c in result['candidates']]==[[5,30,2],[30,5,2]]
+    assert [c['heuristic_score'] for c in result['candidates']]==[1,2]
+    assert result['candidates'][0]['rotation_matrix']==[[0,1,0],[-1,0,0],[0,0,1]]
+    assert envelope.read_bytes()==data

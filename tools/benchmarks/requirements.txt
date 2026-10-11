@@ -1,0 +1,10 @@
+# Evaluation-only environment, measured on Python 3.12. Not MCP runtime dependencies.
+numpy==2.5.4
+scipy==1.18.1
+trimesh==5.1.1
+networkx==3.7
+optuna==5.0.0
+shapely==2.2.0
+lib3mf==2.5.0
+gcodeparser==0.3.0
+nlopt==2.11.0
