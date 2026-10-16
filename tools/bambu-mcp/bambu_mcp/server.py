@@ -6,6 +6,7 @@ import shutil
 import logging
 import re
 import subprocess
+import sys
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -451,12 +452,15 @@ def export(
 def open_in_studio(
     path: Annotated[str, Field(description="3MF file to open, e.g. from export")],
 ) -> LaunchResult:
-    """Launch Bambu Studio on a file. With the GUI already running in single-instance mode the file loads
-    there. Does not wait for the app."""
+    """Open a file in Bambu Studio. On macOS, use Launch Services to reuse the running app.
+    Does not wait for the file to load."""
     p = Path(path).expanduser().resolve()
     if not p.is_file():
         raise ValueError(f"{p} not found")
-    subprocess.Popen([runner().binary, str(p)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    binary = Path(runner().binary)
+    app = next((parent for parent in binary.parents if parent.suffix == ".app"), None)
+    command = ["open", "-a", str(app), str(p)] if sys.platform == "darwin" and app else [str(binary), str(p)]
+    subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      start_new_session=True)
     return LaunchResult(launched=True)
 
