@@ -1002,7 +1002,8 @@ def _resolve_loft_entries(entries, profile_definitions, id_map):
                 raise ValueError("unknown loft profile feature %r" % profile_name)
             links.append(id_map[profile_name])
             resolved.append({"link": len(links) - 1, "reverse": bool(entry.get("reverse", False)),
-                             "seam_edge": entry.get("seam_edge", 0)})
+                             "seam_edge": entry.get("seam_edge", 0),
+                             "hole_seam_edge": entry.get("hole_seam_edge", 0)})
             continue
         profile_id = entry.get("profile_id")
         if not profile_id or profile_id not in profile_definitions:
@@ -1032,6 +1033,8 @@ def _make_profile_shape(spec, host=None, support_obj=None, support_spec=None,
             child = dict(entry)
             child.pop("operation", None)
             child.setdefault("plane", plane)
+            if spec.get("frame") is not None:
+                child.setdefault("frame", spec["frame"])
             shape = _make_profile_shape(
                 child, host, support_obj, support_spec, frame_obj
             )
@@ -1175,31 +1178,60 @@ def _revolve_axis(obj, spec, host):
 def _loft_wires(obj, host):
     entries = json.loads(getattr(obj, "LoftSpec", "[]") or "[]")
     links = list(getattr(obj, "LoftProfiles", []) or [])
-    wires = []
+    outer_wires, inner_wires = [], []
     for entry in entries:
         if "link" in entry:
-            wire = _shape_wire(links[int(entry["link"])].Shape).copy()
+            linked_shape = links[int(entry["link"])].Shape
+            closed = linked_shape.ShapeType == "Face" or any(
+                wire.isClosed() for wire in getattr(linked_shape, "Wires", [])
+            )
+            face = _profile_face_from_shape(linked_shape) if closed else None
+            open_wire = None if closed else _shape_wire(linked_shape)
             alignment = entry
         else:
             face = _make_profile_shape(
                 entry["spec"], host, frame_obj=getattr(obj, "Frame", None)
             )
-            if len(face.Wires) != 1:
-                raise ValueError("loft profiles with holes are not supported")
-            wire = face.OuterWire.copy()
+            if face.ShapeType != "Face":
+                face = _profile_face_from_shape(face)
+            open_wire = None
             alignment = entry["spec"]
-        seam = alignment.get("seam_edge", 0)
-        if type(seam) is not int or not 0 <= seam < len(wire.Edges):
-            raise ValueError("seam_edge must be a valid zero-based edge index")
-        if seam:
-            import Part
-            if not wire.isClosed():
-                raise ValueError("seam alignment requires a closed wire")
-            wire = Part.Wire(wire.Edges[seam:]+wire.Edges[:seam])
-        if alignment.get("reverse"):
-            wire.reverse()
-        wires.append(wire)
-    return wires
+        if face is None:
+            outer, holes = open_wire, []
+        else:
+            if face.ShapeType != "Face" or not face.isValid():
+                raise ValueError("loft profile must be one valid face with nested holes")
+            if len(face.Wires) not in (1, 2):
+                raise ValueError("loft supports at most one hole per profile")
+            outer = face.OuterWire
+            holes = [wire for wire in face.Wires if not wire.isSame(outer)]
+            if len(face.Wires) == 2:
+                import Part
+                outer_face = Part.Face(outer)
+                if len(holes) != 1 or not all(
+                    outer_face.isInside(vertex.Point, 1e-7, False)
+                    for vertex in holes[0].Vertexes
+                ):
+                    raise ValueError("loft hole must lie inside its outer loop")
+        loops = [(outer, "seam_edge", outer_wires)]
+        if holes:
+            loops.append((holes[0], "hole_seam_edge", inner_wires))
+        for wire, seam_key, output in loops:
+            wire = wire.copy()
+            seam = alignment.get(seam_key, 0)
+            if type(seam) is not int or not 0 <= seam < len(wire.Edges):
+                raise ValueError("%s must be a valid zero-based edge index" % seam_key)
+            if seam:
+                import Part
+                if not wire.isClosed():
+                    raise ValueError("seam alignment requires a closed wire")
+                wire = Part.Wire(wire.Edges[seam:]+wire.Edges[:seam])
+            if alignment.get("reverse"):
+                wire.reverse()
+            output.append(wire)
+    if inner_wires and len(inner_wires) != len(outer_wires):
+        raise ValueError("all loft profiles must have the same number of holes")
+    return outer_wires, inner_wires
 
 
 def _add_profile_properties(obj, feat, host, operation="pad", id_map=None,
@@ -1311,10 +1343,17 @@ class _ProfileExtrusionProxy:
         spec = json.loads(getattr(obj, "ProfileSpec", "{}") or "{}")
         if operation == "loft":
             import Part
-            wires = _loft_wires(obj, host)
+            wires, holes = _loft_wires(obj, host)
             if getattr(obj, "Reversed", False):
                 wires.reverse()
-            obj.Shape = Part.makeLoft(wires, getattr(obj, "LoftSolid", True), obj.Ruled, obj.Closed)
+                holes.reverse()
+            solid = getattr(obj, "LoftSolid", True)
+            if holes and not solid:
+                raise ValueError("loft profiles with holes require solid=true")
+            shape = Part.makeLoft(wires, solid, obj.Ruled, obj.Closed)
+            if holes:
+                shape = shape.cut(Part.makeLoft(holes, True, obj.Ruled, obj.Closed))
+            obj.Shape = shape
             return
         if getattr(obj, "Profile", None):
             face = _profile_face_from_shape(obj.Profile.Shape)
@@ -4456,6 +4495,8 @@ def op_capabilities():
         "selector_kinds": list(_SUBELEMENTS.keys()),
         "profile_definitions": True,
         "profile_operations": ["pad", "pocket", "revolve", "sweep", "loft"],
+        "loft_profile_holes_max": 1,
+        "native_partdesign_operations": ["sketch_2d", "loft", "pad", "pocket", "revolve", "groove"],
         "named_geometry_references": True,
         "topology_resilient_references": True,
         "reference_tracking_version": 1,

@@ -492,6 +492,62 @@ vertical edges for a fillet:
 vertices, and solids, with index selection and geometric predicates including
 axis/side, normal, length, radius, area, volume, point, and tolerance.
 
+### Annular lofts and native Part Design bodies
+
+Declarative solid lofts accept one inner loop in every station profile. A
+``sketch_2d`` with two concentric circles can be used as each station; the
+outer loops are lofted and the matching inner loops are cut from that solid.
+All stations must have the same number of holes. `seam_edge` aligns the outer
+loop, while `hole_seam_edge` aligns the inner loop when its seam matters.
+Hollow surface lofts (`solid:false`) and multiple holes per station are not
+supported.
+
+Use `build_native_partdesign` when the deliverable must contain a FreeCAD
+Spreadsheet, fully constrained sketches, and native Part Design features.
+This opt-in tool creates a new document and one Body. Sketch entries use the
+same `sketch_2d` geometry, constraints, and `frame` fields as component
+features. Solid entries can be `loft`, `pad`, `pocket`, `revolve`, or `groove`;
+they are applied in feature order and each must leave one valid solid. An
+annular sleeve starts with two sketches like this:
+
+```json
+{
+  "document": "SleeveTrial",
+  "body": "Sleeve",
+  "parameters": [
+    {"name":"Length","default":"33.5 mm"},
+    {"name":"InnerRadius","default":"9.65 mm"},
+    {"name":"OuterThick","default":"12.15 mm"},
+    {"name":"OuterThin","default":"11.15 mm"}
+  ],
+  "features": [
+    {"id":"Thick","type":"sketch_2d",
+     "frame":{"plane":"YZ","origin":["0 mm",0,0]},
+     "geometry":[{"id":"outer","type":"circle","radius":"$OuterThick"},
+                 {"id":"inner","type":"circle","radius":"$InnerRadius"}],
+     "constraints":[
+       {"type":"coincident","first":"outer","first_pos":3,"second":-1,"second_pos":1},
+       {"type":"radius","geometry":"outer","value":"$OuterThick"},
+       {"type":"coincident","first":"inner","first_pos":3,"second":-1,"second_pos":1},
+       {"type":"radius","geometry":"inner","value":"$InnerRadius"}]},
+    {"id":"Thin","type":"sketch_2d",
+     "frame":{"plane":"YZ","origin":["$Length",0,0]},
+     "geometry":[{"id":"outer","type":"circle","radius":"$OuterThin"},
+                 {"id":"inner","type":"circle","radius":"$InnerRadius"}],
+     "constraints":[
+       {"type":"coincident","first":"outer","first_pos":3,"second":-1,"second_pos":1},
+       {"type":"radius","geometry":"outer","value":"$OuterThin"},
+       {"type":"coincident","first":"inner","first_pos":3,"second":-1,"second_pos":1},
+       {"type":"radius","geometry":"inner","value":"$InnerRadius"}]},
+    {"id":"Shell","type":"loft","loft_profiles":["Thick","Thin"],"ruled":true}
+  ],
+  "save_path": "/tmp/sleeve_trial.FCStd"
+}
+```
+
+This native path currently supports the listed feature types, rather than the
+entire generic component graph. It refuses an existing document or FCStd path.
+
 ## Reusable patterns
 
 Patterns expand into ordinary graph features. They are inspectable and can be

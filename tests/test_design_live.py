@@ -1,7 +1,9 @@
 """Run with FREECAD_MCP_LIVE=1 against the FreeCAD GUI server."""
 import base64
+import json
 import math
 import os
+from pathlib import Path
 import xml.etree.ElementTree as ET
 
 import pytest
@@ -171,7 +173,7 @@ def test_interpolated_patch_sketch_splines_and_aligned_surface_loft(component):
         "import Part, parametric\nd=App.getDocument('McpDesignTest')\n"
         "face=d.getObject('plane').Shape.Faces[0]\n"
         "sk=d.getObject('sketch')\nloft=d.getObject('loft')\n"
-        "wires=parametric._loft_wires(loft,parametric._profile_host(loft))\n"
+        "wires,holes=parametric._loft_wires(loft,parametric._profile_host(loft))\n"
         "result={'distances':[Part.Vertex(App.Vector(x,y,x+y)).distToShape(face)[0] for x in (0,5,10) for y in (0,5,10)],"
         "'normal':list(face.normalAt(.5,.5)),'curve_middle':list(sk.Geometry[0].value(.5)),"
         "'curve_types':[c.TypeId for c in sk.Geometry],'area':loft.Shape.Area,'solids':len(loft.Shape.Solids),"
@@ -191,3 +193,235 @@ def test_interpolated_patch_sketch_splines_and_aligned_surface_loft(component):
             "id":"loft","type":"loft","loft_profiles":[{"profile":"a","seam_edge":99},{"profile":"b"}]}}])
     after = call("get_component_graph",component_id=component)
     assert after["revision"] == before["revision"]
+
+
+def test_annular_loft_keeps_cylindrical_bore_and_tapered_outside(component):
+    def ring(fid, outside, x):
+        return {"id": fid, "type": "sketch_2d", "role": "construction",
+                "frame": {"plane": "YZ", "origin": [x, 0, 0]},
+                "geometry": [
+                    {"id": "outer", "type": "circle", "radius": outside},
+                    {"id": "inner", "type": "circle", "radius": "9.65 mm"},
+                ], "constraints": [
+                    {"type": "coincident", "first": "outer", "first_pos": 3,
+                     "second": -1, "second_pos": 1},
+                    {"type": "radius", "geometry": "outer", "value": outside},
+                    {"type": "coincident", "first": "inner", "first_pos": 3,
+                     "second": -1, "second_pos": 1},
+                    {"type": "radius", "geometry": "inner", "value": "9.65 mm"},
+                ], "require_fully_constrained": True}
+
+    call("define_component", component_id=component, features=[
+        ring("thick", "12.15 mm", "0 mm"),
+        ring("thin", "11.15 mm", "$height"),
+        {"id": "sleeve", "type": "loft", "loft_profiles": [
+            {"profile": "thick"}, {"profile": "thin"}], "ruled": True,
+         "role": "output"},
+    ])
+    values = call("execute", code=(
+        "import Part\n"
+        "d=App.getDocument('McpDesignTest')\n"
+        "s=d.getObject('sleeve').Shape\n"
+        "r=sorted(e.Curve.Radius for w in s.slice(App.Vector(1,0,0),3) "
+        "for e in w.Edges if isinstance(e.Curve,Part.Circle))\n"
+        "result={'valid':s.isValid(),'solids':len(s.Solids),'radii':r,'volume':s.Volume}"
+    ))["result"]
+    expected = 6 * math.pi * ((12.15**2 + 12.15*11.15 + 11.15**2)/3 - 9.65**2)
+    assert values["valid"] and values["solids"] == 1
+    assert values["radii"] == pytest.approx([9.65, 11.65], abs=1e-6)
+    assert values["volume"] == pytest.approx(expected, rel=1e-6)
+
+    def annulus(pid, outer, x):
+        return {"id": pid, "plane": "YZ",
+                "frame": {"plane": "YZ", "origin": [x, 0, 0]},
+                "composition": [
+                    {"operation": "union", "sections": [
+                        {"type": "circle", "radius": outer}]},
+                    {"operation": "difference", "sections": [
+                        {"type": "circle", "radius": "9.65 mm"}]},
+                ]}
+    call("define_component", component_id=component,
+         profile_definitions=[annulus("start", "12.15 mm", "0 mm"),
+                              annulus("end", "11.15 mm", "$height")],
+         features=[{"id": "sleeve", "type": "loft", "loft_profiles": [
+             {"profile_id": "start"}, {"profile_id": "end"}],
+             "ruled": True, "role": "output"}])
+    inline = call("execute", code=(
+        "s=App.getDocument('McpDesignTest').getObject('sleeve').Shape\n"
+        "result={'valid':s.isValid(),'solids':len(s.Solids),'volume':s.Volume}"
+    ))["result"]
+    assert inline["valid"] and inline["solids"] == 1
+    assert inline["volume"] == pytest.approx(expected, rel=1e-6)
+
+
+def test_open_curve_profiles_still_make_surface_loft(component):
+    call("execute", code="import importlib,parametric\nimportlib.reload(parametric)")
+    call("define_component", component_id=component, features=[
+        {"id": "lower", "type": "curve", "role": "construction",
+         "curve": {"type": "bspline", "points": [[0, 0, 0], [5, 1, 0], [10, 0, 0]]}},
+        {"id": "upper", "type": "curve", "role": "construction",
+         "curve": {"type": "bspline", "points": [[0, 0, 5], [5, 1, 5], [10, 0, 5]]}},
+        {"id": "surface", "type": "loft", "loft_profiles": [
+            {"profile": "lower"}, {"profile": "upper"}], "solid": False},
+    ])
+    values = call("execute", code=(
+        "s=App.getDocument('McpDesignTest').getObject('surface').Shape\n"
+        "result={'valid':s.isValid(),'faces':len(s.Faces),'solids':len(s.Solids)}"
+    ))["result"]
+    assert values == {"valid": True, "faces": 1, "solids": 0}
+
+
+def test_loft_rejects_two_disjoint_loops_as_a_hole(component):
+    call("execute", code="import importlib,parametric\nimportlib.reload(parametric)")
+    before = call("get_component_graph", component_id=component)["revision"]
+    def profile(fid, x):
+        return {"id": fid, "type": "sketch_2d", "role": "construction",
+                "frame": {"plane": "YZ", "origin": [x, 0, 0]},
+                "geometry": [
+                    {"id": "first", "type": "circle", "center": [0, 0],
+                     "radius": "5 mm"},
+                    {"id": "second", "type": "circle", "center": [20, 0],
+                     "radius": "2 mm"}]}
+    with pytest.raises(LiveAPIError, match="invalid features"):
+        call("define_component", component_id=component, features=[
+            profile("a", "0 mm"), profile("b", "5 mm"),
+            {"id": "loft", "type": "loft",
+             "loft_profiles": [{"profile": "a"}, {"profile": "b"}]}])
+    assert call("get_component_graph", component_id=component)["revision"] == before
+
+
+def test_native_partdesign_annular_loft_rebuilds_after_reopen(tmp_path):
+    name = "McpNativeAnnularTest"
+    call("execute", code="if %r in App.listDocuments(): App.closeDocument(%r)" % (name, name))
+    parameters = [
+        {"name": "RodDiameter", "default": "19 mm"},
+        {"name": "Clearance", "default": "0.15 mm"},
+        {"name": "Length", "default": "33.5 mm"},
+        {"name": "WallThick", "default": "2.5 mm"},
+        {"name": "WallThin", "default": "1.5 mm"},
+        {"name": "InnerRadius", "expression": "RodDiameter / 2 + Clearance"},
+        {"name": "OuterThick", "expression": "InnerRadius + WallThick"},
+        {"name": "OuterThin", "expression": "InnerRadius + WallThin"},
+    ]
+    def profile(fid, outer, x):
+        return {"id": fid, "type": "sketch_2d",
+                "frame": {"plane": "YZ", "origin": [x, 0, 0]},
+                "geometry": [
+                    {"id": "outer", "type": "circle", "radius": outer},
+                    {"id": "inner", "type": "circle", "radius": "$InnerRadius"},
+                ], "constraints": [
+                    {"type": "coincident", "first": "outer", "first_pos": 3,
+                     "second": -1, "second_pos": 1},
+                    {"type": "radius", "geometry": "outer", "value": outer},
+                    {"type": "coincident", "first": "inner", "first_pos": 3,
+                     "second": -1, "second_pos": 1},
+                    {"type": "radius", "geometry": "inner", "value": "$InnerRadius"},
+                ]}
+    spec = {"document": name, "body": "Sleeve", "parameters": parameters,
+            "features": [profile("Thick", "$OuterThick", "0 mm"),
+                         profile("Thin", "$OuterThin", "$Length"),
+                         {"id": "Shell", "type": "loft",
+                          "loft_profiles": ["Thick", "Thin"], "ruled": True}],
+            "save_path": str(tmp_path / "native_annular.FCStd")}
+    code = ("import json,importlib,sys\n"
+            "sys.path.insert(0,%r)\n" % str(Path(__file__).resolve().parents[1]) +
+            "import native_partdesign\n"
+            "importlib.reload(native_partdesign)\n"
+            "spec=json.loads(%r)\n" % json.dumps(spec) +
+            "built=native_partdesign.build_native_partdesign(**spec)\n"
+            "d=App.getDocument(spec['document'])\n"
+            "before=d.getObject('Shell').Shape.Volume\n"
+            "d.getObject('Parameters').set('B6','2 mm')\n"
+            "d.recompute()\n"
+            "after=d.getObject('Shell').Shape.Volume\n"
+            "d.save()\nApp.closeDocument(d.Name)\n"
+            "d=App.openDocument(spec['save_path'])\n"
+            "s=d.getObject('Shell').Shape\n"
+            "result={'built':built,'before':before,'after':after,'reopened':s.isValid(),"
+            "'solids':len(s.Solids),'volume':s.Volume,'dof':[d.getObject(n).DoF for n in ('Thick','Thin')],"
+            "'types':[d.getObject(n).TypeId for n in ('Sleeve','Shell','Parameters')]}\n"
+            "App.closeDocument(d.Name)")
+    values = call("execute", code=code)["result"]
+    assert values["built"]["solid_count"] == 1
+    assert values["before"] < values["after"]
+    assert values["reopened"] and values["solids"] == 1
+    assert values["volume"] == pytest.approx(values["after"])
+    assert values["dof"] == [0, 0]
+    assert values["types"] == ["PartDesign::Body", "PartDesign::AdditiveLoft",
+                                "Spreadsheet::Sheet"]
+
+
+def test_native_partdesign_pad_pocket_revolve_and_groove():
+    def circle(fid, radius, z):
+        return {"id": fid, "type": "sketch_2d",
+                "frame": {"plane": "XY", "origin": [0, 0, z]},
+                "geometry": [{"id": "c", "type": "circle", "radius": radius}],
+                "constraints": [
+                    {"type": "coincident", "first": "c", "first_pos": 3,
+                     "second": -1, "second_pos": 1},
+                    {"type": "radius", "geometry": "c", "value": radius}]}
+
+    def rectangle(fid, xa, xb, ya, yb):
+        points = [(xa, ya), (xb, ya), (xb, yb), (xa, yb)]
+        return {"id": fid, "type": "sketch_2d",
+                "geometry": [{"id": f"line_{i}", "type": "line",
+                              "start": points[i], "end": points[(i + 1) % 4]}
+                             for i in range(4)],
+                "constraints": [{"type": "block", "geometry": f"line_{i}"}
+                                for i in range(4)]}
+
+    recipes = [
+        {"document": "McpNativePadPocket", "body": "Body", "parameters": [],
+         "features": [
+             circle("Base", "5 mm", "0 mm"),
+             {"id": "Pad", "type": "pad", "profile": "Base", "length": "5 mm"},
+             circle("Bore", "2 mm", "5 mm"),
+             {"id": "Pocket", "type": "pocket", "profile": "Bore", "length": "5 mm"}]},
+        {"document": "McpNativeRevolveGroove", "body": "Body", "parameters": [],
+         "features": [
+             rectangle("Section", 0, 5, 2, 5),
+             {"id": "Revolve", "type": "revolve", "profile": "Section",
+              "axis": "horizontal"},
+             rectangle("GrooveSection", 1, 2, 4, 5.5),
+             {"id": "Groove", "type": "groove", "profile": "GrooveSection",
+              "axis": "horizontal"}]},
+    ]
+    code = (
+        "import json,importlib,sys\n"
+        "sys.path.insert(0,%r)\n" % str(Path(__file__).resolve().parents[1]) +
+        "import native_partdesign\n"
+        "importlib.reload(native_partdesign)\n"
+        "recipes=json.loads(%r)\n" % json.dumps(recipes) +
+        "result=[]\n"
+        "for spec in recipes:\n"
+        " if spec['document'] in App.listDocuments(): App.closeDocument(spec['document'])\n"
+        " built=native_partdesign.build_native_partdesign(**spec)\n"
+        " d=App.getDocument(spec['document'])\n"
+        " result.append({'built':built,'volume':d.getObject(built['output']).Shape.Volume})\n"
+        " App.closeDocument(d.Name)"
+    )
+    values = call("execute", code=code)["result"]
+    assert [row["built"]["solid_count"] for row in values] == [1, 1]
+    assert values[0]["volume"] == pytest.approx(math.pi * (25 - 4) * 5)
+    assert values[1]["volume"] == pytest.approx(
+        math.pi * (25 - 4) * 5 - math.pi * (25 - 16))
+
+
+def test_native_partdesign_rejects_missing_parameter_and_length():
+    code = (
+        "import importlib,sys\n"
+        "sys.path.insert(0,%r)\n" % str(Path(__file__).resolve().parents[1]) +
+        "import native_partdesign\n"
+        "importlib.reload(native_partdesign)\n"
+        "result=[]\n"
+        "for parameters,features in ["
+        "([{'name':'Missing','expression':None}],[{'id':'Pad','type':'pad'}]),"
+        "([],[{'id':'Pad','type':'pad'}]),"
+        "([],[{'id':'Cut','type':'pocket','length':'1 mm'}])]:\n"
+        " try: native_partdesign._validate_spec('Probe','Body',parameters,features)\n"
+        " except ValueError as error: result.append(str(error))"
+    )
+    errors = call("execute", code=code)["result"]
+    assert errors == ["parameter 'Missing' needs a default or expression",
+                      "feature 'Pad' needs a length",
+                      "native Part Design body needs an additive feature"]

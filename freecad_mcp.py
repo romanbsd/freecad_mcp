@@ -1130,6 +1130,7 @@ class FreeCADMCPServer:
         """Parametric component workflow ops (parametric.py). Module functions
         already match the handler(**params) contract, so map them directly."""
         import parametric
+        import native_partdesign
         return {
             "create_component": parametric.op_create_component,
             "define_component": parametric.op_define_component,
@@ -1155,6 +1156,7 @@ class FreeCADMCPServer:
             "check_fit": parametric.op_check_fit,
             "export_bundle": parametric.op_export_bundle,
             "build_component": parametric.op_build_component,
+            "build_native_partdesign": native_partdesign.build_native_partdesign,
             "create_component_variant": parametric.op_create_component_variant,
             "validate_component": parametric.op_validate_component,
             "render_component": parametric.op_render_component,

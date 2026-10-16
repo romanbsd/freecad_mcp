@@ -106,7 +106,8 @@ class BridgeMiddleware(Middleware):
         name = context.message.name
         progress = context.fastmcp_context
         long_call = name in {
-            'execute', 'solve_parameter_target', 'build_component', 'patch_component',
+            'execute', 'solve_parameter_target', 'build_component',
+            'build_native_partdesign', 'patch_component',
             'export', 'export_bundle', 'export_component',
             'suggest_print_orientations', 'compare_print_candidates',
         }
@@ -799,6 +800,21 @@ async def build_component(document: dict, component: dict,
     return await _request({"type": "build_component", "params": {
         "document": document, "component": component,
         "validate": validate, "exports": exports}})
+
+
+@mcp.tool(annotations=_ann(idempotent=False), tags={"cad"})
+async def build_native_partdesign(document: str, body: str, parameters: list,
+                                  features: list, save_path: str | None = None) -> Any:
+    """Build a new editable FreeCAD document with a Parameters Spreadsheet and one
+    PartDesign Body. Features are ordered native sketch_2d, loft, pad, pocket,
+    revolve or groove operations. Sketches use the existing geometry, constraint,
+    and frame schema and must be fully constrained. A loft joins two or more
+    sketch ids and supports annular profiles. Dimensions may use $parameter
+    expressions. Each solid stage is checked for one valid solid. Existing
+    documents are not replaced; save_path optionally writes an FCStd file."""
+    return await _request({"type": "build_native_partdesign", "params": {
+        "document": document, "body": body, "parameters": parameters,
+        "features": features, "save_path": save_path}})
 
 
 @mcp.tool(annotations=_ann(idempotent=False), tags={"cad"})

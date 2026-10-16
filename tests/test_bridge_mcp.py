@@ -19,7 +19,8 @@ def test_combined_discovery_and_metadata():
     async def check():
         async with Client(bridge.mcp) as client:
             tools = {tool.name: tool for tool in await client.list_tools()}
-            assert {'execute', 'get_screenshot', 'compare_print_candidates', 'bambu_optimize',
+            assert {'execute', 'get_screenshot', 'build_native_partdesign',
+                    'compare_print_candidates', 'bambu_optimize',
                     'bambu_compare_project', 'bambu_project_validate'} <= tools.keys()
             for name, tool in tools.items():
                 assert tool.title or tool.annotations.title, name
@@ -54,6 +55,29 @@ def test_structured_results_and_errors(monkeypatch):
             assert error.structured_content == {'error': {'code': 'OBJECT_NOT_FOUND',
                     'message': 'No object named Missing', 'recoverable': True}}
     run(check())
+
+
+def test_native_partdesign_tool_forwards_the_supported_recipe(monkeypatch):
+    requests = []
+    async def fake(command):
+        requests.append(command)
+        return {'status': 'success', 'result': {'solid_count': 1}}
+    monkeypatch.setattr(bridge, 'send_to_freecad', fake)
+    async def check():
+        async with Client(bridge.mcp) as client:
+            result = await client.call_tool('build_native_partdesign', {
+                'document': 'SleeveTrial', 'body': 'Sleeve',
+                'parameters': [{'name': 'Length', 'default': '33.5 mm'}],
+                'features': [{'id': 'Profile', 'type': 'sketch_2d'}],
+            })
+            assert result.structured_content == {'solid_count': 1}
+    run(check())
+    assert requests == [{'type': 'build_native_partdesign', 'params': {
+        'document': 'SleeveTrial', 'body': 'Sleeve',
+        'parameters': [{'name': 'Length', 'default': '33.5 mm'}],
+        'features': [{'id': 'Profile', 'type': 'sketch_2d'}],
+        'save_path': None,
+    }}]
 
 
 def test_images_remain_native_mcp_content(monkeypatch):
