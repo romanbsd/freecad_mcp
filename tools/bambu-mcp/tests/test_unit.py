@@ -126,6 +126,56 @@ def test_candidates_respect_functional_floor_and_locks():
     assert "lightning" in pats
 
 
+def test_candidates_skip_disabled_support_and_unchanged_settings():
+    effective = {"enable_support": "0", "wall_loops": "2", "top_shell_layers": "3",
+                 "bottom_shell_layers": "3"}
+    o = optimize.Objective(functional=True)
+    assert optimize.candidates("support", Variant(), FIXTURE, o, effective) == []
+    shells = optimize.candidates("shells", Variant(), FIXTURE, o, effective)
+    assert any(c.overrides.get("bottom_shell_layers") == "2" for c in shells)
+    assert not any(c.overrides.get("wall_loops") == "2" or c.overrides.get("top_shell_layers") == "3"
+                   for c in shells)
+    assert optimize.candidates("support", Variant(), FIXTURE, o, effective,
+                               {"2": {"enable_support": "1"}})
+    locked = optimize.Objective(functional=True, locked_keys=("bottom_shell_layers",))
+    assert not any("bottom_shell_layers" in c.overrides for c in
+                   optimize.candidates("shells", Variant(), FIXTURE, locked, effective))
+    specified = optimize.Objective(functional=True, specification={"min_bottom_layers": 3,
+                                                             "min_top_layers": 3, "min_wall_loops": 2,
+                                                             "min_infill_pct": 15})
+    assert not any("bottom_shell_layers" in c.overrides for c in
+                   optimize.candidates("shells", Variant(), FIXTURE, specified, effective))
+    assert not any(c.overrides.get("sparse_infill_density") == "10%" for c in
+                   optimize.candidates("infill", Variant(), FIXTURE, specified, effective))
+
+
+def test_optimizer_searches_bottom_layers_without_disabled_support_slices():
+    seen = []
+
+    class FakeRunner:
+        def evaluate(self, _source, variant, **_kwargs):
+            seen.append(variant)
+            faster = variant.overrides.get("bottom_shell_layers") == "2"
+            return Metrics(ok=True, time_s=90 if faster else 100, filament_g=10)
+
+    result = optimize.optimize(FakeRunner(), FIXTURE, Variant(), optimize.Objective(),
+                               stages=["support", "shells"], max_slices=10)
+    assert result.best.overrides.get("bottom_shell_layers") == "2"
+    assert any(h["overrides"].get("bottom_shell_layers") == "2" for h in result.history)
+    assert all(h["stage"] != "support" for h in result.history)
+
+
+def test_evaluate_batch_rejects_redundant_change_before_slicing(monkeypatch):
+    from bambu_mcp import server
+    from bambu_mcp.schemas import VariantSpec
+
+    session = server.Session(FIXTURE, variant=Variant(overrides={"wall_loops": "2"}))
+    monkeypatch.setitem(server.SESSIONS, "redundant", session)
+    monkeypatch.setattr(server, "runner", lambda: pytest.fail("redundant variant reached the slicer"))
+    with pytest.raises(ValueError, match="variant 0 does not change"):
+        server.evaluate_batch("redundant", [VariantSpec(overrides={"wall_loops": 2})])
+
+
 # ---- regressions from ocr review ------------------------------------------------------------------
 def test_object_settings_escape_xml():
     pkg = Package(FIXTURE)

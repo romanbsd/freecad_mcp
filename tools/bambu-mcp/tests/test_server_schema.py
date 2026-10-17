@@ -3,8 +3,10 @@ import asyncio
 
 import pytest
 from fastmcp import Client
+from pydantic import ValidationError
 
 from bambu_mcp.server import mcp
+from bambu_mcp.schemas import VariantSpec
 
 READ_ONLY = {"studio_info", "presets_list", "parameters_catalog", "project_inspect", "project_validate", "compare"}
 
@@ -44,3 +46,17 @@ def test_bounded_inputs(tools):
     props = tools["evaluate_batch"].input_schema["properties"]
     assert props["variants"]["maxItems"] == 32 and props["workers"]["maximum"] == 8
     assert tools["optimize"].input_schema["properties"]["keep_supports"]["enum"] == ["auto", "required", "forbidden"]
+
+
+def test_batch_variant_schema_rejects_unknown_and_empty_changes(tools):
+    variants_schema = tools["evaluate_batch"].input_schema["properties"]["variants"]
+    variant_schema = variants_schema["items"]
+    assert variants_schema["examples"] == [[{"overrides": {"layer_height": 0.24}}]]
+    assert variant_schema["additionalProperties"] is False
+    assert variant_schema["properties"]["flags"]["additionalProperties"] is False
+    assert "overrides" in variant_schema["properties"]
+    for payload in ({"settings": {"layer_height": 0.24}}, {}, {"flags": {"unknown": True}},
+                    {"object_overrides": {"2": {}}}):
+        with pytest.raises(ValidationError):
+            VariantSpec.model_validate(payload)
+    assert VariantSpec.model_validate({"overrides": {"layer_height": 0.24}}).overrides["layer_height"] == 0.24

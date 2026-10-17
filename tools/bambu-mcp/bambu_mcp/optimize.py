@@ -130,13 +130,18 @@ def _merge_into(dst: Variant, src: Variant, ref: Variant):
             dst.overrides[x] = v
 
 
-def candidates(stage: str, cur: Variant, source, o: Objective) -> list[Variant]:
+def candidates(stage: str, cur: Variant, source, o: Objective,
+               effective_settings: dict | None = None, effective_objects: dict | None = None) -> list[Variant]:
     lock = set(o.locked_keys)
     out: list[Variant] = []
 
     def add(**kw):
-        if not (set(kw) & lock):
-            out.append(_with(cur, **kw))
+        if set(kw) & lock:
+            return
+        if effective_settings is not None and all(
+                equivalent(str(value), effective_settings.get(key)) for key, value in kw.items()):
+            return
+        out.append(_with(cur, **kw))
 
     if stage == "orientation":
         locked = set(map(str, o.locked_objects))
@@ -154,13 +159,19 @@ def candidates(stage: str, cur: Variant, source, o: Objective) -> list[Variant]:
                 n.flags["arrange"] = 1   # footprint changes; avoid collisions
                 out.append(n)
     elif stage == "support" and o.keep_supports != "forbidden":
+        if (effective_settings is not None and
+                str(effective_settings.get("enable_support", "")).lower() in ("0", "false", "off") and
+                not any(str(settings.get("enable_support", "0")).lower() not in ("0", "false", "off")
+                        for settings in (effective_objects or {}).values())):
+            return out
         for t, s in [("tree(auto)", "tree_hybrid"), ("tree(auto)", "tree_slim"),
                      ("normal(auto)", "snug"), ("tree(auto)", "tree_organic")]:
             add(support_type=t, support_style=s)
         for ang in (40, 50):
             add(support_threshold_angle=ang)
     elif stage == "infill":
-        lo = floor("sparse_infill_density", o.functional)
+        lo = max(floor("sparse_infill_density", o.functional),
+                 o.specification["min_infill_pct"] if o.specification else 0)
         for d in (15, 10, 7, 5):
             if d >= lo:
                 add(sparse_infill_density=f"{d}%")
@@ -168,9 +179,13 @@ def candidates(stage: str, cur: Variant, source, o: Objective) -> list[Variant]:
         for p in pats:
             add(sparse_infill_pattern=p)
     elif stage == "shells":
-        for w in range(floor("wall_loops", o.functional), 5):
+        minimums = o.specification or {}
+        add(bottom_shell_layers=max(floor("bottom_shell_layers", o.functional),
+                                    minimums.get("min_bottom_layers", 0)))
+        add(top_shell_layers=max(floor("top_shell_layers", o.functional),
+                                 minimums.get("min_top_layers", 0)))
+        for w in range(max(floor("wall_loops", o.functional), minimums.get("min_wall_loops", 0)), 5):
             add(wall_loops=w)
-        add(top_shell_layers=floor("top_shell_layers", o.functional))
     elif stage == "layer_height":
         heights = (0.2, 0.24, 0.28)
         if o.specification:
@@ -261,7 +276,8 @@ def optimize(runner: Runner, source, base_variant: Variant, o: Objective, stages
     used = 1
     for stage in (DEFAULT_STAGES if stages is None else stages):
         start = cur  # combine relative to the variant entering this stage, not the baseline
-        cands = candidates(stage, cur, source, o)[: max(0, max_slices - used)]
+        current_settings, current_objects = context.effective(cur)
+        cands = candidates(stage, cur, source, o, current_settings, current_objects)[: max(0, max_slices - used)]
         if not cands:
             continue
         ms = evaluate_batch(runner, source, cands, workers, **kw)

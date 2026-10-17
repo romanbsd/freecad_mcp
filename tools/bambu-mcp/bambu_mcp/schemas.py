@@ -1,7 +1,7 @@
 """Typed tool inputs/outputs. FastMCP derives each tool's inputSchema/outputSchema from these."""
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .runner import Metrics, Variant
 
@@ -12,6 +12,8 @@ SettingValue = bool | int | float | str
 
 class Flags(BaseModel):
     """Slice-time transform flags; unset fields are left alone."""
+    model_config = ConfigDict(extra="forbid")
+
     orient: Literal[0, 1] | None = Field(None, description="1 = Bambu auto-orient all objects, 0 = leave as is")
     arrange: Literal[0, 1] | None = Field(None, description="1 = auto-arrange, 0 = keep positions")
     allow_rotations: bool | None = Field(None, description="arrange may rotate objects")
@@ -21,13 +23,25 @@ class Flags(BaseModel):
 
 
 class VariantSpec(BaseModel):
-    """A change set applied on top of the session's working variant (it does not replace it)."""
+    """A nonempty change set applied on top of the session's working variant (it does not replace it)."""
+    model_config = ConfigDict(extra="forbid")
+
     overrides: dict[str, SettingValue] = Field(default_factory=dict, description="global print settings, catalog keys")
     object_overrides: dict[str, dict[str, SettingValue]] = Field(
         default_factory=dict, description="per-object settings: {object id: {key: value}}")
     object_rotation: dict[str, tuple[float, float, float]] = Field(
         default_factory=dict, description="{object id: [rx, ry, rz] degrees}, applied X then Y then Z")
     flags: Flags = Field(default_factory=Flags)
+
+    @model_validator(mode="after")
+    def require_change(self) -> "VariantSpec":
+        if any(not settings for settings in self.object_overrides.values()):
+            raise ValueError("object_overrides entries must contain at least one setting")
+        if not (self.overrides or self.object_overrides or self.object_rotation or
+                self.flags.model_dump(exclude_none=True)):
+            raise ValueError("variant must contain at least one change in overrides, object_overrides, "
+                             "object_rotation, or flags")
+        return self
 
 
 class VariantOut(BaseModel):

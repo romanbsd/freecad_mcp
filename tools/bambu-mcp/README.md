@@ -44,6 +44,14 @@ if a tool loses any of these.
 
 The source file is never modified; each session works on a copy.
 
+`evaluate_batch` accepts nonempty change sets such as
+`{"variants": [{"overrides": {"layer_height": 0.24}}]}`. The MCP input schema
+rejects unknown fields, including `settings` in place of `overrides`, and the
+service rejects changes that leave the working variant unchanged. Results are
+sorted by print time and retain each request's `input_index`. The optimizer
+skips support candidates when supports are disabled and searches bottom-shell
+layers within the functional and print-spec floors.
+
 For independent geometry inspection, install `uv pip install -e '.[validation]'`
 in the server environment and call `project_validate(session_id)`. It inspects the
 session source, excluding pending variant changes, in a bounded subprocess.

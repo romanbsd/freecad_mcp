@@ -316,7 +316,8 @@ def slice_plate(
 def evaluate_batch(
     session_id: SessionId,
     variants: Annotated[list[VariantSpec], Field(min_length=1, max_length=32,
-                                                 description="change sets applied on top of the working variant")],
+                                                 description="nonempty change sets applied on top of the working variant; use overrides for global settings",
+                                                 examples=[[{"overrides": {"layer_height": 0.24}}]])],
     plate: Annotated[int, Field(ge=0, description="plate number; 0 = all")] = 0,
     workers: Annotated[int, Field(ge=1, le=8, description="parallel slicer processes")] = 2,
     force: Annotated[bool, Field(description="allow keys outside the catalog (syntax-checked only)")] = False,
@@ -325,15 +326,18 @@ def evaluate_batch(
     input_index and the full variant that was sliced. The session's working variant is not changed."""
     s = sess(session_id)
     vs = []
-    for spec in variants:
+    for i, spec in enumerate(variants):
         with s.lock:
-            v = s.variant.copy()
-        v.plate = plate
+            base = s.variant.copy()
+        base.plate = plate
+        v = base.copy()
         v.overrides.update({k: validate(k, x, force) for k, x in spec.overrides.items()})
         v.object_rotation.update({k: tuple(x) for k, x in spec.object_rotation.items()})
         for oid, kv in spec.object_overrides.items():
             v.object_overrides.setdefault(oid, {}).update({k: validate(k, x, force) for k, x in kv.items()})
         v.flags.update(_flags(spec.flags))
+        if v.key() == base.key():
+            raise ValueError(f"variant {i} does not change the working variant")
         vs.append(v)
     out = opt.evaluate_batch(runner(), s.source, vs, workers, **_kw(s))
     rows = [BatchRow(input_index=i, variant=VariantOut.of(v), metrics=m) for i, (v, m) in enumerate(zip(vs, out))]

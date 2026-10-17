@@ -117,10 +117,10 @@ def test_optimizer_shared_nozzle_limits_and_report(tmp_path):
                     'sparse_infill_density':'15%'}
         def evaluate(self, source, v, **kw):
             return Metrics(ok=True,time_s=100,filament_g=10)
-    # String formatting uses 0.14; independent expected ladder proves nozzle-based candidate generation.
+    # String formatting uses 0.14; the 0.1 baseline is omitted from the nozzle-based candidate ladder.
     result = optimize.optimize(R(), FIXTURE, Variant(), optimize.Objective(),
                                stages=['layer_height'], print_spec={}, workers=1, machine='test-machine')
-    assert {float(h['overrides']['layer_height']) for h in result.history}=={.1,.12,.14}
+    assert {float(h['overrides']['layer_height']) for h in result.history}=={.12,.14}
     assert result.report['print_spec']['bounds']['max_layer_height']==pytest.approx(.15)
     assert result.report['winners']['conservative']=='baseline'
     assert result.best.overrides=={}  # equal measured time cannot justify quality loss

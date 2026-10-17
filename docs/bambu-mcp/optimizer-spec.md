@@ -154,7 +154,7 @@ Effective settings come from `--export_settings <file>` run once per session (ch
 | Tool | Input | Output |
 |---|---|---|
 | `slice` | `session_id`, `plate=0`, `variant?` (name; default working) , `timeout_s=600` | `Metrics` (§5.3) + `run_id`. Cached by variant hash. |
-| `evaluate_batch` | `session_id`, `variants: [{name?, overrides?, object_transforms?, cli_flags?}]`, `plate` | Runs in parallel (worker pool), returns `[Metrics]` sorted by score. Max 32 per call. Progress via MCP progress notifications. |
+| `evaluate_batch` | `session_id`, `variants: [{overrides?, object_overrides?, object_rotation?, flags?}]`, `plate` | Validates nonempty change sets, runs up to 32 in parallel, and returns rows sorted by print time with `input_index`, full variant, and metrics. |
 | `compare` | `session_id`, `run_ids[]` | Table: Δtime, Δgrams, Δcost, Δsupport g, role-time breakdown, changed settings. |
 | `optimize` | see §8 | Pareto set of variants with metrics + explanation of each change. Long-running; streams progress; honours budget. |
 
@@ -371,11 +371,11 @@ Slicing costs seconds to minutes, so the search must be small and parallel. Stag
    Dedupe by resulting up-vector (< 5°). Evaluate all in one `evaluate_batch`. Multiple objects: optimize each object
    independently against the same baseline, then combine the winners (objects interact only through placement/plate).
    Prefer poses with lower `support_share`; ties broken by time.
-3. **Support** — if supports still needed: try `support_type ∈ {tree(auto), normal(auto)}` × `support_style ∈
+3. **Support** — skip when supports are disabled; otherwise try `support_type ∈ {tree(auto), normal(auto)}` × `support_style ∈
    {default, tree_hybrid, tree_organic, snug}` (only valid combos) and `support_threshold_angle ∈ {current, +10°}`.
 4. **Infill** — density ladder (current → 15 → 10 → 7, floor from constraints) × pattern ∈ {current, gyroid, adaptivecubic,
    lightning (if non-functional)}. Coordinate descent: fix pattern winner, then density.
-5. **Shells** — `wall_loops` down to floor, `top/bottom_shell_layers` down to floor.
+5. **Shells** — `bottom/top_shell_layers` and `wall_loops` down to the functional and print-spec floors; skip unchanged settings.
 6. **Layer height** — ladder within nozzle bounds. (`adaptive_layer_height` is not a live option in Bambu Studio; it is commented out in `PrintConfig.cpp` and ignored.)
 7. **Adhesion / waste** — `brim_type` (auto vs no_brim if bed contact area large), `skirt_loops 0`; multi-material:
    `flush_into_infill`, prime tower width.
