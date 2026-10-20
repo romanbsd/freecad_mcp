@@ -456,14 +456,34 @@ def export(
 def open_in_studio(
     path: Annotated[str, Field(description="3MF file to open, e.g. from export")],
 ) -> LaunchResult:
-    """Open a file in Bambu Studio. On macOS, use Launch Services to reuse the running app.
+    """Open a file in Bambu Studio. On macOS, require Studio's single-instance preference.
     Does not wait for the file to load."""
     p = Path(path).expanduser().resolve()
     if not p.is_file():
         raise ValueError(f"{p} not found")
     binary = Path(runner().binary)
-    app = next((parent for parent in binary.parents if parent.suffix == ".app"), None)
-    command = ["open", "-a", str(app), str(p)] if sys.platform == "darwin" and app else [str(binary), str(p)]
+    command = [str(binary), str(p)]
+    if sys.platform == "darwin":
+        # `open -a` reuses Launch Services' process, but MacOpenFiles can still
+        # spawn another GUI if Studio's own preference is disabled. Studio 2.8
+        # rejects the legacy --single-instance flag, so require its saved setting.
+        config = Path.home() / "Library/Application Support/BambuStudio/BambuStudio.conf"
+        message = (
+            "Enable 'Keep only one Bambu Studio instance' in Bambu Studio Preferences "
+            f"before opening projects through MCP (checked {config})."
+        )
+        try:
+            saved = json.loads(config.read_text())
+            app_settings = saved.get("app", {}) if isinstance(saved, dict) else {}
+            enabled = app_settings.get("single_instance") if isinstance(app_settings, dict) else None
+        except (OSError, ValueError) as exc:
+            raise ValueError(message) from exc
+        if enabled is not True and enabled != "true":
+            raise ValueError(message)
+        app = next((parent for parent in binary.parents if parent.suffix == ".app"), None)
+        if app is None:
+            raise ValueError("macOS open_in_studio requires a Bambu Studio .app bundle executable")
+        command = ["open", "-a", str(app), str(p)]
     subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      start_new_session=True)
     return LaunchResult(launched=True)

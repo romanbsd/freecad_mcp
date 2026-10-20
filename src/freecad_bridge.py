@@ -661,15 +661,22 @@ async def inspect_surface(component_id: str, feature_id: str | None = None, samp
 
 
 @mcp.tool(annotations=_ann(read_only=True), tags={"print"})
-async def inspect_printability(component_id: str, feature_id: str | None = None,
+async def inspect_printability(component_id: str | None = None, feature_id: str | None = None,
                                min_wall: float = .8, samples_per_face: int = 5,
                                build_direction: list[float] | None = None,
                                overhang_angle: float = 45, max_samples: int = 2000,
-                               print_spec: dict | None = None) -> Any:
+                               print_spec: dict | None = None,
+                               layer_sampling: dict | None = None,
+                               document_name: str | None = None,
+                               object_name: str | None = None) -> Any:
     """Read-only sampled BRep thickness/overhang/island preflight in millimeters.
 
     Reports unresolved regions; a sampled minimum is not a proven global minimum.
     A shared print_spec.min_wall_mm replaces the sampling threshold when supplied.
+    Native targets use document_name/object_name instead of component_id/feature_id.
+    layer_sampling={} opts into bounded cross-section island/bridge screening;
+    options: layer_height, xy_resolution, max_layers, max_work, time_budget,
+    max_findings. Incomplete sampling is reported explicitly.
     """
     if print_spec is not None:
         from print_pipeline_core.spec import number
@@ -682,7 +689,9 @@ async def inspect_printability(component_id: str, feature_id: str | None = None,
     return await _request({"type": "inspect_printability", "params": {
         "component_id": component_id, "feature_id": feature_id, "min_wall": min_wall,
         "samples_per_face": samples_per_face, "build_direction": build_direction,
-        "overhang_angle": overhang_angle, "max_samples": max_samples}})
+        "overhang_angle": overhang_angle, "max_samples": max_samples,
+        "layer_sampling": layer_sampling, "document_name": document_name,
+        "object_name": object_name}})
 
 
 @mcp.tool(annotations=_ann(read_only=True), tags={"print"})

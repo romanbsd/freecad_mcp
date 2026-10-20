@@ -5378,12 +5378,30 @@ def op_inspect_surface(component_id, feature_id=None, samples=15,
                          stripe_axis, stripe_count)
 
 
-def op_inspect_printability(component_id, feature_id=None, min_wall=.8,
+def op_inspect_printability(component_id=None, feature_id=None, min_wall=.8,
                             samples_per_face=5, build_direction=None,
-                            overhang_angle=45, max_samples=2000):
+                            overhang_angle=45, max_samples=2000, layer_sampling=None,
+                            document_name=None, object_name=None):
+    """Inspect either a declarative feature or an explicitly named native object."""
     from printability import analyze_shape
-    return analyze_shape(_inspection_shape(component_id, feature_id), min_wall,
-                         samples_per_face, build_direction, overhang_angle, max_samples)
+    if document_name is not None or object_name is not None:
+        if component_id is not None or feature_id is not None:
+            raise ValueError("choose component_id/feature_id OR document_name/object_name")
+        if not document_name or not object_name:
+            raise ValueError("document_name and object_name are both required")
+        if document_name not in App.listDocuments():
+            raise ValueError("document %r is not open" % document_name)
+        doc = App.getDocument(document_name)
+        obj = doc.getObject(object_name)
+        if obj is None or not hasattr(obj, "Shape") or obj.Shape.isNull():
+            raise ValueError("unknown or empty native inspection object %r" % object_name)
+        shape = obj.Shape.copy()
+        if hasattr(obj, "getGlobalPlacement"):
+            shape.Placement = obj.getGlobalPlacement()
+    else:
+        shape = _inspection_shape(component_id, feature_id)
+    return analyze_shape(shape, min_wall, samples_per_face, build_direction,
+                         overhang_angle, max_samples, layer_sampling)
 
 
 def op_inspect_attachment(component_id, feature_id, target_id, anchor,

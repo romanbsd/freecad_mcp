@@ -42,6 +42,13 @@ if a tool loses any of these.
 | `optimize` | staged search: orientation → support → infill → shells → layer height; adhesion opt-in |
 | `export`, `open_in_studio` | write sliced 3MF; open in the GUI |
 
+On macOS, enable **Keep only one Bambu Studio instance** in Studio Preferences.
+`open_in_studio` checks the saved preference before using `open -a` with the
+configured `.app` bundle. It refuses to launch if the preference is disabled or
+unreadable: Launch Services alone does not prevent Studio from spawning another
+GUI. Studio 2.8 rejects the legacy `--single-instance` command-line flag.
+CLI slicing remains a separate bounded process and does not open GUI projects.
+
 The source file is never modified; each session works on a copy.
 
 `evaluate_batch` accepts nonempty change sets such as

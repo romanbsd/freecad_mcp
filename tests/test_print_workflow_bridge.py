@@ -62,3 +62,17 @@ def test_bridge_owned_backend_uses_real_json_worker(project,slicer,tmp_path,monk
     assert result['candidates'][1]['metrics']['seconds']==80
     assert result['candidates'][1]['metrics']['total_grams']==42.5
     assert result['source_unchanged'] is True
+
+
+def test_native_layer_preflight_forwarding(monkeypatch):
+    async def fake(payload):
+        params = payload['params']
+        assert params['component_id'] is None
+        assert params['document_name'] == 'Fridge'
+        assert params['object_name'] == 'Door'
+        assert params['layer_sampling'] == {'max_layers':300,'xy_resolution':.5}
+        return {'status':'success','result':{'layers':{'complete':False}}}
+    monkeypatch.setattr(fb,'send_to_freecad',fake)
+    result = asyncio.run(fb.inspect_printability(document_name='Fridge',object_name='Door',
+        layer_sampling={'max_layers':300,'xy_resolution':.5}))
+    assert result['layers']['complete'] is False

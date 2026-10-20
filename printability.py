@@ -75,8 +75,16 @@ def _wall_at(shape, point, normal, ray_length, epsilon, Part):
     return None, -inward, "no material segment covers inset origin"
 
 
+def _only_closed_solids(item):
+    if item.ShapeType == "Solid":
+        return item.isClosed()
+    if item.ShapeType in ("Compound", "CompSolid"):
+        return all(_only_closed_solids(child) for child in item.childShapes())
+    return False
+
+
 def analyze_shape(shape, min_wall=0.8, samples_per_face=5,
-                  build_direction=None, overhang_angle=45, max_samples=2000):
+                  build_direction=None, overhang_angle=45, max_samples=2000, layer_sampling=None):
     """Inspect native closed solids in world coordinates without mutating them.
 
     Wall values are local distances along sampled surface normals. This does
@@ -87,13 +95,7 @@ def analyze_shape(shape, min_wall=0.8, samples_per_face=5,
         overhang_angle, max_samples)
     if shape.isNull() or not shape.isValid() or not shape.Solids:
         raise ValueError("printability requires a valid closed solid shape")
-    def only_solids(item):
-        if item.ShapeType == "Solid":
-            return item.isClosed()
-        if item.ShapeType in ("Compound", "CompSolid"):
-            return all(only_solids(child) for child in item.childShapes())
-        return False
-    if not only_solids(shape):
+    if not _only_closed_solids(shape):
         raise ValueError("printability requires only closed solids")
     import FreeCAD as App
     import Part
@@ -189,7 +191,7 @@ def analyze_shape(shape, min_wall=0.8, samples_per_face=5,
                          "limit": 64, "severity": "warning"})
     if unresolved or truncated:
         findings.append({"kind": "incomplete_sampling", "severity": "warning"})
-    return {"status": "WARN" if findings else "PASS", "findings": findings,
+    result = {"status": "WARN" if findings else "PASS", "findings": findings,
             "min_observed_wall_mm": observed, "samples": samples,
             "sampling": {"attempted": attempted, "resolved": resolved, "unresolved": unresolved,
                          "outside_trim": skipped_trim, "truncated": truncated,
@@ -201,3 +203,176 @@ def analyze_shape(shape, min_wall=0.8, samples_per_face=5,
                             "UV sampling is not uniform in surface area; overhang fraction is a sample fraction.",
                             "Normal wall distances are not a nearest-surface thickness field.",
                             "Overhang screening does not predict supports, bridges, or slicer toolpaths."]}
+    if layer_sampling is not None:
+        if not isinstance(layer_sampling, dict):
+            raise ValueError("layer_sampling must be a dictionary")
+        options = dict(layer_sampling)
+        if "build_direction" in options or "overhang_angle" in options:
+            raise ValueError("layer_sampling uses the top-level build_direction and overhang_angle")
+        result["layers"] = analyze_layers(shape, build_direction=direction,
+                                          overhang_angle=angle, **options)
+        if result["layers"]["status"] != "PASS":
+            result["status"] = "WARN"
+    return result
+
+
+
+def _cell_components(cells):
+    """Four-connected raster islands; diagonal contact alone is not a bond."""
+    remaining = set(cells)
+    groups = []
+    while remaining:
+        seed = remaining.pop()
+        group, pending = {seed}, [seed]
+        while pending:
+            x, y = pending.pop()
+            for neighbor in ((x-1,y), (x+1,y), (x,y-1), (x,y+1)):
+                if neighbor in remaining:
+                    remaining.remove(neighbor)
+                    group.add(neighbor)
+                    pending.append(neighbor)
+        groups.append(group)
+    return groups
+
+
+def _layer_events(current, previous, reach, consume=lambda amount: None):
+    """Classify raster starts separately from anchored bridges/expansions."""
+    events = []
+    prior_groups = _cell_components(previous)
+    for group in _cell_components(current):
+        consume(len(group) * ((2*reach+1)**2 + len(prior_groups)))
+        anchors = [index for index, prior in enumerate(prior_groups) if group & prior]
+        nearby = {cell for cell in group if any(
+            (cell[0]+dx, cell[1]+dy) in previous
+            for dx in range(-reach, reach+1) for dy in range(-reach, reach+1)
+            if dx*dx+dy*dy <= reach*reach)}
+        if not nearby:
+            events.append(("floating_layer_island", group))
+        elif len(nearby) < len(group):
+            events.append(("potential_bridge" if len(anchors) >= 2 else
+                           "unsupported_layer_expansion", group - nearby))
+    return events
+
+
+def _raster_section(polygons, pitch, origin, consume):
+    """Even/odd scan conversion of closed native section wires, including holes."""
+    if not polygons:
+        return set()
+    edges = [(a, b) for poly in polygons for a, b in zip(poly, poly[1:] + poly[:1])]
+    low = math.floor((min(p[1] for poly in polygons for p in poly)-origin[1])/pitch)
+    high = math.ceil((max(p[1] for poly in polygons for p in poly)-origin[1])/pitch)
+    cells = set()
+    for row in range(low, high):
+        consume(len(edges))
+        y = origin[1] + (row+.5)*pitch
+        crossings = sorted(a[0] + (y-a[1])*(b[0]-a[0])/(b[1]-a[1])
+                           for a,b in edges if (a[1] <= y < b[1]) or (b[1] <= y < a[1]))
+        if len(crossings) % 2:
+            raise ValueError("section scan has an odd crossing count")
+        for left, right in zip(crossings[::2], crossings[1::2]):
+            start = math.ceil((left-origin[0])/pitch-.5)
+            stop = math.ceil((right-origin[0])/pitch-.5)
+            consume(max(0, stop-start))
+            cells.update((col,row) for col in range(start,stop))
+    return cells
+
+
+def analyze_layers(shape, build_direction=None, layer_height=.2, xy_resolution=.8,
+                   overhang_angle=45, max_layers=2000, max_work=2000000,
+                   time_budget=15, max_findings=200):
+    """Opt-in cross-section raster screening, not a support/toolpath certification.
+
+    Time is checked between native calls; one OCC slice cannot be interrupted.
+    Work counts polygon scan intersections and occupied cells, not elapsed time.
+    """
+    import time
+    import FreeCAD as App
+    _wall, _count, direction, angle, _budget = _parameters(
+        .8, 1, [0,0,1] if build_direction is None else build_direction, overhang_angle, 1)
+    height = _finite(layer_height, "layer_height", upper=10)
+    pitch = _finite(xy_resolution, "xy_resolution", upper=10)
+    limit = _integer(max_layers, "max_layers", 10000)
+    work_limit = _integer(max_work, "max_work", 10000000)
+    seconds = _finite(time_budget, "time_budget", upper=120)
+    finding_limit = _integer(max_findings, "max_findings", 1000)
+    if shape.isNull() or not shape.isValid() or not shape.Solids or not _only_closed_solids(shape):
+        raise ValueError("layer screening requires valid closed solid geometry")
+    rotation = App.Placement(App.Vector(), App.Rotation(App.Vector(*direction), App.Vector(0,0,1)))
+    oriented = shape.copy()
+    oriented.Placement = rotation.multiply(shape.Placement)
+    inverse = rotation.inverse()
+    box = oriented.BoundBox
+    expected = math.ceil((box.ZMax-box.ZMin)/height)
+    origin = (box.XMin, box.YMin)
+    # Raster allowance is rounded up: uncertainty is explicitly one XY cell.
+    reach = math.ceil(height*math.tan(math.radians(angle))/pitch - 1e-9)
+    reach = min(reach, 20)
+    started = time.monotonic()
+    work = 0
+    records, counts, previous = [], {}, set()
+    examined = 0
+    stop_reason = None
+    unresolved_layers = 0
+    class BudgetExceeded(Exception):
+        pass
+    def consume(amount):
+        nonlocal work
+        work += amount
+        if work > work_limit:
+            raise BudgetExceeded("max_work")
+        if time.monotonic()-started >= seconds:
+            raise BudgetExceeded("time_budget")
+    try:
+        for index in range(min(expected, limit)):
+            consume(1)
+            z = box.ZMin + min((index+.5)*height, box.ZMax-box.ZMin-1e-7)
+            wires = oriented.slice(App.Vector(0,0,1), z)
+            polygons = []
+            for wire in wires:
+                consume(1)
+                if not wire.isClosed():
+                    raise ValueError("open native section wire")
+                points = wire.discretize(Deflection=pitch/8)
+                consume(len(points))
+                polygons.append([(p.x,p.y) for p in points])
+            current = _raster_section(polygons, pitch, origin, consume)
+            consume(len(current) + len(previous))
+            if polygons and not current:
+                unresolved_layers += 1
+            events = [] if index == 0 else _layer_events(current, previous, reach, consume)
+            for kind, cells in events:
+                counts[kind] = counts.get(kind,0)+1
+                if len(records) < finding_limit:
+                    col,row = min(cells)
+                    point = inverse.multVec(App.Vector(origin[0]+(col+.5)*pitch,
+                                                       origin[1]+(row+.5)*pitch,z))
+                    records.append({"kind":kind, "severity":"warning", "layer":index+1,
+                                    "build_height_mm":z-box.ZMin,
+                                    "point":[point.x,point.y,point.z],
+                                    "sampled_area_mm2":len(cells)*pitch*pitch})
+            previous = current
+            examined += 1
+        if examined < expected:
+            stop_reason = "max_layers"
+    except BudgetExceeded as exc:
+        stop_reason = str(exc)
+    except Exception as exc:
+        stop_reason = "section_evaluation_failed: " + type(exc).__name__ + ": " + str(exc)
+    complete = stop_reason is None
+    return {"status":"WARN" if counts or not complete or unresolved_layers else "PASS",
+            "complete":complete, "stop_reason":stop_reason,
+            "expected_layers":expected, "examined_layers":examined,
+            "unresolved_empty_raster_layers":unresolved_layers,
+            "layer_height_mm":height, "xy_resolution_mm":pitch,
+            "work_used":work, "work_limit":work_limit,
+            "elapsed_seconds":time.monotonic()-started, "time_budget_seconds":seconds,
+            "findings":records, "finding_counts":counts,
+            "findings_truncated":sum(counts.values()) > len(records),
+            "build_direction":direction,
+            "method":"Native planar sections, even/odd raster, adjacent-layer connectivity",
+            "limitations":["Raster screening can miss features smaller than the XY resolution or layer interval.",
+                           "One-cell raster allowance can hide small unsupported expansions.",
+                           "Potential bridges are geometric candidates, not approved bridge lengths or toolpaths.",
+                           "Overlapping compound solids should be fused before even/odd section screening.",
+                           "Time budget is cooperative between native calls; a single OCC operation is not interruptible.",
+                           "Does not certify adhesion, strength, support removal, or successful printing."]}
