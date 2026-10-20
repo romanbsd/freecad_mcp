@@ -83,6 +83,17 @@ def _only_closed_solids(item):
     return False
 
 
+def _layer_options(options):
+    if not isinstance(options, dict):
+        raise ValueError("layer_sampling must be a dictionary")
+    allowed = {"layer_height", "xy_resolution", "max_layers", "max_work",
+               "time_budget", "max_findings"}
+    if set(options) - allowed:
+        raise ValueError("unknown layer_sampling options: %s" %
+                         ", ".join(sorted(str(key) for key in set(options) - allowed)))
+    return dict(options)
+
+
 def analyze_shape(shape, min_wall=0.8, samples_per_face=5,
                   build_direction=None, overhang_angle=45, max_samples=2000, layer_sampling=None):
     """Inspect native closed solids in world coordinates without mutating them.
@@ -90,6 +101,7 @@ def analyze_shape(shape, min_wall=0.8, samples_per_face=5,
     Wall values are local distances along sampled surface normals. This does
     not prove a global minimum, nor predict support/toolpath correctness.
     """
+    options = _layer_options(layer_sampling) if layer_sampling is not None else None
     wall, count, direction, angle, budget = _parameters(
         min_wall, samples_per_face, [0, 0, 1] if build_direction is None else build_direction,
         overhang_angle, max_samples)
@@ -204,11 +216,6 @@ def analyze_shape(shape, min_wall=0.8, samples_per_face=5,
                             "Normal wall distances are not a nearest-surface thickness field.",
                             "Overhang screening does not predict supports, bridges, or slicer toolpaths."]}
     if layer_sampling is not None:
-        if not isinstance(layer_sampling, dict):
-            raise ValueError("layer_sampling must be a dictionary")
-        options = dict(layer_sampling)
-        if "build_direction" in options or "overhang_angle" in options:
-            raise ValueError("layer_sampling uses the top-level build_direction and overhang_angle")
         result["layers"] = analyze_layers(shape, build_direction=direction,
                                           overhang_angle=angle, **options)
         if result["layers"]["status"] != "PASS":
@@ -291,6 +298,8 @@ def analyze_layers(shape, build_direction=None, layer_height=.2, xy_resolution=.
         .8, 1, [0,0,1] if build_direction is None else build_direction, overhang_angle, 1)
     height = _finite(layer_height, "layer_height", upper=10)
     pitch = _finite(xy_resolution, "xy_resolution", upper=10)
+    if pitch < .05:
+        raise ValueError("xy_resolution must be at least 0.05 mm")
     limit = _integer(max_layers, "max_layers", 10000)
     work_limit = _integer(max_work, "max_work", 10000000)
     seconds = _finite(time_budget, "time_budget", upper=120)
@@ -313,6 +322,7 @@ def analyze_layers(shape, build_direction=None, layer_height=.2, xy_resolution=.
     examined = 0
     stop_reason = None
     unresolved_layers = 0
+    unresolved_anchors = 0
     class BudgetExceeded(Exception):
         pass
     def consume(amount):
@@ -325,21 +335,31 @@ def analyze_layers(shape, build_direction=None, layer_height=.2, xy_resolution=.
     try:
         for index in range(min(expected, limit)):
             consume(1)
-            z = box.ZMin + min((index+.5)*height, box.ZMax-box.ZMin-1e-7)
+            span = box.ZMax-box.ZMin
+            z = box.ZMin + (index*height + min((index+1)*height, span))/2
             wires = oriented.slice(App.Vector(0,0,1), z)
             polygons = []
             for wire in wires:
                 consume(1)
                 if not wire.isClosed():
                     raise ValueError("open native section wire")
-                points = wire.discretize(Deflection=pitch/8)
+                # Charge and cap output before native allocation. Uniform arc-
+                # length samples bound chord spacing; native calls stay cooperative.
+                point_count = max(2, math.ceil(wire.Length/(pitch/8)) + 1)
+                if point_count > 20000:
+                    raise BudgetExceeded("section_point_limit")
+                consume(point_count)
+                points = wire.discretize(Number=point_count)
                 consume(len(points))
                 polygons.append([(p.x,p.y) for p in points])
             current = _raster_section(polygons, pitch, origin, consume)
             consume(len(current) + len(previous))
-            if polygons and not current:
+            if not current:
                 unresolved_layers += 1
-            events = [] if index == 0 else _layer_events(current, previous, reach, consume)
+            if index and current and not previous:
+                unresolved_anchors += 1
+            events = ([] if index == 0 or not previous else
+                      _layer_events(current, previous, reach, consume))
             for kind, cells in events:
                 counts[kind] = counts.get(kind,0)+1
                 if len(records) < finding_limit:
@@ -359,10 +379,11 @@ def analyze_layers(shape, build_direction=None, layer_height=.2, xy_resolution=.
     except Exception as exc:
         stop_reason = "section_evaluation_failed: " + type(exc).__name__ + ": " + str(exc)
     complete = stop_reason is None
-    return {"status":"WARN" if counts or not complete or unresolved_layers else "PASS",
+    return {"status":"WARN" if counts or not complete or unresolved_layers or unresolved_anchors else "PASS",
             "complete":complete, "stop_reason":stop_reason,
             "expected_layers":expected, "examined_layers":examined,
             "unresolved_empty_raster_layers":unresolved_layers,
+            "unresolved_anchor_layers":unresolved_anchors,
             "layer_height_mm":height, "xy_resolution_mm":pitch,
             "work_used":work, "work_limit":work_limit,
             "elapsed_seconds":time.monotonic()-started, "time_budget_seconds":seconds,

@@ -90,6 +90,7 @@ def native_layer_stub(monkeypatch):
         return None
     monkeypatch.setitem(sys.modules, 'FreeCAD', SimpleNamespace(Vector=Vector, Placement=Placement, Rotation=rotation))
     class Wire:
+        Length = 12
         def __init__(self,poly): self.poly=poly
         def isClosed(self): return True
         def discretize(self,**kw): return [Vector(x,y,0) for x,y in self.poly]
@@ -185,5 +186,66 @@ def test_native_target_copies_shape_and_applies_global_placement(monkeypatch):
             module.op_inspect_printability(document_name='Missing',object_name='Final')
         with pytest.raises(ValueError,match='unknown or empty'):
             module.op_inspect_printability(document_name='D',object_name='Missing')
+        with pytest.raises(ValueError,match='are required'):
+            module.op_inspect_printability()
+        with pytest.raises(ValueError,match='are required'):
+            module.op_inspect_printability(feature_id='Final')
     finally:
         sys.modules.pop('parametric', None)
+
+
+@pytest.mark.parametrize('options', [{'pitch':.5}, {'shape':object()},
+                                  {'build_direction':[0,0,1]}, {'max_layers':2, 1:3}, []])
+def test_unknown_layer_options_are_input_errors(options):
+    from printability import analyze_shape
+    with pytest.raises(ValueError,match='layer_sampling'):
+        analyze_shape(None, layer_sampling=options)
+
+
+def test_partial_top_layer_samples_actual_midpoint(native_layer_stub):
+    shape,_ = native_layer_stub
+    shape.BoundBox.ZMax = 1.1
+    native_slice, positions = shape.slice, []
+    def recording(normal,z):
+        positions.append(z)
+        return native_slice(normal,z)
+    shape.slice = recording
+    result = analyze_layers(shape,layer_height=.2,xy_resolution=1)
+    assert result['complete'] and result['expected_layers'] == 6
+    assert positions[-1] == pytest.approx(1.05)
+
+
+@pytest.mark.parametrize('missing_wires', [True,False])
+def test_unresolved_base_anchors_do_not_claim_floating_island(native_layer_stub,missing_wires):
+    shape,_ = native_layer_stub
+    native_slice = shape.slice
+    def thin_base(normal,z):
+        wires = native_slice(normal,z)
+        if z < .4:
+            if missing_wires:
+                return []
+            wires[0].poly = [(0,0),(.1,0),(.1,.1),(0,.1)]
+        return wires
+    shape.slice = thin_base
+    result = analyze_layers(shape,layer_height=.2,xy_resolution=1)
+    assert result['complete'] and result['status'] == 'WARN'
+    assert result['unresolved_empty_raster_layers'] == 2
+    assert result['unresolved_anchor_layers'] == 1
+    assert 'floating_layer_island' not in result['finding_counts']
+
+
+def test_native_discretization_rejected_before_large_allocation(native_layer_stub):
+    shape,_ = native_layer_stub
+    native_slice = shape.slice
+    def huge_section(normal,z):
+        wire = native_slice(normal,z)[0]
+        wire.Length = 1000000
+        def forbidden(**kwargs):
+            pytest.fail('must budget before native discretization')
+        wire.discretize = forbidden
+        return [wire]
+    shape.slice = huge_section
+    result = analyze_layers(shape,xy_resolution=.05)
+    assert not result['complete'] and result['stop_reason'] == 'section_point_limit'
+    with pytest.raises(ValueError,match='at least'):
+        analyze_layers(shape,xy_resolution=.000001)

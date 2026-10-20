@@ -5352,23 +5352,25 @@ def op_validate_component(component_id, profiles=None, rule_ids=None,
 # --------------------------------------------------------------------------- #
 # render / export
 # --------------------------------------------------------------------------- #
+def _world_shape(obj):
+    shape = obj.Shape.copy()
+    if hasattr(obj, "getGlobalPlacement"):
+        shape.Placement = obj.getGlobalPlacement()
+    return shape
+
+
 def _inspection_shape(component_id, feature_id):
     doc, container, meta = _resolve(component_id)
-    def world_shape(obj):
-        shape = obj.Shape.copy()
-        if hasattr(obj, "getGlobalPlacement"):
-            shape.Placement = obj.getGlobalPlacement()
-        return shape
     if feature_id:
         obj = doc.getObject(meta.get("id_map", {}).get(feature_id, ""))
         if obj is None or not hasattr(obj, "Shape") or obj.Shape.isNull():
             raise ValueError("unknown or empty inspection feature %r" % feature_id)
-        return world_shape(obj)
+        return _world_shape(obj)
     import Part
     objects = _feature_solids(doc, meta)
     if not objects:
         raise ValueError("component has no inspection output")
-    return Part.makeCompound([world_shape(obj) for obj in objects])
+    return Part.makeCompound([_world_shape(obj) for obj in objects])
 
 
 def op_inspect_surface(component_id, feature_id=None, samples=15,
@@ -5395,11 +5397,11 @@ def op_inspect_printability(component_id=None, feature_id=None, min_wall=.8,
         obj = doc.getObject(object_name)
         if obj is None or not hasattr(obj, "Shape") or obj.Shape.isNull():
             raise ValueError("unknown or empty native inspection object %r" % object_name)
-        shape = obj.Shape.copy()
-        if hasattr(obj, "getGlobalPlacement"):
-            shape.Placement = obj.getGlobalPlacement()
-    else:
+        shape = _world_shape(obj)
+    elif component_id is not None:
         shape = _inspection_shape(component_id, feature_id)
+    else:
+        raise ValueError("component_id or document_name/object_name are required")
     return analyze_shape(shape, min_wall, samples_per_face, build_direction,
                          overhang_angle, max_samples, layer_sampling)
 

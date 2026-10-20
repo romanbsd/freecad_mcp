@@ -23,7 +23,7 @@ use `build_direction=[0,-1,0]`.
 work/time consumption, findings and total counts. The outer status is WARN if the
 layer check warns. Native planar sections are sampled midway through successive
 layers and scan-converted at the requested XY pitch, including section holes.
-Adjacent-layer raster components distinguish:
+The last partial layer uses its actual midpoint. Adjacent-layer raster components distinguish:
 
 - `floating_layer_island`: no previous-layer material within the allowance,
   including branches that connect to the body only at a later height;
@@ -38,9 +38,13 @@ allowance uses layer height and angle, rounded up to an XY cell (capped at 20
 cells for bounded work). Features smaller than the pitch or layer interval can
 be missed; reduce pitch for small axle tips. Nonempty sections that disappear
 in the raster increment `unresolved_empty_raster_layers` and produce WARN.
-Fuse overlapping compound solids before screening: even/odd section fill assumes
+Empty sections/raster layers and subsequent unresolved anchor layers produce WARN;
+they do not establish floating islands. Fuse overlapping compound solids before screening: even/odd section fill assumes
 nonoverlapping material contours.
 
+XY pitch is 0.05–10 mm. Native wire discretization uses bounded uniform arc-length
+samples (spacing approximately pitch/8), charged before allocation; more than
+20000 requested points on one wire stops with `section_point_limit`.
 Budgets are intentionally bounded: max_layers 1–10000, max_work 1–10000000,
 time_budget >0–120 seconds, max_findings 1–1000. Work counts section vertices,
 scan intersections and connectivity probes. Findings are capped independently
