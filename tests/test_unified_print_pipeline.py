@@ -78,6 +78,11 @@ def test_owned_bridge_calls_real_worker_and_preserves_assembly(project, slicer, 
     with zipfile.ZipFile(project) as a,zipfile.ZipFile(report['candidates'][1]['input_path']) as b:
         assert a.read('3D/3dmodel.model') == b.read('3D/3dmodel.model')
         assert a.read('Metadata/model_settings.config') == b.read('Metadata/model_settings.config')
+        settings = json.loads(b.read('Metadata/project_settings.config'))
+        assert 'layer_height' in settings['different_settings_to_system'][0].split(';')
+    with zipfile.ZipFile(report['candidates'][1]['output_path']) as exported:
+        settings = json.loads(exported.read('Metadata/project_settings.config'))
+        assert 'layer_height' in settings['different_settings_to_system'][0].split(';')
     # Same request in a different output directory must reuse both successful cached runs.
     repeated = sp.compare_print_candidates(project, tmp_path/'again', [{'name':'fast','settings':{'layer_height':.28}}],
                                            slicer, backend='bambu', print_spec={'nozzle_mm':.4}, backend_python=python)

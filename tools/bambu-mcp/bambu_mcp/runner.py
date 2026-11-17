@@ -20,6 +20,8 @@ from print_pipeline_core.artifacts import ArtifactResult, read_artifact_result
 from .settings import resolve_settings
 
 HOME = Path(os.environ.get("BAMBU_MCP_HOME", Path.home() / ".bambu-mcp"))
+# Older artifacts omit Studio's preset-difference metadata. Do not reuse them.
+ARTIFACT_VERSION = 'studio-preset-differences-v1'
 
 
 def find_binary() -> str:
@@ -179,6 +181,7 @@ class Runner:
                  process: str | None = None, filaments: list[str] | None = None,
                  timeout_s: int = 600) -> Metrics:
         h = hashlib.sha256(Path(source).read_bytes())
+        h.update(ARTIFACT_VERSION.encode())
         h.update(variant.key().encode())
         h.update(repr((machine, process, filaments, self.version())).encode())
         try:  # preset *contents*, not names: user presets get edited
@@ -248,6 +251,13 @@ class Runner:
                 code, failure, tail, elapsed = run_bounded(argv, run, timeout_s)
                 if failure or code != 0:
                     return Metrics(ok=False, run_id=key, error=f"{failure or 'exit'} (exit {code}): {tail[-2000:]}")
+            if variant.overrides:
+                output = run / 'out.3mf'
+                pkg = Package(output)
+                pkg.mark_project_overrides(variant.overrides)
+                patched = run / 'out.settings.3mf'
+                pkg.save(patched)
+                patched.replace(output)
         except (ValueError, KeyError, OSError, zipfile.BadZipFile, ET.ParseError) as e:
             return Metrics(ok=False, run_id=key, error=f"{type(e).__name__}: {e}")
         if not res.is_file():

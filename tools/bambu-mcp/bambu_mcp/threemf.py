@@ -193,6 +193,30 @@ class Package:
             return {}
         return d if isinstance(d, dict) else {}
 
+    def mark_project_overrides(self, keys):
+        """Keep Studio from replacing overridden print values with its stock preset.
+
+        Slot zero lists print-preset differences; subsequent filament/machine
+        slots belong to other presets and must retain their order and contents.
+        The slicer already wrote the actual values, so only patch this metadata.
+        """
+        keys = set(keys)
+        if not keys:
+            return
+        settings = self.project_settings()
+        differences = settings.get('different_settings_to_system', [])
+        if not isinstance(differences, list) or any(not isinstance(x, str) for x in differences):
+            raise ValueError('Invalid different_settings_to_system preset metadata')
+        differences = list(differences)
+        filaments = settings.get('filament_settings_id', [])
+        slots = max(3, len(filaments) + 2) if isinstance(filaments, list) else 3
+        differences.extend([''] * max(0, slots - len(differences)))
+        differences[0] = ';'.join(sorted((set(differences[0].split(';')) | keys) - {''}))
+        if differences == settings.get('different_settings_to_system'):
+            return
+        settings['different_settings_to_system'] = differences
+        self.entries['Metadata/project_settings.config'] = json.dumps(settings).encode('utf-8')
+
     # -- per-object settings --
     def object_settings(self) -> dict[str, dict[str, str]]:
         if SETTINGS not in self.entries:

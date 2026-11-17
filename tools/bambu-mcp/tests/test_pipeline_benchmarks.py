@@ -68,3 +68,4 @@ def test_boolean_support_values_reach_actual_sliced_settings(tmp_path):
         with zipfile.ZipFile(candidate['output_path']) as package:
             settings = json.loads(package.read('Metadata/project_settings.config'))
         assert settings['enable_support'] == expected
+        assert 'enable_support' in settings['different_settings_to_system'][0].split(';')

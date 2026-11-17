@@ -97,6 +97,9 @@ def compare_project(project_path, output_dir, candidates, slicer_path=None, time
         if candidate['settings']:
             patched = {**stored, **encode_settings(candidate['settings'])}
             copied['Metadata/project_settings.config'] = json.dumps(patched).encode()
+            package = Package.from_entries(copied)
+            package.mark_project_overrides(candidate['settings'])
+            copied = package.entries
         prepared.append((candidate, copied, settings, bad))
     destination = Path(output_dir).expanduser().resolve()
     destination.mkdir(parents=True, exist_ok=False)

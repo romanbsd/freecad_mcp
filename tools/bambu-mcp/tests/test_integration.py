@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from bambu_mcp.runner import Runner, Variant, find_binary
+from bambu_mcp.threemf import Package
 
 pytestmark = pytest.mark.slow
 
@@ -43,9 +44,22 @@ def test_overrides_move_time_and_grams(runner, cube):
     lean = runner.evaluate(cube, Variant(overrides={"sparse_infill_density": "5%"},
                                          flags={"arrange": 1, "orient": 0}), **KW)
     assert lean.ok and lean.time_s < base.time_s and lean.filament_g < base.filament_g
+    reopened = Package(lean.out_3mf).project_settings()
+    assert 'sparse_infill_density' in reopened['different_settings_to_system'][0].split(';')
+    assert reopened['sparse_infill_density'] == '5%'
     again = runner.evaluate(cube, Variant(overrides={"sparse_infill_density": "5%"},
                                           flags={"arrange": 1, "orient": 0}), **KW)
     assert again.run_id == lean.run_id and again.time_s == lean.time_s  # cache hit
+
+
+def test_support_wall_and_brim_overrides_are_studio_preset_differences(runner, cube):
+    values = {'enable_support': '1', 'support_type': 'normal(auto)', 'support_style': 'snug',
+              'wall_loops': '3', 'brim_type': 'outer_only', 'enable_prime_tower': '0'}
+    result = runner.evaluate(cube, Variant(overrides=values, flags={'arrange': 1, 'orient': 0}), **KW)
+    assert result.ok, result.error
+    reopened = Package(result.out_3mf).project_settings()
+    assert set(values) <= set(reopened['different_settings_to_system'][0].split(';'))
+    assert {key: reopened[key] for key in values} == values
 
 
 def test_bad_preset_is_reported_not_raised(runner, cube):

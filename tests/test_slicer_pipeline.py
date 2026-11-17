@@ -43,6 +43,7 @@ if mode=='exit': print('preset missing');sys.exit(3)
 if mode=='missing': sys.exit(0)
 if mode=='broken': out.write_text('not a zip');sys.exit(0)
 with zipfile.ZipFile(args[-1]) as inp:
+ entries={name:inp.read(name) for name in inp.namelist()}
  settings=json.loads(inp.read('Metadata/project_settings.config'))
  seconds=100 if settings['layer_height']=='0.2' else 80
 outside='true' if mode=='outside' else 'false'
@@ -51,6 +52,7 @@ if mode=='nan': xml=xml.replace('42.5','NaN')
 if mode=='zero': xml=xml.replace('42.5','0')
 if mode=='zerotime': xml=xml.replace(str(seconds),'0')
 with zipfile.ZipFile(out,'w') as z:
+ for name,data in entries.items(): z.writestr(name,data)
  z.writestr('Metadata/slice_info.config',xml)
  if mode!='nogcode': z.writestr('Metadata/plate_1.gcode','' if mode=='emptygcode' else '; total layer number: 50\\n; total filament change times: 7\\nG1 X1 Y1 E1\\n')
 if mode=='badjson': (folder/'result.json').write_text('{}')

@@ -40,6 +40,88 @@ def test_object_settings_insert_and_replace():
     assert pkg.entries["Metadata/model_settings.config"].decode().count('key="wall_loops"') == 1
 
 
+@pytest.mark.parametrize('existing', [None, ['seam_position;wall_loops', 'colour1', 'colour2', 'machine']])
+def test_project_override_metadata_preserves_preset_slots_and_archive(existing, tmp_path):
+    pkg = Package(FIXTURE)
+    settings = {'enable_support': '1', 'enable_prime_tower': '0',
+                'filament_settings_id': ['PLA red', 'PLA blue']}
+    if existing is not None:
+        settings['different_settings_to_system'] = existing
+    pkg.entries['Metadata/project_settings.config'] = json.dumps(settings).encode()
+    before = dict(pkg.entries)
+    pkg.mark_project_overrides({'enable_support', 'enable_prime_tower', 'wall_loops'})
+    first = pkg.entries['Metadata/project_settings.config']
+    pkg.mark_project_overrides({'enable_support', 'enable_prime_tower', 'wall_loops'})
+    assert pkg.entries['Metadata/project_settings.config'] == first
+    path = tmp_path / 'export.3mf'
+    pkg.save(path)
+    reopened = Package(path)
+    result = reopened.project_settings()
+    differences = result['different_settings_to_system']
+    assert set(differences[0].split(';')) == ({'enable_support', 'enable_prime_tower', 'wall_loops'} |
+                                            ({'seam_position'} if existing else set()))
+    assert differences[1:] == (existing[1:] if existing else ['', '', ''])
+    assert result['enable_support'] == '1' and result['enable_prime_tower'] == '0'
+    assert {k: v for k, v in reopened.entries.items() if k != 'Metadata/project_settings.config'} == {
+        k: v for k, v in before.items() if k != 'Metadata/project_settings.config'}
+
+
+@pytest.mark.parametrize('metadata', ['wall_loops', [None], ['wall_loops', 1]])
+def test_project_override_metadata_rejects_malformed_slots(metadata):
+    pkg = Package(FIXTURE)
+    pkg.entries['Metadata/project_settings.config'] = json.dumps({
+        'different_settings_to_system': metadata}).encode()
+    with pytest.raises(ValueError, match='preset metadata'):
+        pkg.mark_project_overrides({'enable_support'})
+
+
+def test_runner_marks_sliced_overrides_before_cache_validation(tmp_path, monkeypatch):
+    import bambu_mcp.runner as module
+    r = Runner(binary='/unused/bambu', home=tmp_path)
+    r._version = 'test'
+    source = tmp_path / 'source.3mf'
+    source.write_bytes(FIXTURE.read_bytes())
+    before = source.read_bytes()
+    calls = []
+
+    def fake_run(argv, cwd, timeout):
+        calls.append(argv)
+        pkg = Package(source)
+        pkg.entries['Metadata/project_settings.config'] = json.dumps({
+            'enable_support': '1', 'enable_prime_tower': '0',
+            'different_settings_to_system': ['seam_position', 'filament', 'machine']}).encode()
+        pkg.entries['Metadata/slice_info.config'] = b'<config><plate><metadata key="prediction" value="10"/><metadata key="weight" value="1"/><metadata key="outside" value="false"/></plate></config>'
+        pkg.entries['Metadata/plate_1.gcode'] = b'G1 X1 E1'
+        pkg.save(cwd / 'out.3mf')
+        (cwd / 'result.json').write_text(json.dumps({'return_code': 0, 'sliced_plates': [
+            {'id': 1, 'total_predication': 10, 'filaments': [{'total_used_g': 1}]}]}))
+        return 0, None, '', 0.1
+
+    monkeypatch.setattr(module, 'run_bounded', fake_run)
+    variant = Variant(overrides={'enable_support': '1', 'enable_prime_tower': '0'})
+    for _ in range(2):
+        result = r.evaluate(source, variant)
+        assert result.ok, result.error
+        settings = Package(result.out_3mf).project_settings()
+        assert settings['different_settings_to_system'] == [
+            'enable_prime_tower;enable_support;seam_position', 'filament', 'machine']
+    assert len(calls) == 1
+    assert source.read_bytes() == before
+
+
+def test_artifact_metadata_revision_invalidates_old_cache_keys(tmp_path, monkeypatch):
+    import bambu_mcp.runner as module
+    r = Runner(binary='/unused/bambu', home=tmp_path)
+    r._version = 'test'
+    keys = []
+    monkeypatch.setattr(r, '_evaluate_locked', lambda source, variant, key, *args:
+                        keys.append(key) or Metrics(ok=True))
+    r.evaluate(FIXTURE, Variant())
+    monkeypatch.setattr(module, 'ARTIFACT_VERSION', 'previous-format')
+    r.evaluate(FIXTURE, Variant())
+    assert keys[0] != keys[1]
+
+
 def test_flatten_merges_chain_child_wins(tmp_path):
     (tmp_path / "filament").mkdir()
     (tmp_path / "filament/base.json").write_text(json.dumps({"name": "base", "filament_density": ["1.24"], "a": 1}))
